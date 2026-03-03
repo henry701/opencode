@@ -87,51 +87,78 @@ export namespace Plugin {
               if (init) hooks.push(init)
             }
 
-            let plugins = cfg.plugin ?? []
+            const plugins = cfg.plugin ?? []
             if (plugins.length) await Config.waitForDependencies()
 
-            for (let plugin of plugins) {
-              if (DEPRECATED_PLUGIN_PACKAGES.some((pkg) => plugin.includes(pkg))) continue
-              log.info("loading plugin", { path: plugin })
-              if (!plugin.startsWith("file://")) {
-                const idx = plugin.lastIndexOf("@")
-                const pkg = idx > 0 ? plugin.substring(0, idx) : plugin
-                const version = idx > 0 ? plugin.substring(idx + 1) : "latest"
-                plugin = await BunProc.install(pkg, version).catch((err) => {
-                  const cause = err instanceof Error ? err.cause : err
-                  const detail = cause instanceof Error ? cause.message : String(cause ?? err)
-                  log.error("failed to install plugin", { pkg, version, error: detail })
-                  Bus.publish(Session.Event.Error, {
-                    error: new NamedError.Unknown({
-                      message: `Failed to install plugin ${pkg}@${version}: ${detail}`,
-                    }).toObject(),
-                  })
-                  return ""
+            async function resolve(spec: string) {
+              if (spec.startsWith("file://")) return spec
+              const idx = spec.lastIndexOf("@")
+              const pkg = idx > 0 ? spec.substring(0, idx) : spec
+              const version = idx > 0 ? spec.substring(idx + 1) : "latest"
+              const installed = await BunProc.install(pkg, version).catch((err) => {
+                const cause = err instanceof Error ? err.cause : err
+                const detail = cause instanceof Error ? cause.message : String(cause ?? err)
+                log.error("failed to install plugin", { pkg, version, error: detail })
+                Bus.publish(Session.Event.Error, {
+                  error: new NamedError.Unknown({
+                    message: `Failed to install plugin ${pkg}@${version}: ${detail}`,
+                  }).toObject(),
                 })
-                if (!plugin) continue
-              }
+                return ""
+              })
+              if (!installed) return
+              return installed
+            }
+
+            for (const item of plugins) {
+              const spec = Config.pluginSpecifier(item)
+              if (DEPRECATED_PLUGIN_PACKAGES.some((pkg) => spec.includes(pkg))) continue
+              log.info("loading plugin", { path: spec })
+              const path = await resolve(spec)
+              if (!path) continue
+
+              const mod = await import(path).catch((err) => {
+                const message = err instanceof Error ? err.message : String(err)
+                log.error("failed to load plugin", { path: spec, error: message })
+                Bus.publish(Session.Event.Error, {
+                  error: new NamedError.Unknown({
+                    message: `Failed to load plugin ${spec}: ${message}`,
+                  }).toObject(),
+                })
+                return
+              })
+              if (!mod) continue
 
               // Prevent duplicate initialization when plugins export the same function
               // as both a named export and default export (e.g., `export const X` and `export default X`).
               // Object.entries(mod) would return both entries pointing to the same function reference.
-              await import(plugin)
-                .then(async (mod) => {
-                  const seen = new Set<PluginInstance>()
-                  for (const [_name, fn] of Object.entries<PluginInstance>(mod)) {
-                    if (seen.has(fn)) continue
-                    seen.add(fn)
-                    hooks.push(await fn(input))
-                  }
-                })
-                .catch((err) => {
+              const seen = new Set<unknown>()
+              for (const entry of Object.values(mod)) {
+                if (seen.has(entry)) continue
+                seen.add(entry)
+
+                const server = (() => {
+                  if (typeof entry === "function") return entry as PluginInstance
+                  if (!entry || typeof entry !== "object") return
+                  if (!("server" in entry)) return
+                  if (typeof entry.server !== "function") return
+                  return entry.server as PluginInstance
+                })()
+                if (!server) continue
+
+                const init = await server(input, Config.pluginOptions(item)).catch((err) => {
                   const message = err instanceof Error ? err.message : String(err)
-                  log.error("failed to load plugin", { path: plugin, error: message })
+                  log.error("failed to initialize plugin", { path: spec, error: message })
                   Bus.publish(Session.Event.Error, {
                     error: new NamedError.Unknown({
-                      message: `Failed to load plugin ${plugin}: ${message}`,
+                      message: `Failed to initialize plugin ${spec}: ${message}`,
                     }).toObject(),
                   })
+                  return
                 })
+                if (!init) continue
+                hooks.push(init)
+              }
             }
 
             // Notify plugins of current config
