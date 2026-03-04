@@ -140,23 +140,21 @@ export namespace Plugin {
               // Prevent duplicate initialization when plugins export the same function
               // as both a named export and default export (e.g., `export const X` and `export default X`).
               // uniqueModuleEntries keeps only the first export for each shared value reference.
-              for (const [, entry] of uniqueModuleEntries(mod)) {
-                const server = getServerPlugin(entry)
-                if (!server) continue
-
-                const init = await server(input, Config.pluginOptions(item)).catch((err) => {
-                  const message = err instanceof Error ? err.message : String(err)
-                  log.error("failed to initialize plugin", { path: spec, error: message })
-                  Bus.publish(Session.Event.Error, {
-                    error: new NamedError.Unknown({
-                      message: `Failed to initialize plugin ${spec}: ${message}`,
-                    }).toObject(),
-                  })
-                  return
+              await (async () => {
+                for (const [, entry] of uniqueModuleEntries(mod)) {
+                  const server = getServerPlugin(entry)
+                  if (!server) throw new TypeError("Plugin export is not a function")
+                  hooks.push(await server(input, Config.pluginOptions(item)))
+                }
+              })().catch((err) => {
+                const message = err instanceof Error ? err.message : String(err)
+                log.error("failed to load plugin", { path: spec, error: message })
+                Bus.publish(Session.Event.Error, {
+                  error: new NamedError.Unknown({
+                    message: `Failed to load plugin ${spec}: ${message}`,
+                  }).toObject(),
                 })
-                if (!init) continue
-                hooks.push(init)
-              }
+              })
             }
 
             // Notify plugins of current config
