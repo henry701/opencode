@@ -4,7 +4,6 @@ import { Bus } from "../bus"
 import { Log } from "../util/log"
 import { createOpencodeClient } from "@opencode-ai/sdk"
 import { Server } from "../server/server"
-import { BunProc } from "../bun"
 import { Flag } from "../flag/flag"
 import { CodexAuthPlugin } from "./codex"
 import { Session } from "../session"
@@ -14,6 +13,7 @@ import { gitlabAuthPlugin as GitlabAuthPlugin } from "opencode-gitlab-auth"
 import { Effect, Layer, ServiceMap } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { makeRunPromise } from "@/effect/run-service"
+import { parsePluginSpecifier, resolvePluginTarget, uniqueModuleEntries } from "./shared"
 
 export namespace Plugin {
   const log = Log.create({ service: "plugin" })
@@ -91,23 +91,20 @@ export namespace Plugin {
             if (plugins.length) await Config.waitForDependencies()
 
             async function resolve(spec: string) {
-              if (spec.startsWith("file://")) return spec
-              const idx = spec.lastIndexOf("@")
-              const pkg = idx > 0 ? spec.substring(0, idx) : spec
-              const version = idx > 0 ? spec.substring(idx + 1) : "latest"
-              const installed = await BunProc.install(pkg, version).catch((err) => {
+              const parsed = parsePluginSpecifier(spec)
+              const target = await resolvePluginTarget(spec, parsed).catch((err) => {
                 const cause = err instanceof Error ? err.cause : err
                 const detail = cause instanceof Error ? cause.message : String(cause ?? err)
-                log.error("failed to install plugin", { pkg, version, error: detail })
+                log.error("failed to install plugin", { pkg: parsed.pkg, version: parsed.version, error: detail })
                 Bus.publish(Session.Event.Error, {
                   error: new NamedError.Unknown({
-                    message: `Failed to install plugin ${pkg}@${version}: ${detail}`,
+                    message: `Failed to install plugin ${parsed.pkg}@${parsed.version}: ${detail}`,
                   }).toObject(),
                 })
                 return ""
               })
-              if (!installed) return
-              return installed
+              if (!target) return
+              return target
             }
 
             function isServerPlugin(value: unknown): value is PluginInstance {
@@ -142,12 +139,8 @@ export namespace Plugin {
 
               // Prevent duplicate initialization when plugins export the same function
               // as both a named export and default export (e.g., `export const X` and `export default X`).
-              // Object.entries(mod) would return both entries pointing to the same function reference.
-              const seen = new Set<unknown>()
-              for (const entry of Object.values(mod)) {
-                if (seen.has(entry)) continue
-                seen.add(entry)
-
+              // uniqueModuleEntries keeps only the first export for each shared value reference.
+              for (const [, entry] of uniqueModuleEntries(mod)) {
                 const server = getServerPlugin(entry)
                 if (!server) continue
 
