@@ -110,6 +110,17 @@ export namespace Plugin {
               return installed
             }
 
+            function plugin(value: unknown): value is PluginInstance {
+              return typeof value === "function"
+            }
+
+            function pick(value: unknown) {
+              if (plugin(value)) return value
+              if (!value || typeof value !== "object" || !("server" in value)) return
+              if (!plugin(value.server)) return
+              return value.server
+            }
+
             for (const item of plugins) {
               const spec = Config.pluginSpecifier(item)
               if (DEPRECATED_PLUGIN_PACKAGES.some((pkg) => spec.includes(pkg))) continue
@@ -137,13 +148,7 @@ export namespace Plugin {
                 if (seen.has(entry)) continue
                 seen.add(entry)
 
-                const server = (() => {
-                  if (typeof entry === "function") return entry as PluginInstance
-                  if (!entry || typeof entry !== "object") return
-                  if (!("server" in entry)) return
-                  if (typeof entry.server !== "function") return
-                  return entry.server as PluginInstance
-                })()
+                const server = pick(entry)
                 if (!server) continue
 
                 const init = await server(input, Config.pluginOptions(item)).catch((err) => {
