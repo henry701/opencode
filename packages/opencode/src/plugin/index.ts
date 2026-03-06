@@ -90,7 +90,7 @@ export namespace Plugin {
             const plugins = cfg.plugin ?? []
             if (plugins.length) await Config.waitForDependencies()
 
-            async function resolve(spec: string) {
+            async function resolvePlugin(spec: string) {
               const parsed = parsePluginSpecifier(spec)
               const target = await resolvePluginTarget(spec, parsed).catch((err) => {
                 const cause = err instanceof Error ? err.cause : err
@@ -122,10 +122,10 @@ export namespace Plugin {
               const spec = Config.pluginSpecifier(item)
               if (DEPRECATED_PLUGIN_PACKAGES.some((pkg) => spec.includes(pkg))) continue
               log.info("loading plugin", { path: spec })
-              const path = await resolve(spec)
-              if (!path) continue
+              const target = await resolvePlugin(spec)
+              if (!target) continue
 
-              const mod = await import(path).catch((err) => {
+              const mod = await import(target).catch((err) => {
                 const message = err instanceof Error ? err.message : String(err)
                 log.error("failed to load plugin", { path: spec, error: message })
                 Bus.publish(Session.Event.Error, {
