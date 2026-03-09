@@ -193,86 +193,101 @@ export namespace TuiPlugin {
           await deps
         }
 
-        const loadOne = async (item: (typeof plugins)[number], retry = false) => {
+        const prep = async (item: (typeof plugins)[number], retry = false) => {
           const spec = Config.pluginSpecifier(item)
           log.info("loading tui plugin", { path: spec, retry })
           const target = await resolvePluginTarget(spec).catch((error) => {
             log.error("failed to resolve tui plugin", { path: spec, retry, error })
             return
           })
-          if (!target) return false
-          const meta = await PluginMeta.touch(spec, target).catch((error) => {
-            log.warn("failed to track tui plugin", { path: spec, retry, error })
-          })
-          if (meta && meta.state !== "same") {
-            log.info("tui plugin metadata updated", {
-              path: spec,
-              retry,
-              state: meta.state,
-              source: meta.entry.source,
-              version: meta.entry.version,
-              modified: meta.entry.modified,
-            })
-          }
+          if (!target) return
 
           const root = pluginRoot(spec, target)
           const install = makeInstallFn(getPluginMeta(config, item), root)
-
           const mod = await import(target).catch((error) => {
             log.error("failed to load tui plugin", { path: spec, retry, error })
             return
           })
-          if (!mod) return false
+          if (!mod) return
 
-          for (const [name, entry] of uniqueModuleEntries(mod)) {
-            if (!entry || typeof entry !== "object") {
-              log.warn("ignoring non-object tui plugin export", {
-                path: spec,
-                name,
-                type: entry === null ? "null" : typeof entry,
-              })
-              continue
-            }
-
-            const slotPlugin = getTuiSlotPlugin(entry)
-            if (slotPlugin) input.slots.register(slotPlugin)
-
-            const tuiPlugin = getTuiPlugin(entry)
-            if (!tuiPlugin) continue
-            await tuiPlugin(
-              {
-                ...input,
-                api: {
-                  command: input.api.command,
-                  route: input.api.route,
-                  ui: input.api.ui,
-                  keybind: input.api.keybind,
-                  theme: Object.create(input.api.theme, {
-                    install: {
-                      value: install,
-                      configurable: true,
-                      enumerable: true,
-                    },
-                  }),
-                },
-              },
-              Config.pluginOptions(item),
-            )
+          return {
+            item,
+            spec,
+            target,
+            retry,
+            mod,
+            install,
           }
-
-          return true
         }
 
         try {
-          for (const item of plugins) {
-            const ok = await loadOne(item)
-            if (ok) continue
+          const loaded = await Promise.all(plugins.map((item) => prep(item)))
 
-            const spec = Config.pluginSpecifier(item)
-            if (!spec.startsWith("file://")) continue
+          for (let i = 0; i < plugins.length; i++) {
+            let load = loaded[i]
+            if (!load) {
+              const item = plugins[i]
+              if (!item) continue
+              const spec = Config.pluginSpecifier(item)
+              if (!spec.startsWith("file://")) continue
+              await wait()
+              load = await prep(item, true)
+            }
+            if (!load) continue
 
-            await wait()
-            await loadOne(item, true)
+            const meta = await PluginMeta.touch(load.spec, load.target).catch((error) => {
+              log.warn("failed to track tui plugin", { path: load.spec, retry: load.retry, error })
+            })
+            if (meta && meta.state !== "same") {
+              log.info("tui plugin metadata updated", {
+                path: load.spec,
+                retry: load.retry,
+                state: meta.state,
+                source: meta.entry.source,
+                version: meta.entry.version,
+                modified: meta.entry.modified,
+              })
+            }
+
+            // Keep plugin execution sequential for deterministic side effects:
+            // command registration order affects keybind/command precedence,
+            // route registration is last-wins when ids collide,
+            // and hook chains rely on stable plugin ordering.
+            for (const [name, value] of uniqueModuleEntries(load.mod)) {
+              if (!value || typeof value !== "object") {
+                log.warn("ignoring non-object tui plugin export", {
+                  path: load.spec,
+                  name,
+                  type: value === null ? "null" : typeof value,
+                })
+                continue
+              }
+
+              const slotPlugin = getTuiSlotPlugin(value)
+              if (slotPlugin) input.slots.register(slotPlugin)
+
+              const tuiPlugin = getTuiPlugin(value)
+              if (!tuiPlugin) continue
+              await tuiPlugin(
+                {
+                  ...input,
+                  api: {
+                    command: input.api.command,
+                    route: input.api.route,
+                    ui: input.api.ui,
+                    keybind: input.api.keybind,
+                    theme: Object.create(input.api.theme, {
+                      install: {
+                        value: load.install,
+                        configurable: true,
+                        enumerable: true,
+                      },
+                    }),
+                  },
+                },
+                Config.pluginOptions(load.item),
+              )
+            }
           }
         } finally {
           await PluginMeta.persist().catch((error) => {
