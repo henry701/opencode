@@ -1,5 +1,6 @@
 import {
   type TuiPlugin as TuiPluginFn,
+  type TuiPluginInit,
   type TuiPluginInput,
   type TuiTheme,
   type TuiSlotContext,
@@ -128,6 +129,15 @@ function makeInstallFn(meta: TuiConfig.PluginMeta, root: string): TuiTheme["inst
   }
 }
 
+function initData(meta: { state: PluginMeta.State; entry: PluginMeta.Entry }): TuiPluginInit {
+  return {
+    state: meta.state,
+    first: meta.state === "new",
+    updated: meta.state === "changed",
+    entry: meta.entry,
+  }
+}
+
 export namespace TuiPlugin {
   const log = Log.create({ service: "tui.plugin" })
   let loaded: Promise<void> | undefined
@@ -217,6 +227,7 @@ export namespace TuiPlugin {
             retry,
             mod,
             install,
+            init: meta ? initData(meta) : undefined,
           }
         }
 
@@ -286,6 +297,7 @@ export namespace TuiPlugin {
                   },
                 },
                 Config.pluginOptions(load.item),
+                load.init,
               )
             }
           }
