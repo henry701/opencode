@@ -151,25 +151,6 @@ function makeInstallFn(meta: TuiConfig.PluginMeta, root: string, spec: string): 
   }
 }
 
-function createApi(
-  api: TuiPluginInput<CliRenderer>["api"],
-  install: TuiTheme["install"],
-): TuiPluginInput<CliRenderer>["api"] {
-  return {
-    command: api.command,
-    route: api.route,
-    ui: api.ui,
-    keybind: api.keybind,
-    theme: Object.create(api.theme, {
-      install: {
-        value: install,
-        configurable: true,
-        enumerable: true,
-      },
-    }),
-  }
-}
-
 function waitDeps(state: Deps) {
   state.wait ??= TuiConfig.waitForDependencies().catch((error) => {
     log.warn("failed waiting for tui plugin dependencies", { error })
@@ -244,7 +225,19 @@ function createInit(
 }
 
 async function applyPlugin(input: TuiPluginInput<CliRenderer>, load: Loaded, init: TuiPluginInit) {
-  const api = createApi(input.api, load.install)
+  const api = {
+    command: input.api.command,
+    route: input.api.route,
+    ui: input.api.ui,
+    keybind: input.api.keybind,
+    theme: Object.create(input.api.theme, {
+      install: {
+        value: load.install,
+        configurable: true,
+        enumerable: true,
+      },
+    }),
+  } satisfies TuiPluginInput<CliRenderer>["api"]
   const opts = Config.pluginOptions(load.item) ?? null
 
   for (const [name, value] of uniqueModuleEntries(load.mod)) {
