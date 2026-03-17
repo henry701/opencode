@@ -22,6 +22,12 @@ export namespace Plugin {
     hooks: Hooks[]
   }
 
+  type Loaded = {
+    item: Config.PluginSpec
+    spec: string
+    mod: Record<string, unknown>
+  }
+
   // Hook names that follow the (input, output) => Promise<void> trigger pattern
   type TriggerName = {
     [K in keyof Hooks]-?: NonNullable<Hooks[K]> extends (input: any, output: any) => Promise<void> ? K : never
@@ -43,11 +49,78 @@ export namespace Plugin {
 
   export class Service extends ServiceMap.Service<Service, Interface>()("@opencode/Plugin") {}
 
+  const BUILTIN = ["opencode-anthropic-auth@0.0.13"]
+
   // Built-in plugins that are directly imported (not installed from npm)
   const INTERNAL_PLUGINS: PluginInstance[] = [CodexAuthPlugin, CopilotAuthPlugin, GitlabAuthPlugin]
 
   // Old npm package names for plugins that are now built-in — skip if users still have them in config
   const DEPRECATED_PLUGIN_PACKAGES = ["opencode-openai-codex-auth", "opencode-copilot-auth"]
+
+  function isServerPlugin(value: unknown): value is PluginInstance {
+    return typeof value === "function"
+  }
+
+  function getServerPlugin(value: unknown) {
+    if (isServerPlugin(value)) return value
+    if (!value || typeof value !== "object" || !("server" in value)) return
+    if (!isServerPlugin(value.server)) return
+    return value.server
+  }
+
+  async function resolvePlugin(spec: string) {
+    const parsed = parsePluginSpecifier(spec)
+    const target = await resolvePluginTarget(spec, parsed).catch((err) => {
+      const cause = err instanceof Error ? err.cause : err
+      const detail = cause instanceof Error ? cause.message : String(cause ?? err)
+      log.error("failed to install plugin", { pkg: parsed.pkg, version: parsed.version, error: detail })
+      Bus.publish(Session.Event.Error, {
+        error: new NamedError.Unknown({
+          message: `Failed to install plugin ${parsed.pkg}@${parsed.version}: ${detail}`,
+        }).toObject(),
+      })
+      return ""
+    })
+    if (!target) return
+    return target
+  }
+
+  async function prepPlugin(item: Config.PluginSpec): Promise<Loaded | undefined> {
+    const spec = Config.pluginSpecifier(item)
+    if (DEPRECATED_PLUGIN_PACKAGES.some((pkg) => spec.includes(pkg))) return
+    log.info("loading plugin", { path: spec })
+    const target = await resolvePlugin(spec)
+    if (!target) return
+
+    const mod = await import(target).catch((err) => {
+      const message = err instanceof Error ? err.message : String(err)
+      log.error("failed to load plugin", { path: spec, error: message })
+      Bus.publish(Session.Event.Error, {
+        error: new NamedError.Unknown({
+          message: `Failed to load plugin ${spec}: ${message}`,
+        }).toObject(),
+      })
+      return
+    })
+    if (!mod) return
+
+    return {
+      item,
+      spec,
+      mod,
+    }
+  }
+
+  async function applyPlugin(load: Loaded, input: PluginInput, hooks: Hooks[]) {
+    // Prevent duplicate initialization when plugins export the same function
+    // as both a named export and default export (e.g., `export const X` and `export default X`).
+    // uniqueModuleEntries keeps only the first export for each shared value reference.
+    for (const [, entry] of uniqueModuleEntries(load.mod)) {
+      const server = getServerPlugin(entry)
+      if (!server) throw new TypeError("Plugin export is not a function")
+      hooks.push(await server(input, Config.pluginOptions(load.item)))
+    }
+  }
 
   export const layer = Layer.effect(
     Service,
@@ -87,79 +160,19 @@ export namespace Plugin {
               if (init) hooks.push(init)
             }
 
-            const plugins = cfg.plugin ?? []
+            let plugins = cfg.plugin ?? []
             if (plugins.length) await Config.waitForDependencies()
-
-            async function resolvePlugin(spec: string) {
-              const parsed = parsePluginSpecifier(spec)
-              const target = await resolvePluginTarget(spec, parsed).catch((err) => {
-                const cause = err instanceof Error ? err.cause : err
-                const detail = cause instanceof Error ? cause.message : String(cause ?? err)
-                log.error("failed to install plugin", { pkg: parsed.pkg, version: parsed.version, error: detail })
-                Bus.publish(Session.Event.Error, {
-                  error: new NamedError.Unknown({
-                    message: `Failed to install plugin ${parsed.pkg}@${parsed.version}: ${detail}`,
-                  }).toObject(),
-                })
-                return ""
-              })
-              if (!target) return
-              return target
+            if (!Flag.OPENCODE_DISABLE_DEFAULT_PLUGINS) {
+              plugins = [...BUILTIN, ...plugins]
             }
 
-            function isServerPlugin(value: unknown): value is PluginInstance {
-              return typeof value === "function"
-            }
-
-            function getServerPlugin(value: unknown) {
-              if (isServerPlugin(value)) return value
-              if (!value || typeof value !== "object" || !("server" in value)) return
-              if (!isServerPlugin(value.server)) return
-              return value.server
-            }
-
-            const prep = async (item: (typeof plugins)[number]) => {
-              const spec = Config.pluginSpecifier(item)
-              if (DEPRECATED_PLUGIN_PACKAGES.some((pkg) => spec.includes(pkg))) return
-              log.info("loading plugin", { path: spec })
-              const target = await resolvePlugin(spec)
-              if (!target) return
-
-              const mod = await import(target).catch((err) => {
-                const message = err instanceof Error ? err.message : String(err)
-                log.error("failed to load plugin", { path: spec, error: message })
-                Bus.publish(Session.Event.Error, {
-                  error: new NamedError.Unknown({
-                    message: `Failed to load plugin ${spec}: ${message}`,
-                  }).toObject(),
-                })
-                return
-              })
-              if (!mod) return
-
-              return {
-                item,
-                spec,
-                mod,
-              }
-            }
-
-            const loaded = await Promise.all(plugins.map((item) => prep(item)))
+            const loaded = await Promise.all(plugins.map((item) => prepPlugin(item)))
             for (const load of loaded) {
               if (!load) continue
 
               // Keep plugin execution sequential so hook registration and execution
               // order remains deterministic across plugin runs.
-              // Prevent duplicate initialization when plugins export the same function
-              // as both a named export and default export (e.g., `export const X` and `export default X`).
-              // uniqueModuleEntries keeps only the first export for each shared value reference.
-              await (async () => {
-                for (const [, entry] of uniqueModuleEntries(load.mod)) {
-                  const server = getServerPlugin(entry)
-                  if (!server) throw new TypeError("Plugin export is not a function")
-                  hooks.push(await server(input, Config.pluginOptions(load.item)))
-                }
-              })().catch((err) => {
+              await applyPlugin(load, input, hooks).catch((err) => {
                 const message = err instanceof Error ? err.message : String(err)
                 log.error("failed to load plugin", { path: load.spec, error: message })
                 Bus.publish(Session.Event.Error, {
