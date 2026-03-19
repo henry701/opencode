@@ -78,7 +78,7 @@ export type AuthHook = {
               when?: Rule
             }
         >
-        authorize(inputs?: Record<string, string>): Promise<AuthOuathResult>
+        authorize(inputs?: Record<string, string>): Promise<AuthOAuthResult>
       }
     | {
         type: "api"
@@ -122,7 +122,7 @@ export type AuthHook = {
   )[]
 }
 
-export type AuthOuathResult = { url: string; instructions: string } & (
+export type AuthOAuthResult = { url: string; instructions: string } & (
   | {
       method: "auto"
       callback(): Promise<
@@ -164,6 +164,9 @@ export type AuthOuathResult = { url: string; instructions: string } & (
       >
     }
 )
+
+/** @deprecated Use AuthOAuthResult instead. */
+export type AuthOuathResult = AuthOAuthResult
 
 export interface Hooks {
   event?: (input: { event: Event }) => Promise<void>
