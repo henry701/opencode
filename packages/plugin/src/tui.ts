@@ -189,6 +189,16 @@ export type TuiSidebarFileItem = {
 export type TuiSlotMap = {
   app: {}
   home_logo: {}
+  home_tips: {
+    show_tips: boolean
+    tips_hidden: boolean
+    first_time_user: boolean
+  }
+  home_below_tips: {
+    show_tips: boolean
+    tips_hidden: boolean
+    first_time_user: boolean
+  }
   sidebar_top: {
     session_id: string
   }

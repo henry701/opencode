@@ -127,11 +127,25 @@ export function Home() {
             workspaceID={route.workspaceID}
           />
         </box>
-        <box height={4} minHeight={0} width="100%" maxWidth={75} alignItems="center" paddingTop={3} flexShrink={1}>
-          <Show when={showTips()}>
-            <Tips />
-          </Show>
-        </box>
+        <TuiPlugin.Slot
+          name="home_tips"
+          mode="replace"
+          show_tips={showTips()}
+          tips_hidden={tipsHidden()}
+          first_time_user={isFirstTimeUser()}
+        >
+          <box height={4} minHeight={0} width="100%" maxWidth={75} alignItems="center" paddingTop={3} flexShrink={1}>
+            <Show when={showTips()}>
+              <Tips />
+            </Show>
+          </box>
+        </TuiPlugin.Slot>
+        <TuiPlugin.Slot
+          name="home_below_tips"
+          show_tips={showTips()}
+          tips_hidden={tipsHidden()}
+          first_time_user={isFirstTimeUser()}
+        />
         <box flexGrow={1} minHeight={0} />
         <Toast />
       </box>
