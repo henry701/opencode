@@ -642,6 +642,45 @@ const slot = (input: Cfg): TuiSlotPlugin => ({
         </box>
       )
     },
+    home_tips(ctx, value) {
+      if (!value.show_tips) return null
+      const skin = look(ctx.theme.current as Record<string, unknown>)
+
+      return (
+        <box height={4} minHeight={0} width="100%" maxWidth={75} alignItems="center" paddingTop={3} flexShrink={1}>
+          <text fg={skin.muted}>
+            <span style={{ fg: skin.accent }}>{input.label}</span> replaces the built-in home tips slot
+          </text>
+        </box>
+      )
+    },
+    home_below_tips(ctx, value) {
+      const skin = look(ctx.theme.current as Record<string, unknown>)
+      const text = value.first_time_user
+        ? "first-time user state"
+        : value.tips_hidden
+          ? "tips are hidden"
+          : "extra content below tips"
+
+      return (
+        <box width="100%" maxWidth={75} alignItems="center" paddingTop={1} flexShrink={0}>
+          <box
+            border
+            borderColor={skin.border}
+            backgroundColor={skin.panel}
+            paddingTop={1}
+            paddingBottom={1}
+            paddingLeft={2}
+            paddingRight={2}
+            width="100%"
+          >
+            <text fg={skin.muted}>
+              <span style={{ fg: skin.accent }}>{input.label}</span> {text}
+            </text>
+          </box>
+        </box>
+      )
+    },
     sidebar_top(ctx, value) {
       const skin = look(ctx.theme.current as Record<string, unknown>)
 
