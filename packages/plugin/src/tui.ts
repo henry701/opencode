@@ -1,4 +1,10 @@
-import type { createOpencodeClient as createOpencodeClientV2, Event as TuiEvent } from "@opencode-ai/sdk/v2"
+import type {
+  createOpencodeClient as createOpencodeClientV2,
+  Event as TuiEvent,
+  LspStatus,
+  McpStatus,
+  Todo,
+} from "@opencode-ai/sdk/v2"
 import type { CliRenderer, ParsedKey, Plugin as CorePlugin } from "@opentui/core"
 import type { Plugin as ServerPlugin, PluginOptions } from "./index.js"
 
@@ -164,11 +170,83 @@ export type TuiApi<Node = unknown> = {
   theme: TuiTheme
 }
 
+export type TuiSidebarMcpItem = {
+  name: string
+  status: McpStatus["status"]
+  error?: string
+}
+
+export type TuiSidebarLspItem = Pick<LspStatus, "id" | "root" | "status">
+
+export type TuiSidebarTodoItem = Pick<Todo, "content" | "status">
+
+export type TuiSidebarFileItem = {
+  file: string
+  additions: number
+  deletions: number
+}
+
 export type TuiSlotMap = {
   app: {}
   home_logo: {}
   sidebar_top: {
     session_id: string
+  }
+  sidebar_title: {
+    session_id: string
+    title: string
+    share_url?: string
+  }
+  sidebar_context: {
+    session_id: string
+    tokens: number
+    percentage: number | null
+    cost: number
+  }
+  sidebar_mcp: {
+    session_id: string
+    items: TuiSidebarMcpItem[]
+    connected: number
+    errors: number
+  }
+  sidebar_lsp: {
+    session_id: string
+    items: TuiSidebarLspItem[]
+    disabled: boolean
+  }
+  sidebar_todo: {
+    session_id: string
+    items: TuiSidebarTodoItem[]
+  }
+  sidebar_files: {
+    session_id: string
+    items: TuiSidebarFileItem[]
+  }
+  sidebar_getting_started: {
+    session_id: string
+    show_getting_started: boolean
+    has_providers: boolean
+    dismissed: boolean
+  }
+  sidebar_directory: {
+    session_id: string
+    directory: string
+    directory_parent: string
+    directory_name: string
+  }
+  sidebar_version: {
+    session_id: string
+    version: string
+  }
+  sidebar_bottom: {
+    session_id: string
+    directory: string
+    directory_parent: string
+    directory_name: string
+    version: string
+    show_getting_started: boolean
+    has_providers: boolean
+    dismissed: boolean
   }
 }
 
