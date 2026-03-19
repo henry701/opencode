@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { RGBA, VignetteEffect } from "@opentui/core"
-import type { TuiApi, TuiKeybindSet, TuiPluginInit, TuiPluginInput } from "@opencode-ai/plugin/tui"
+import type { TuiApi, TuiKeybindSet, TuiPluginInit, TuiPluginInput, TuiSlotPlugin } from "@opencode-ai/plugin/tui"
 
 const tabs = ["overview", "counter", "help"]
 const bind = {
@@ -89,22 +89,31 @@ const ui = {
 
 type Color = RGBA | string
 
-const tone = (api: TuiApi) => {
-  const map = api.theme.current as Record<string, unknown>
-  const get = (name: string, fallback: string): Color => {
-    const value = map[name]
-    if (typeof value === "string") return value
-    if (value && typeof value === "object") return value as RGBA
-    return fallback
-  }
+const cash = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+})
+
+const ink = (map: Record<string, unknown>, name: string, fallback: string): Color => {
+  const value = map[name]
+  if (typeof value === "string") return value
+  if (value && typeof value === "object") return value as RGBA
+  return fallback
+}
+
+const look = (map: Record<string, unknown>) => {
   return {
-    panel: get("backgroundPanel", ui.panel),
-    border: get("border", ui.border),
-    text: get("text", ui.text),
-    muted: get("textMuted", ui.muted),
-    accent: get("primary", ui.accent),
-    selected: get("selectedListItemText", ui.text),
+    panel: ink(map, "backgroundPanel", ui.panel),
+    border: ink(map, "border", ui.border),
+    text: ink(map, "text", ui.text),
+    muted: ink(map, "textMuted", ui.muted),
+    accent: ink(map, "primary", ui.accent),
+    selected: ink(map, "selectedListItemText", ui.text),
   }
+}
+
+const tone = (api: TuiApi) => {
+  return look(api.theme.current as Record<string, unknown>)
 }
 
 type Skin = {
@@ -598,17 +607,12 @@ const Modal = (props: { api: TuiApi; input: Cfg; route: Route; keys: Keys; param
   )
 }
 
-const slot = (input: Cfg) => ({
+const slot = (input: Cfg): TuiSlotPlugin => ({
   id: "workspace-smoke",
   slots: {
     home_logo(ctx) {
       const map = ctx.theme.current as Record<string, unknown>
-      const get = (name: string, fallback: string) => {
-        const value = map[name]
-        if (typeof value === "string") return value
-        if (value && typeof value === "object") return value as RGBA
-        return fallback
-      }
+      const skin = look(map)
       const art = [
         "                                  $$\\",
         "                                  $$ |",
@@ -619,39 +623,33 @@ const slot = (input: Cfg) => ({
         "$$$$$$$  |$$ | $$ | $$ |\\$$$$$$  |$$ | \\$$\\ \\$$$$$$$\\",
         "\\_______/ \\__| \\__| \\__| \\______/ \\__|  \\__| \\_______|",
       ]
-      const ink = [
-        get("primary", ui.accent),
-        get("textMuted", ui.muted),
-        get("info", ui.accent),
-        get("text", ui.text),
-        get("success", ui.accent),
-        get("warning", ui.accent),
-        get("secondary", ui.accent),
-        get("error", ui.accent),
+      const fill = [
+        skin.accent,
+        skin.muted,
+        ink(map, "info", ui.accent),
+        skin.text,
+        ink(map, "success", ui.accent),
+        ink(map, "warning", ui.accent),
+        ink(map, "secondary", ui.accent),
+        ink(map, "error", ui.accent),
       ]
 
       return (
         <box flexDirection="column">
           {art.map((line, i) => (
-            <text fg={ink[i]}>{line}</text>
+            <text fg={fill[i]}>{line}</text>
           ))}
         </box>
       )
     },
     sidebar_top(ctx, value) {
-      const map = ctx.theme.current as Record<string, unknown>
-      const get = (name: string, fallback: string) => {
-        const item = map[name]
-        if (typeof item === "string") return item
-        if (item && typeof item === "object") return item as RGBA
-        return fallback
-      }
+      const skin = look(ctx.theme.current as Record<string, unknown>)
 
       return (
         <box
           border
-          borderColor={get("border", ui.border)}
-          backgroundColor={get("backgroundPanel", ui.panel)}
+          borderColor={skin.border}
+          backgroundColor={skin.panel}
           paddingTop={1}
           paddingBottom={1}
           paddingLeft={2}
@@ -659,11 +657,127 @@ const slot = (input: Cfg) => ({
           flexDirection="column"
           gap={1}
         >
-          <text fg={get("primary", ui.accent)}>
+          <text fg={skin.accent}>
             <b>{input.label}</b>
           </text>
-          <text fg={get("text", ui.text)}>sidebar slot active</text>
-          <text fg={get("textMuted", ui.muted)}>session {value.session_id.slice(0, 8)}</text>
+          <text fg={skin.text}>sidebar slot active</text>
+          <text fg={skin.muted}>session {value.session_id.slice(0, 8)}</text>
+        </box>
+      )
+    },
+    sidebar_title(ctx, value) {
+      const skin = look(ctx.theme.current as Record<string, unknown>)
+
+      return (
+        <box paddingRight={1} flexDirection="column" gap={1}>
+          <box flexDirection="row" justifyContent="space-between">
+            <text fg={skin.text}>
+              <b>{value.title}</b>
+            </text>
+            <text fg={skin.accent}>plugin</text>
+          </box>
+          <text fg={skin.muted}>session {value.session_id.slice(0, 8)}</text>
+          {value.share_url ? <text fg={skin.muted}>{value.share_url}</text> : null}
+        </box>
+      )
+    },
+    sidebar_context(ctx, value) {
+      const skin = look(ctx.theme.current as Record<string, unknown>)
+      const used = value.percentage === null ? "n/a" : `${value.percentage}%`
+      const bar =
+        value.percentage === null ? "" : "■".repeat(Math.max(1, Math.min(10, Math.round(value.percentage / 10))))
+
+      return (
+        <box
+          border
+          borderColor={skin.border}
+          backgroundColor={skin.panel}
+          paddingTop={1}
+          paddingBottom={1}
+          paddingLeft={2}
+          paddingRight={2}
+          flexDirection="column"
+          gap={1}
+        >
+          <box flexDirection="row" justifyContent="space-between">
+            <text fg={skin.text}>
+              <b>Context</b>
+            </text>
+            <text fg={skin.accent}>slot</text>
+          </box>
+          <text fg={skin.text}>{value.tokens.toLocaleString()} tokens</text>
+          <text fg={skin.muted}>{bar ? `${used} · ${bar}` : used}</text>
+          <text fg={skin.muted}>{cash.format(value.cost)} spent</text>
+        </box>
+      )
+    },
+    sidebar_files(ctx, value) {
+      if (!value.items.length) return null
+      const map = ctx.theme.current as Record<string, unknown>
+      const skin = look(map)
+      const add = ink(map, "diffAdded", "#7bd389")
+      const del = ink(map, "diffRemoved", "#ff8e8e")
+      const list = value.items.slice(0, 3)
+
+      return (
+        <box
+          border
+          borderColor={skin.border}
+          backgroundColor={skin.panel}
+          paddingTop={1}
+          paddingBottom={1}
+          paddingLeft={2}
+          paddingRight={2}
+          flexDirection="column"
+          gap={1}
+        >
+          <box flexDirection="row" justifyContent="space-between">
+            <text fg={skin.text}>
+              <b>Working Tree</b>
+            </text>
+            <text fg={skin.accent}>{value.items.length}</text>
+          </box>
+          {list.map((item) => (
+            <box flexDirection="row" gap={1} justifyContent="space-between">
+              <text fg={skin.muted} wrapMode="none">
+                {item.file}
+              </text>
+              <text fg={skin.text}>
+                {item.additions ? <span style={{ fg: add }}>+{item.additions}</span> : null}
+                {item.deletions ? <span style={{ fg: del }}> -{item.deletions}</span> : null}
+              </text>
+            </box>
+          ))}
+          {value.items.length > list.length ? (
+            <text fg={skin.muted}>+{value.items.length - list.length} more file(s)</text>
+          ) : null}
+        </box>
+      )
+    },
+    sidebar_bottom(ctx, value) {
+      const skin = look(ctx.theme.current as Record<string, unknown>)
+
+      return (
+        <box
+          border
+          borderColor={skin.border}
+          backgroundColor={skin.panel}
+          paddingTop={1}
+          paddingBottom={1}
+          paddingLeft={2}
+          paddingRight={2}
+          flexDirection="column"
+          gap={1}
+        >
+          <text fg={skin.accent}>
+            <b>{input.label} footer slot</b>
+          </text>
+          <text fg={skin.muted}>
+            append demo after {value.show_getting_started ? "welcome card" : "default footer"}
+          </text>
+          <text fg={skin.text}>
+            {value.directory_name} · {value.version}
+          </text>
         </box>
       )
     },
