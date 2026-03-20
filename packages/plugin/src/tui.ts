@@ -142,6 +142,21 @@ export type TuiTheme = {
   readonly ready: boolean
 }
 
+export type TuiKV = {
+  get: <Value = unknown>(key: string, fallback?: Value) => Value
+  set: (key: string, value: unknown) => void
+  readonly ready: boolean
+}
+
+export type TuiState = {
+  session: {
+    diff: (sessionID: string) => ReadonlyArray<TuiSidebarFileItem>
+    todo: (sessionID: string) => ReadonlyArray<TuiSidebarTodoItem>
+  }
+  lsp: () => ReadonlyArray<TuiSidebarLspItem>
+  mcp: () => ReadonlyArray<TuiSidebarMcpItem>
+}
+
 export type TuiApi<Node = unknown> = {
   command: {
     register: (cb: () => TuiCommand[]) => void
@@ -167,6 +182,8 @@ export type TuiApi<Node = unknown> = {
     print: (key: string) => string
     create: (defaults: TuiKeybindMap, overrides?: Record<string, unknown>) => TuiKeybindSet
   }
+  kv: TuiKV
+  state: TuiState
   theme: TuiTheme
 }
 
@@ -281,7 +298,7 @@ export type TuiPluginState = "first" | "updated" | "same"
 
 export type TuiPluginMeta = {
   name: string
-  source: "file" | "npm"
+  source: "file" | "npm" | "internal"
   spec: string
   target: string
   requested?: string

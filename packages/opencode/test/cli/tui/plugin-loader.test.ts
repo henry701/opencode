@@ -7,6 +7,8 @@ import type { CliRenderer } from "@opentui/core"
 import { tmpdir } from "../../fixture/fixture"
 import { Log } from "../../../src/util/log"
 import { Global } from "../../../src/global"
+import { TuiConfig } from "../../../src/config/tui"
+import { Config } from "../../../src/config/config"
 import { createPluginKeybind } from "../../../src/cli/cmd/tui/context/keybind-plugin"
 
 mock.module("@opentui/solid/preload", () => ({}))
@@ -106,6 +108,13 @@ export const object_plugin = {
       { modal: "ctrl+shift+m", screen: "ctrl+shift+o", close: "escape" },
       options.keybinds,
     )
+    const kv_before = input.api.kv.get(options.kv_key, "missing")
+    input.api.kv.set(options.kv_key, "stored")
+    const kv_after = input.api.kv.get(options.kv_key, "missing")
+    const diff = input.api.state.session.diff(options.session_id)
+    const todo = input.api.state.session.todo(options.session_id)
+    const lsp = input.api.state.lsp()
+    const mcp = input.api.state.mcp()
     const depth_before = input.api.ui.dialog.depth
     const open_before = input.api.ui.dialog.open
     const size_before = input.api.ui.dialog.size
@@ -141,6 +150,16 @@ export const object_plugin = {
         key_close: key.get("close"),
         key_unknown: key.get("ctrl+k"),
         key_print: key.print("modal"),
+        kv_before,
+        kv_after,
+        kv_ready: input.api.kv.ready,
+        diff_count: diff.length,
+        diff_file: diff[0]?.file,
+        todo_count: todo.length,
+        todo_first: todo[0]?.content,
+        lsp_count: lsp.length,
+        mcp_count: mcp.length,
+        mcp_first: mcp[0]?.name,
         depth_before,
         open_before,
         size_before,
@@ -258,6 +277,8 @@ export const object_plugin = {
                   dest: localDest,
                   theme_path: `./${localThemeFile}`,
                   theme_name: localThemeName,
+                  kv_key: "plugin_state_key",
+                  session_id: "ses_test",
                   keybinds: {
                     modal: "ctrl+alt+m",
                     close: "q",
@@ -326,6 +347,8 @@ export const object_plugin = {
   await Bun.write(tmp.extra.globalPluginPath, `${text}\n`)
 
   const cwd = spyOn(process, "cwd").mockImplementation(() => tmp.path)
+  const wait = spyOn(TuiConfig, "waitForDependencies").mockResolvedValue()
+  const install = spyOn(Config, "installDependencies").mockResolvedValue()
   let selected = "opencode"
   let depth = 0
   let size: "medium" | "large" = "medium"
@@ -336,6 +359,7 @@ export const object_plugin = {
       return this
     },
   } satisfies CliRenderer
+  const kv: Record<string, unknown> = {}
   const keybind = {
     parse: (evt: { name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean; super?: boolean }) => ({
       name: evt.name ?? "",
@@ -407,6 +431,35 @@ export const object_plugin = {
             return createPluginKeybind(keybind, defaults, overrides)
           },
         },
+        kv: {
+          get(key, fallback) {
+            return (kv[key] ?? fallback) as never
+          },
+          set(key, value) {
+            kv[key] = value
+          },
+          get ready() {
+            return true
+          },
+        },
+        state: {
+          session: {
+            diff(sessionID) {
+              if (sessionID !== "ses_test") return []
+              return [{ file: "src/app.ts", additions: 3, deletions: 1 }]
+            },
+            todo(sessionID) {
+              if (sessionID !== "ses_test") return []
+              return [{ content: "ship it", status: "pending" }]
+            },
+          },
+          lsp() {
+            return [{ id: "ts", root: "/tmp/project", status: "connected" }]
+          },
+          mcp() {
+            return [{ name: "github", status: "connected" }]
+          },
+        },
         theme: {
           get current() {
             return {}
@@ -446,6 +499,16 @@ export const object_plugin = {
     expect(local.key_close).toBe("q")
     expect(local.key_unknown).toBe("ctrl+k")
     expect(local.key_print).toBe("print:ctrl+alt+m")
+    expect(local.kv_before).toBe("missing")
+    expect(local.kv_after).toBe("stored")
+    expect(local.kv_ready).toBe(true)
+    expect(local.diff_count).toBe(1)
+    expect(local.diff_file).toBe("src/app.ts")
+    expect(local.todo_count).toBe(1)
+    expect(local.todo_first).toBe("ship it")
+    expect(local.lsp_count).toBe(1)
+    expect(local.mcp_count).toBe(1)
+    expect(local.mcp_first).toBe("github")
     expect(local.depth_before).toBe(0)
     expect(local.open_before).toBe(false)
     expect(local.size_before).toBe("medium")
@@ -525,6 +588,8 @@ export const object_plugin = {
     expect(rows.find((item) => item.name === "preloaded-plugin")?.load_count).toBe(1)
   } finally {
     cwd.mockRestore()
+    wait.mockRestore()
+    install.mockRestore()
     if (backup === undefined) {
       await fs.rm(globalConfigPath, { force: true })
     } else {

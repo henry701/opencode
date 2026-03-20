@@ -133,6 +133,7 @@ test("continues loading tui plugins when a plugin is missing config metadata", a
       return this
     },
   } satisfies CliRenderer
+  const kv: Record<string, unknown> = {}
   const keybind = {
     parse: (evt: { name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean; super?: boolean }) => ({
       name: evt.name ?? "",
@@ -193,6 +194,33 @@ test("continues loading tui plugins when a plugin is missing config metadata", a
           ...keybind,
           create(defaults, overrides) {
             return createPluginKeybind(keybind, defaults, overrides)
+          },
+        },
+        kv: {
+          get(key, fallback) {
+            return (kv[key] ?? fallback) as never
+          },
+          set(key, value) {
+            kv[key] = value
+          },
+          get ready() {
+            return true
+          },
+        },
+        state: {
+          session: {
+            diff() {
+              return []
+            },
+            todo() {
+              return []
+            },
+          },
+          lsp() {
+            return []
+          },
+          mcp() {
+            return []
           },
         },
         theme: {

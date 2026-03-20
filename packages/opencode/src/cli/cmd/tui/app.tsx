@@ -146,7 +146,7 @@ function rendererConfig(_config: TuiConfig.Info): CliRendererConfig {
 
 type RouteEntry = {
   key: symbol
-  render: TuiRouteDefinition["render"]
+  render: TuiRouteDefinition<JSX.Element>["render"]
 }
 
 type RouteMap = Map<string, RouteEntry[]>
@@ -155,9 +155,11 @@ type ApiInput = {
   command: ReturnType<typeof useCommandDialog>
   dialog: ReturnType<typeof useDialog>
   keybind: ReturnType<typeof useKeybind>
+  kv: ReturnType<typeof useKV>
   route: ReturnType<typeof useRoute>
   routes: RouteMap
   bump: () => void
+  sync: ReturnType<typeof useSync>
   theme: ReturnType<typeof useTheme>
   toast: ReturnType<typeof useToast>
 }
@@ -241,6 +243,31 @@ function pickOption<Value>(item: SelectOption<Value>): TuiDialogSelectOption<Val
 function mapOptionCb<Value>(cb?: (item: TuiDialogSelectOption<Value, JSX.Element>) => void) {
   if (!cb) return
   return (item: SelectOption<Value>) => cb(pickOption(item))
+}
+
+function stateApi(sync: ReturnType<typeof useSync>): TuiApi<JSX.Element>["state"] {
+  return {
+    session: {
+      diff(sessionID) {
+        return sync.data.session_diff[sessionID] ?? []
+      },
+      todo(sessionID) {
+        return sync.data.todo[sessionID] ?? []
+      },
+    },
+    lsp() {
+      return sync.data.lsp.map((item) => ({ id: item.id, root: item.root, status: item.status }))
+    },
+    mcp() {
+      return Object.entries(sync.data.mcp)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([name, item]) => ({
+          name,
+          status: item.status,
+          error: item.status === "failed" ? item.error : undefined,
+        }))
+    },
+  }
 }
 
 function createTuiApi(input: ApiInput): TuiApi<JSX.Element> {
@@ -339,6 +366,18 @@ function createTuiApi(input: ApiInput): TuiApi<JSX.Element> {
         return input.keybind.create(defaults, overrides)
       },
     },
+    kv: {
+      get(key, fallback) {
+        return input.kv.get(key, fallback)
+      },
+      set(key, value) {
+        input.kv.set(key, value)
+      },
+      get ready() {
+        return input.kv.ready
+      },
+    },
+    state: stateApi(input.sync),
     theme: {
       get current() {
         return input.theme.theme
@@ -412,7 +451,9 @@ export function tui(input: {
     await render(() => {
       return (
         <ErrorBoundary
-          fallback={(error, reset) => <ErrorComponent error={error} reset={reset} onExit={onExit} mode={mode} />}
+          fallback={(error: Error, reset: () => void) => (
+            <ErrorComponent error={error} reset={reset} onExit={onExit} mode={mode} />
+          )}
         >
           <ArgsProvider {...input.args}>
             <ExitProvider onExit={onExit}>
@@ -488,9 +529,11 @@ function App() {
     command,
     dialog,
     keybind,
+    kv,
     route,
     routes,
     bump: () => setRouteRev((x) => x + 1),
+    sync,
     theme: themeState,
     toast,
   })
