@@ -182,23 +182,34 @@ type State = {
   ready: boolean
 }
 
+const pluginThemes: Record<string, ThemeJson> = {}
+let customThemes: Record<string, ThemeJson> = {}
+let systemTheme: ThemeJson | undefined
+
+function listThemes() {
+  // Priority: defaults < plugin installs < custom files < generated system.
+  const themes = {
+    ...DEFAULT_THEMES,
+    ...pluginThemes,
+    ...customThemes,
+  }
+  if (!systemTheme) return themes
+  return {
+    ...themes,
+    system: systemTheme,
+  }
+}
+
+function syncThemes() {
+  setStore("themes", listThemes())
+}
+
 const [store, setStore] = createStore<State>({
-  themes: DEFAULT_THEMES,
+  themes: listThemes(),
   mode: "dark",
   active: "opencode",
   ready: false,
 })
-
-function mergeThemes(themes: Record<string, ThemeJson>) {
-  setStore(
-    produce((draft) => {
-      for (const [name, theme] of Object.entries(themes)) {
-        if (draft.themes[name]) continue
-        draft.themes[name] = theme
-      }
-    }),
-  )
-}
 
 export function allThemes() {
   return store.themes
@@ -219,9 +230,8 @@ export function addTheme(name: string, theme: unknown) {
   if (!name) return false
   if (!isTheme(theme)) return false
   if (hasTheme(name)) return false
-  mergeThemes({
-    [name]: theme,
-  })
+  pluginThemes[name] = theme
+  syncThemes()
   return true
 }
 
@@ -352,11 +362,8 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
         resolveSystemTheme(),
         getCustomThemes()
           .then((custom) => {
-            setStore(
-              produce((draft) => {
-                Object.assign(draft.themes, custom)
-              }),
-            )
+            customThemes = custom
+            syncThemes()
           })
           .catch(() => {
             setStore("active", "opencode")
@@ -373,20 +380,21 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
         .getPalette({
           size: 16,
         })
-        .then((colors) => {
+        .then((colors: TerminalColors) => {
           if (!colors.palette[0]) {
+            systemTheme = undefined
+            syncThemes()
             if (store.active === "system") {
               setStore("active", "opencode")
             }
             return
           }
-          setStore(
-            produce((draft) => {
-              draft.themes.system = generateSystem(colors, store.mode)
-            }),
-          )
+          systemTheme = generateSystem(colors, store.mode)
+          syncThemes()
         })
         .catch(() => {
+          systemTheme = undefined
+          syncThemes()
           if (store.active === "system") {
             setStore("active", "opencode")
           }
