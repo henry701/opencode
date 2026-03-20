@@ -309,7 +309,7 @@ export type TuiPluginInput<Renderer = CliRenderer, Node = unknown> = {
 
 export type TuiPlugin<Renderer = CliRenderer, Node = unknown> = (
   input: TuiPluginInput<Renderer, Node>,
-  options: PluginOptions | null,
+  options: PluginOptions | undefined,
   init: TuiPluginInit,
 ) => Promise<void>
 

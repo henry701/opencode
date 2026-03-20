@@ -51,10 +51,13 @@ test("continues loading tui plugins when a plugin is missing config metadata", a
     init: async (dir) => {
       const badPluginPath = path.join(dir, `missing-meta-plugin-${stamp}.ts`)
       const nextPluginPath = path.join(dir, `next-plugin-${stamp}.ts`)
+      const plainPluginPath = path.join(dir, `plain-plugin-${stamp}.ts`)
       const badSpec = pathToFileURL(badPluginPath).href
       const nextSpec = pathToFileURL(nextPluginPath).href
+      const plainSpec = pathToFileURL(plainPluginPath).href
       const badMarker = path.join(dir, "missing-meta-called.txt")
       const nextMarker = path.join(dir, "next-called.txt")
+      const plainMarker = path.join(dir, "plain-called.txt")
 
       await Bun.write(
         badPluginPath,
@@ -78,11 +81,23 @@ test("continues loading tui plugins when a plugin is missing config metadata", a
 `,
       )
 
+      await Bun.write(
+        plainPluginPath,
+        `export default {
+  tui: async (_input, options) => {
+    await Bun.write(${JSON.stringify(plainMarker)}, options === undefined ? "undefined" : options === null ? "null" : "value")
+  },
+}
+`,
+      )
+
       return {
         badSpec,
         nextSpec,
+        plainSpec,
         badMarker,
         nextMarker,
+        plainMarker,
       }
     },
   })
@@ -90,13 +105,19 @@ test("continues loading tui plugins when a plugin is missing config metadata", a
   process.env.OPENCODE_PLUGIN_META_FILE = path.join(tmp.path, "plugin-meta.json")
   const bad = path.parse(new URL(tmp.extra.badSpec).pathname).name
   const next = path.parse(new URL(tmp.extra.nextSpec).pathname).name
+  const plain = path.parse(new URL(tmp.extra.plainSpec).pathname).name
   const get = spyOn(TuiConfig, "get").mockResolvedValue({
     plugin: [
       [tmp.extra.badSpec, { marker: tmp.extra.badMarker }],
       [tmp.extra.nextSpec, { marker: tmp.extra.nextMarker }],
+      tmp.extra.plainSpec,
     ],
     plugin_meta: {
       [next]: {
+        scope: "local",
+        source: path.join(tmp.path, "tui.json"),
+      },
+      [plain]: {
         scope: "local",
         source: path.join(tmp.path, "tui.json"),
       },
@@ -203,6 +224,7 @@ test("continues loading tui plugins when a plugin is missing config metadata", a
 
     await expect(fs.readFile(tmp.extra.badMarker, "utf8")).rejects.toThrow()
     await expect(fs.readFile(tmp.extra.nextMarker, "utf8")).resolves.toBe("called")
+    await expect(fs.readFile(tmp.extra.plainMarker, "utf8")).resolves.toBe("undefined")
 
     const log = await waitForLog("missing tui plugin metadata")
     expect(log).toContain("missing tui plugin metadata")
