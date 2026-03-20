@@ -81,10 +81,7 @@ export namespace TuiConfig {
   }
 
   function installDeps(dir: string): Promise<void> {
-    return Config.needsInstall(dir).then((yes) => {
-      if (!yes) return
-      return Config.installDependencies(dir)
-    })
+    return Config.installDependencies(dir)
   }
 
   async function mergeFile(acc: Acc, file: string) {
