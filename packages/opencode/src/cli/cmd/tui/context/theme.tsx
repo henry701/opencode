@@ -129,7 +129,7 @@ type Variant = {
   light: HexColor | RefName
 }
 type ColorValue = HexColor | RefName | Variant | RGBA
-type ThemeJson = {
+export type ThemeJson = {
   $schema?: string
   defs?: Record<string, HexColor | RefName>
   theme: Omit<Record<keyof ThemeColors, ColorValue>, "selectedListItemText" | "backgroundMenu"> & {
@@ -235,27 +235,29 @@ export function addTheme(name: string, theme: unknown) {
   return true
 }
 
-function resolveTheme(theme: ThemeJson, mode: "dark" | "light") {
+export function resolveTheme(theme: ThemeJson, mode: "dark" | "light") {
   const defs = theme.defs ?? {}
-  function resolveColor(c: ColorValue): RGBA {
+  function resolveColor(c: ColorValue, chain: string[] = []): RGBA {
     if (c instanceof RGBA) return c
     if (typeof c === "string") {
       if (c === "transparent" || c === "none") return RGBA.fromInts(0, 0, 0, 0)
 
       if (c.startsWith("#")) return RGBA.fromHex(c)
 
-      if (defs[c] != null) {
-        return resolveColor(defs[c])
-      } else if (theme.theme[c as keyof ThemeColors] !== undefined) {
-        return resolveColor(theme.theme[c as keyof ThemeColors]!)
-      } else {
+      if (chain.includes(c)) {
+        throw new Error(`Circular color reference: ${[...chain, c].join(" -> ")}`)
+      }
+
+      const next = defs[c] ?? theme.theme[c as keyof ThemeColors]
+      if (next === undefined) {
         throw new Error(`Color reference "${c}" not found in defs or theme`)
       }
+      return resolveColor(next, [...chain, c])
     }
     if (typeof c === "number") {
       return ansiToRgba(c)
     }
-    return resolveColor(c[mode])
+    return resolveColor(c[mode], chain)
   }
 
   const resolved = Object.fromEntries(

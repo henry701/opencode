@@ -7,7 +7,8 @@ mock.module("@opentui/solid/jsx-runtime", () => ({
   jsxDEV: () => null,
 }))
 
-const { DEFAULT_THEMES, allThemes, addTheme, hasTheme } = await import("../../../src/cli/cmd/tui/context/theme")
+const { DEFAULT_THEMES, allThemes, addTheme, hasTheme, resolveTheme } =
+  await import("../../../src/cli/cmd/tui/context/theme")
 
 test("addTheme writes into module theme store", () => {
   const name = `plugin-theme-${Date.now()}`
@@ -41,4 +42,16 @@ test("hasTheme checks theme presence", () => {
   expect(hasTheme(name)).toBe(false)
   expect(addTheme(name, DEFAULT_THEMES.opencode)).toBe(true)
   expect(hasTheme(name)).toBe(true)
+})
+
+test("resolveTheme rejects circular color refs", () => {
+  const item = structuredClone(DEFAULT_THEMES.opencode)
+  item.defs = {
+    ...(item.defs ?? {}),
+    one: "two",
+    two: "one",
+  }
+  ;(item.theme as Record<string, unknown>).primary = "one"
+
+  expect(() => resolveTheme(item, "dark")).toThrow("Circular color reference")
 })
