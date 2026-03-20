@@ -15,6 +15,7 @@ import {
   batch,
   Show,
   on,
+  onCleanup,
 } from "solid-js"
 import { win32DisableProcessedInput, win32FlushInputBuffer, win32InstallCtrlCGuard } from "./win32"
 import { Flag } from "@/flag/flag"
@@ -45,6 +46,7 @@ import { DialogConfirm } from "./ui/dialog-confirm"
 import { DialogPrompt } from "./ui/dialog-prompt"
 import { DialogSelect, type DialogSelectOption as SelectOption } from "./ui/dialog-select"
 import { ToastProvider, useToast } from "./ui/toast"
+import { Spinner } from "@tui/component/spinner"
 import { ExitProvider, useExit } from "./context/exit"
 import { Session as SessionApi } from "@/session"
 import { TuiEvent } from "./event"
@@ -1058,6 +1060,7 @@ function App() {
   })
 
   const plugin = createMemo(() => {
+    if (!ready()) return
     if (route.data.type !== "plugin") return
     const render = routeView(route.data.id)
     if (!render) return <PluginRouteMissing id={route.data.id} onHome={() => route.navigate({ type: "home" })} />
@@ -1065,26 +1068,24 @@ function App() {
   })
 
   return (
-    <Show when={ready()}>
-      <box
-        width={dimensions().width}
-        height={dimensions().height}
-        backgroundColor={theme.background}
-        onMouseDown={(evt) => {
-          if (!Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT) return
-          if (evt.button !== MouseButton.RIGHT) return
+    <box
+      width={dimensions().width}
+      height={dimensions().height}
+      backgroundColor={theme.background}
+      onMouseDown={(evt) => {
+        if (!Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT) return
+        if (evt.button !== MouseButton.RIGHT) return
 
-          if (!Selection.copy(renderer, toast)) return
-          evt.preventDefault()
-          evt.stopPropagation()
-        }}
-        onMouseUp={
-          Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT ? undefined : () => Selection.copy(renderer, toast)
-        }
-      >
-        <Show when={Flag.OPENCODE_SHOW_TTFD}>
-          <TimeToFirstDraw />
-        </Show>
+        if (!Selection.copy(renderer, toast)) return
+        evt.preventDefault()
+        evt.stopPropagation()
+      }}
+      onMouseUp={Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT ? undefined : () => Selection.copy(renderer, toast)}
+    >
+      <Show when={Flag.OPENCODE_SHOW_TTFD}>
+        <TimeToFirstDraw />
+      </Show>
+      <Show when={ready()}>
         <Switch>
           <Match when={route.data.type === "home"}>
             <Home />
@@ -1093,8 +1094,69 @@ function App() {
             <Session />
           </Match>
         </Switch>
-        {plugin()}
-        <TuiPlugin.Slot name="app" />
+      </Show>
+      {plugin()}
+      <TuiPlugin.Slot name="app" />
+      <StartupLoading ready={ready} />
+    </box>
+  )
+}
+
+function StartupLoading(props: { ready: () => boolean }) {
+  const theme = useTheme().theme
+  const [show, setShow] = createSignal(false)
+  const text = createMemo(() => (props.ready() ? "Finishing startup..." : "Loading plugins..."))
+  let wait: NodeJS.Timeout | undefined
+  let hold: NodeJS.Timeout | undefined
+  let stamp = 0
+
+  createEffect(() => {
+    if (props.ready()) {
+      if (wait) {
+        clearTimeout(wait)
+        wait = undefined
+      }
+      if (!show()) return
+      if (hold) return
+
+      const left = 3000 - (Date.now() - stamp)
+      if (left <= 0) {
+        setShow(false)
+        return
+      }
+
+      hold = setTimeout(() => {
+        hold = undefined
+        setShow(false)
+      }, left).unref()
+      return
+    }
+
+    if (hold) {
+      clearTimeout(hold)
+      hold = undefined
+    }
+    if (show()) return
+    if (wait) return
+
+    wait = setTimeout(() => {
+      wait = undefined
+      stamp = Date.now()
+      setShow(true)
+    }, 500).unref()
+  })
+
+  onCleanup(() => {
+    if (wait) clearTimeout(wait)
+    if (hold) clearTimeout(hold)
+  })
+
+  return (
+    <Show when={show()}>
+      <box position="absolute" zIndex={5000} left={0} right={0} bottom={1} justifyContent="center" alignItems="center">
+        <box backgroundColor={theme.backgroundPanel} paddingLeft={1} paddingRight={1}>
+          <Spinner color={theme.textMuted}>{text()}</Spinner>
+        </box>
       </box>
     </Show>
   )
