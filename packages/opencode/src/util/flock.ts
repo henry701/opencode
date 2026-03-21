@@ -6,25 +6,21 @@ import { Hash } from "@/util/hash"
 export namespace Flock {
   const root = path.join(Global.Path.state, "locks")
 
-  export type Tick = {
-    file: string
+  type WaitTick = {
+    lockfile: string
     attempt: number
     delay: number
     waited: number
   }
 
-  export type Wait = (input: Tick) => void | Promise<void>
+  type Wait = (input: WaitTick) => void | Promise<void>
 
   type Input<T> = {
-    file: string
+    key: string
     check: () => Promise<boolean>
     task: () => Promise<T>
     waitTick?: Wait
     signal?: AbortSignal
-  }
-
-  export function file(key: string) {
-    return path.join(root, Hash.fast(key) + ".lock")
   }
 
   function delay(attempt: number) {
@@ -36,7 +32,8 @@ export namespace Flock {
 
     if (!(await input.check())) return
 
-    const lock = await FileLock.tryAcquireWithTimeout(input.file, {
+    const lockfile = path.join(root, Hash.fast(input.key) + ".lock")
+    const lock = await FileLock.tryAcquireWithTimeout(lockfile, {
       tickTime: delay,
       waitTick: input.waitTick,
       signal: input.signal,

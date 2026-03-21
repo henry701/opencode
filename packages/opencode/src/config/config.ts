@@ -277,14 +277,20 @@ export namespace Config {
 
   export type InstallInput = {
     signal?: AbortSignal
-    waitTick?: (input: Flock.Tick & { dir: string }) => void | Promise<void>
+    waitTick?: (input: { dir: string; attempt: number; delay: number; waited: number }) => void | Promise<void>
   }
 
   export async function installDependencies(dir: string, input?: InstallInput) {
     await Flock.run({
-      file: Flock.file(`config-install:${Filesystem.resolve(dir)}`),
+      key: `config-install:${Filesystem.resolve(dir)}`,
       signal: input?.signal,
-      waitTick: (tick) => input?.waitTick?.({ ...tick, dir }),
+      waitTick: (tick) =>
+        input?.waitTick?.({
+          dir,
+          attempt: tick.attempt,
+          delay: tick.delay,
+          waited: tick.waited,
+        }),
       check: () => needsInstall(dir),
       task: async () => {
         const pkg = path.join(dir, "package.json")
