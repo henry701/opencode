@@ -1,4 +1,3 @@
-import { mkdir } from "fs/promises"
 import path from "path"
 import { FileLock } from "@opentui/core"
 import { Global } from "@/global"
@@ -37,54 +36,24 @@ export namespace Flock {
     return Math.min(50 * attempt, 250)
   }
 
-  async function sleep(ms: number, signal?: AbortSignal) {
-    abort(signal)
-    return new Promise<void>((resolve, reject) => {
-      const id = setTimeout(() => {
-        signal?.removeEventListener("abort", onAbort)
-        resolve()
-      }, ms)
-
-      function onAbort() {
-        clearTimeout(id)
-        reject(signal?.reason ?? new DOMException("Aborted", "AbortError"))
-      }
-
-      signal?.addEventListener("abort", onAbort, { once: true })
-    })
-  }
-
   export async function run<T>(input: Input<T>) {
+    abort(input.signal)
+
     if (!(await input.check())) return
 
-    await mkdir(path.dirname(input.file), { recursive: true })
+    const lock = await FileLock.tryAcquireWithTimeout(input.file, {
+      tickTime: delay,
+      waitTick: input.waitTick,
+      signal: input.signal,
+    })
+    if (!lock) return
 
-    let attempt = 0
-    let waited = 0
-
-    while (true) {
+    try {
       abort(input.signal)
-
-      const lock = FileLock.tryAcquire(input.file)
-      if (lock) {
-        try {
-          if (!(await input.check())) return
-          return await input.task()
-        } finally {
-          lock.close()
-        }
-      }
-
-      attempt += 1
-      const ms = delay(attempt)
-      waited += ms
-      await input.waitTick?.({
-        file: input.file,
-        attempt,
-        delay: ms,
-        waited,
-      })
-      await sleep(ms, input.signal)
+      if (!(await input.check())) return
+      return await input.task()
+    } finally {
+      lock.close()
     }
   }
 }
