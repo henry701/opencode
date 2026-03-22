@@ -135,14 +135,6 @@ test("continues loading tui plugins when a plugin is missing config metadata", a
   } satisfies CliRenderer
   const kv: Record<string, unknown> = {}
   const keybind = {
-    parse: (evt: { name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean; super?: boolean }) => ({
-      name: evt.name ?? "",
-      ctrl: evt.ctrl ?? false,
-      meta: evt.meta ?? false,
-      shift: evt.shift ?? false,
-      super: evt.super,
-      leader: false,
-    }),
     match: () => false,
     print: (key: string) => key,
   }

@@ -176,7 +176,6 @@ export type TuiApi<Node = unknown> = {
     dialog: TuiDialogStack<Node>
   }
   keybind: {
-    parse: (evt: ParsedKey) => TuiKeybind
     match: (key: string, evt: ParsedKey) => boolean
     print: (key: string) => string
     create: (defaults: TuiKeybindMap, overrides?: Record<string, unknown>) => TuiKeybindSet

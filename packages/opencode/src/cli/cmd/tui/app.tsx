@@ -354,9 +354,6 @@ function createTuiApi(input: ApiInput): TuiApi<JSX.Element> {
       },
     },
     keybind: {
-      parse(evt: ParsedKey) {
-        return input.keybind.parse(evt)
-      },
       match(key, evt: ParsedKey) {
         return input.keybind.match(key, evt)
       },
