@@ -31,7 +31,7 @@ import { GlobalBus } from "@/bus/global"
 import { Event } from "../server/event"
 import { Glob } from "../util/glob"
 import { PackageRegistry } from "@/bun/registry"
-import { proxied } from "@/util/proxied"
+import { online, proxied } from "@/util/network"
 import { iife } from "@/util/iife"
 import { Account } from "@/account"
 import { isRecord } from "@/util/record"
@@ -382,7 +382,7 @@ export namespace Config {
 
     const targetVersion = Installation.isLocal() ? "latest" : Installation.VERSION
     if (targetVersion === "latest") {
-      if (!PackageRegistry.online()) return false
+      if (!online()) return false
       const stale = await PackageRegistry.isOutdated("@opencode-ai/plugin", depVersion, dir)
       if (!stale) return false
       log.info("Cached version is outdated, proceeding with install", {

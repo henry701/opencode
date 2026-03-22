@@ -1,18 +1,13 @@
 import semver from "semver"
 import { Log } from "../util/log"
 import { Process } from "../util/process"
+import { online } from "@/util/network"
 
 export namespace PackageRegistry {
   const log = Log.create({ service: "bun" })
 
   function which() {
     return process.execPath
-  }
-
-  export function online() {
-    const nav = globalThis.navigator
-    if (!nav || typeof nav.onLine !== "boolean") return true
-    return nav.onLine
   }
 
   export async function info(pkg: string, field: string, cwd?: string): Promise<string | null> {

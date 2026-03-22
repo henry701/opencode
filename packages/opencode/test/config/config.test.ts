@@ -10,8 +10,8 @@ import { pathToFileURL } from "url"
 import { Global } from "../../src/global"
 import { ProjectID } from "../../src/project/schema"
 import { Filesystem } from "../../src/util/filesystem"
+import * as Network from "../../src/util/network"
 import { BunProc } from "../../src/bun"
-import { PackageRegistry } from "../../src/bun/registry"
 
 // Get managed config directory from environment (set in preload.ts)
 const managedConfigDir = process.env.OPENCODE_TEST_MANAGED_CONFIG_DIR!
@@ -747,7 +747,7 @@ test("installs dependencies in writable OPENCODE_CONFIG_DIR", async () => {
 
   const prev = process.env.OPENCODE_CONFIG_DIR
   process.env.OPENCODE_CONFIG_DIR = tmp.extra
-  const online = spyOn(PackageRegistry, "online").mockReturnValue(false)
+  const online = spyOn(Network, "online").mockReturnValue(false)
   const run = spyOn(BunProc, "run").mockImplementation(async (_cmd, opts) => {
     const mod = path.join(opts?.cwd ?? "", "node_modules", "@opencode-ai", "plugin")
     await fs.mkdir(mod, { recursive: true })
@@ -796,7 +796,7 @@ test("dedupes concurrent config dependency installs for the same dir", async () 
   const gate = new Promise<void>((resolve) => {
     done = resolve
   })
-  const online = spyOn(PackageRegistry, "online").mockReturnValue(false)
+  const online = spyOn(Network, "online").mockReturnValue(false)
   const run = spyOn(BunProc, "run").mockImplementation(async (_cmd, opts) => {
     calls += 1
     start()
