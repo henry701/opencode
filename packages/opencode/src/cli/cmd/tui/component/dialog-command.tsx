@@ -106,6 +106,8 @@ function init() {
       const owner = getOwner() ?? root
       if (!owner) return
 
+      // TUI plugins now register commands via an async store that runs outside an active reactive scope.
+      // runWithOwner attaches createMemo/onCleanup to this owner so plugin registrations stay reactive and dispose correctly.
       runWithOwner(owner, () => {
         const list = createMemo(cb)
         setRegistrations((arr) => [list, ...arr])
