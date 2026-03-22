@@ -131,12 +131,10 @@ function makeInstallFn(meta: TuiConfig.PluginMeta, root: string, spec: string): 
     const theme = themeName(src)
     if (hasTheme(theme)) return
 
-    const text = await Bun.file(src)
-      .text()
-      .catch((error) => {
-        log.warn("failed to read tui plugin theme", { path: spec, theme: src, error })
-        return
-      })
+    const text = await Filesystem.readText(src).catch((error) => {
+      log.warn("failed to read tui plugin theme", { path: spec, theme: src, error })
+      return
+    })
     if (text === undefined) return
 
     const fail = Symbol()
