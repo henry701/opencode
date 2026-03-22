@@ -149,13 +149,13 @@ export namespace Flock {
 
       const breakerPath = lockDir + ".breaker"
       try {
-        await writeFile(breakerPath, token, { flag: "wx" })
+        await mkdir(breakerPath, { mode: 0o700 })
       } catch (claimErr) {
         const errCode = code(claimErr)
         if (errCode === "EEXIST") {
           const breaker = await stats(breakerPath)
           if (breaker && nowMs() - breaker.mtimeMs > opts.staleMs) {
-            await rm(breakerPath, { force: true }).catch(() => undefined)
+            await rm(breakerPath, { recursive: true, force: true }).catch(() => undefined)
           }
           return { acquired: false }
         }
@@ -184,7 +184,7 @@ export namespace Flock {
           throw retryErr
         }
       } finally {
-        await rm(breakerPath, { force: true }).catch(() => undefined)
+        await rm(breakerPath, { recursive: true, force: true }).catch(() => undefined)
       }
     }
 
@@ -222,8 +222,18 @@ export namespace Flock {
         timer = undefined
       }
 
-      const raw = await readFile(metaPath, "utf8")
-      const current = JSON.parse(raw) as { token?: string }
+      const current = await readFile(metaPath, "utf8")
+        .then((raw) => JSON.parse(raw) as { token?: string })
+        .catch((err) => {
+          const errCode = code(err)
+          if (errCode === "ENOENT" || errCode === "ENOTDIR") {
+            throw new Error("Refusing to release: lock is compromised (metadata missing).")
+          }
+          if (err instanceof SyntaxError) {
+            throw new Error("Refusing to release: lock is compromised (metadata invalid).")
+          }
+          throw err
+        })
       if (current.token !== token) {
         throw new Error("Refusing to release: lock token mismatch (not the owner).")
       }

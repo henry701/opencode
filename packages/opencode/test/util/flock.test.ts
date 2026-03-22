@@ -198,7 +198,7 @@ describe("util.flock", () => {
     const breaker = lockDir + ".breaker"
 
     await fs.mkdir(lockDir, { recursive: true })
-    await fs.writeFile(breaker, "dead")
+    await fs.mkdir(breaker)
 
     const old = new Date(Date.now() - 2_000)
     await fs.utimes(lockDir, old, old)
@@ -218,6 +218,41 @@ describe("util.flock", () => {
 
     expect(hit).toBe(true)
     expect(await exists(breaker)).toBe(false)
+  })
+
+  test("fails clearly if lock dir is removed while held", async () => {
+    await using tmp = await tmpdir()
+    const dir = path.join(tmp.path, "locks")
+    const key = "flock:compromised:" + Math.random().toString(36).slice(2)
+    const lockDir = lock(dir, key)
+
+    const err = await Flock.run({
+      key,
+      dir,
+      staleMs: 1_000,
+      timeoutMs: 3_000,
+      check: async () => true,
+      task: async () => {
+        await fs.rm(lockDir, { recursive: true, force: true })
+      },
+    }).catch((err) => err)
+
+    expect(err).toBeInstanceOf(Error)
+    if (!(err instanceof Error)) throw err
+    expect(err.message).toContain("compromised")
+
+    let hit = false
+    await Flock.run({
+      key,
+      dir,
+      staleMs: 100,
+      timeoutMs: 3_000,
+      check: async () => true,
+      task: async () => {
+        hit = true
+      },
+    })
+    expect(hit).toBe(true)
   })
 
   test("writes owner metadata while lock is held", async () => {
