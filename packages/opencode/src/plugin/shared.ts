@@ -1,5 +1,12 @@
 import { BunProc } from "@/bun"
 
+// Old npm package names for plugins that are now built-in
+export const DEPRECATED_PLUGIN_PACKAGES = ["opencode-openai-codex-auth", "opencode-copilot-auth"]
+
+export function isDeprecatedPlugin(spec: string) {
+  return DEPRECATED_PLUGIN_PACKAGES.some((pkg) => spec.includes(pkg))
+}
+
 export function parsePluginSpecifier(spec: string) {
   const lastAt = spec.lastIndexOf("@")
   const pkg = lastAt > 0 ? spec.substring(0, lastAt) : spec

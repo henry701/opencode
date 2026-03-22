@@ -19,7 +19,7 @@ import { TuiConfig } from "@/config/tui"
 import { Log } from "@/util/log"
 import { isRecord } from "@/util/record"
 import { Instance } from "@/project/instance"
-import { resolvePluginTarget, uniqueModuleEntries } from "@/plugin/shared"
+import { isDeprecatedPlugin, resolvePluginTarget, uniqueModuleEntries } from "@/plugin/shared"
 import { PluginMeta } from "@/plugin/meta"
 import { addTheme, hasTheme } from "./context/theme"
 import { Global } from "@/global"
@@ -171,6 +171,7 @@ function waitDeps(state: Deps) {
 
 async function prepPlugin(config: TuiConfig.Info, item: Config.PluginSpec, retry = false): Promise<Loaded | undefined> {
   const spec = Config.pluginSpecifier(item)
+  if (isDeprecatedPlugin(spec)) return
   log.info("loading tui plugin", { path: spec, retry })
   const target = await resolvePluginTarget(spec).catch((error) => {
     log.error("failed to resolve tui plugin", { path: spec, retry, error })

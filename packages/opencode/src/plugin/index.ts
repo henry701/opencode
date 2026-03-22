@@ -13,7 +13,7 @@ import { gitlabAuthPlugin as GitlabAuthPlugin } from "opencode-gitlab-auth"
 import { Effect, Layer, ServiceMap } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { makeRunPromise } from "@/effect/run-service"
-import { parsePluginSpecifier, resolvePluginTarget, uniqueModuleEntries } from "./shared"
+import { isDeprecatedPlugin, parsePluginSpecifier, resolvePluginTarget, uniqueModuleEntries } from "./shared"
 
 export namespace Plugin {
   const log = Log.create({ service: "plugin" })
@@ -49,13 +49,8 @@ export namespace Plugin {
 
   export class Service extends ServiceMap.Service<Service, Interface>()("@opencode/Plugin") {}
 
-  const BUILTIN = ["opencode-anthropic-auth@0.0.13"]
-
   // Built-in plugins that are directly imported (not installed from npm)
   const INTERNAL_PLUGINS: PluginInstance[] = [CodexAuthPlugin, CopilotAuthPlugin, GitlabAuthPlugin]
-
-  // Old npm package names for plugins that are now built-in — skip if users still have them in config
-  const DEPRECATED_PLUGIN_PACKAGES = ["opencode-openai-codex-auth", "opencode-copilot-auth"]
 
   function isServerPlugin(value: unknown): value is PluginInstance {
     return typeof value === "function"
@@ -87,7 +82,7 @@ export namespace Plugin {
 
   async function prepPlugin(item: Config.PluginSpec): Promise<Loaded | undefined> {
     const spec = Config.pluginSpecifier(item)
-    if (DEPRECATED_PLUGIN_PACKAGES.some((pkg) => spec.includes(pkg))) return
+    if (isDeprecatedPlugin(spec)) return
     log.info("loading plugin", { path: spec })
     const target = await resolvePlugin(spec)
     if (!target) return
@@ -162,9 +157,6 @@ export namespace Plugin {
 
             let plugins = cfg.plugin ?? []
             if (plugins.length) await Config.waitForDependencies()
-            if (!Flag.OPENCODE_DISABLE_DEFAULT_PLUGINS) {
-              plugins = [...BUILTIN, ...plugins]
-            }
 
             const loaded = await Promise.all(plugins.map((item) => prepPlugin(item)))
             for (const load of loaded) {
