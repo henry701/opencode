@@ -6,7 +6,7 @@ import type { ParsedKey, Renderable } from "@opentui/core"
 import { createStore } from "solid-js/store"
 import { useKeyboard, useRenderer } from "@opentui/solid"
 import { createSimpleContext } from "./helper"
-import { createPluginKeybind, type PluginKeybindMap } from "./keybind-plugin"
+import { createPluginKeybind, type PluginKeybindMap } from "./plugin-keybinds"
 import { useTuiConfig } from "./tui-config"
 
 export type KeybindKey = keyof NonNullable<TuiConfig.Info["keybinds"]> & string

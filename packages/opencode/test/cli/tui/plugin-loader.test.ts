@@ -9,7 +9,7 @@ import { Log } from "../../../src/util/log"
 import { Global } from "../../../src/global"
 import { TuiConfig } from "../../../src/config/tui"
 import { Config } from "../../../src/config/config"
-import { createPluginKeybind } from "../../../src/cli/cmd/tui/context/keybind-plugin"
+import { createPluginKeybind } from "../../../src/cli/cmd/tui/context/plugin-keybinds"
 
 mock.module("@opentui/solid/preload", () => ({}))
 mock.module("@opentui/solid", () => ({

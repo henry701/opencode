@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { ParsedKey } from "@opentui/core"
-import { createPluginKeybind } from "../../../src/cli/cmd/tui/context/keybind-plugin"
+import { createPluginKeybind } from "../../../src/cli/cmd/tui/context/plugin-keybinds"
 
 describe("createPluginKeybind", () => {
   const defaults = {

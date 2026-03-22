@@ -7,7 +7,7 @@ import type { CliRenderer } from "@opentui/core"
 import { tmpdir } from "../../fixture/fixture"
 import { Log } from "../../../src/util/log"
 import { TuiConfig } from "../../../src/config/tui"
-import { createPluginKeybind } from "../../../src/cli/cmd/tui/context/keybind-plugin"
+import { createPluginKeybind } from "../../../src/cli/cmd/tui/context/plugin-keybinds"
 
 mock.module("@opentui/solid/preload", () => ({}))
 mock.module("@opentui/solid", () => ({
