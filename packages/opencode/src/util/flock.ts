@@ -27,6 +27,18 @@ export namespace Flock {
     task: () => Promise<T>
     waitTick?: Wait
     signal?: AbortSignal
+    dir?: string
+    staleMs?: number
+    timeoutMs?: number
+    baseDelayMs?: number
+    maxDelayMs?: number
+  }
+
+  type Opts = {
+    staleMs: number
+    timeoutMs: number
+    baseDelayMs: number
+    maxDelayMs: number
   }
 
   type Owned = {
@@ -45,6 +57,15 @@ export namespace Flock {
 
   function nowMs() {
     return Date.now()
+  }
+
+  function opts(input: Input<unknown>): Opts {
+    return {
+      staleMs: input.staleMs ?? staleMs,
+      timeoutMs: input.timeoutMs ?? timeoutMs,
+      baseDelayMs: input.baseDelayMs ?? baseDelayMs,
+      maxDelayMs: input.maxDelayMs ?? maxDelayMs,
+    }
   }
 
   function sleep(ms: number, signal?: AbortSignal) {
@@ -80,34 +101,90 @@ export namespace Flock {
     return Math.max(0, ms + d)
   }
 
-  async function tryAcquireLockDir(lockDir: string): Promise<Owned | { acquired: false }> {
+  async function stats(file: string) {
+    try {
+      return await stat(file)
+    } catch (err) {
+      const errCode = code(err)
+      if (errCode === "ENOENT" || errCode === "ENOTDIR") return
+      throw err
+    }
+  }
+
+  async function stale(lockDir: string, heartbeatPath: string, metaPath: string, staleMs: number) {
+    const now = nowMs()
+    const heartbeat = await stats(heartbeatPath)
+    if (heartbeat) {
+      return now - heartbeat.mtimeMs > staleMs
+    }
+
+    const meta = await stats(metaPath)
+    if (meta) {
+      return now - meta.mtimeMs > staleMs
+    }
+
+    const dir = await stats(lockDir)
+    if (!dir) {
+      return false
+    }
+
+    return now - dir.mtimeMs > staleMs
+  }
+
+  async function tryAcquireLockDir(lockDir: string, opts: Opts): Promise<Owned | { acquired: false }> {
     const token = randomUUID?.() ?? randomBytes(16).toString("hex")
     const metaPath = path.join(lockDir, "meta.json")
     const heartbeatPath = path.join(lockDir, "heartbeat")
 
     try {
-      await mkdir(lockDir)
+      await mkdir(lockDir, { mode: 0o700 })
     } catch (err) {
       if (code(err) !== "EEXIST") {
         throw err
       }
 
-      const stale = await stat(heartbeatPath)
-        .then((x) => nowMs() - x.mtimeMs > staleMs)
-        .catch(() => false)
-      if (!stale) {
+      if (!(await stale(lockDir, heartbeatPath, metaPath, opts.staleMs))) {
         return { acquired: false }
       }
 
-      await rm(lockDir, { recursive: true, force: true }).catch(() => undefined)
-
+      const breakerPath = lockDir + ".breaker"
       try {
-        await mkdir(lockDir)
-      } catch (retryErr) {
-        if (code(retryErr) === "EEXIST") {
+        await writeFile(breakerPath, token, { flag: "wx" })
+      } catch (claimErr) {
+        const errCode = code(claimErr)
+        if (errCode === "EEXIST") {
+          const breaker = await stats(breakerPath)
+          if (breaker && nowMs() - breaker.mtimeMs > opts.staleMs) {
+            await rm(breakerPath, { force: true }).catch(() => undefined)
+          }
           return { acquired: false }
         }
-        throw retryErr
+
+        if (errCode === "ENOENT" || errCode === "ENOTDIR") {
+          return { acquired: false }
+        }
+
+        throw claimErr
+      }
+
+      try {
+        if (!(await stale(lockDir, heartbeatPath, metaPath, opts.staleMs))) {
+          return { acquired: false }
+        }
+
+        await rm(lockDir, { recursive: true, force: true })
+
+        try {
+          await mkdir(lockDir, { mode: 0o700 })
+        } catch (retryErr) {
+          const errCode = code(retryErr)
+          if (errCode === "EEXIST" || errCode === "ENOTEMPTY") {
+            return { acquired: false }
+          }
+          throw retryErr
+        }
+      } finally {
+        await rm(breakerPath, { force: true }).catch(() => undefined)
       }
     }
 
@@ -118,16 +195,19 @@ export namespace Flock {
       createdAt: new Date().toISOString(),
     }
 
+    await writeFile(heartbeatPath, "", { flag: "wx" }).catch(async () => {
+      await rm(lockDir, { recursive: true, force: true })
+      throw new Error("Lock acquired but heartbeat already existed (possible compromise).")
+    })
+
     await writeFile(metaPath, JSON.stringify(meta, null, 2), { flag: "wx" }).catch(async () => {
       await rm(lockDir, { recursive: true, force: true })
       throw new Error("Lock acquired but meta.json already existed (possible compromise).")
     })
 
-    await writeFile(heartbeatPath, "", { flag: "w" })
-
     let timer: ReturnType<typeof setInterval> | undefined
 
-    const startHeartbeat = (intervalMs = Math.max(1000, Math.floor(staleMs / 3))) => {
+    const startHeartbeat = (intervalMs = Math.max(100, Math.floor(opts.staleMs / 3))) => {
       if (timer) return
       timer = setInterval(() => {
         const t = new Date()
@@ -143,7 +223,7 @@ export namespace Flock {
       }
 
       const raw = await readFile(metaPath, "utf8")
-      const current = JSON.parse(raw)
+      const current = JSON.parse(raw) as { token?: string }
       if (current.token !== token) {
         throw new Error("Refusing to release: lock token mismatch (not the owner).")
       }
@@ -158,16 +238,16 @@ export namespace Flock {
     }
   }
 
-  async function acquireLockDir(lockDir: string, input: { waitTick?: Wait; signal?: AbortSignal }) {
-    const deadline = nowMs() + timeoutMs
+  async function acquireLockDir(lockDir: string, input: { waitTick?: Wait; signal?: AbortSignal }, opts: Opts) {
+    const deadline = nowMs() + opts.timeoutMs
     let attempt = 0
     let waited = 0
-    let delay = baseDelayMs
+    let delay = opts.baseDelayMs
 
     while (true) {
       input.signal?.throwIfAborted()
 
-      const res = await tryAcquireLockDir(lockDir)
+      const res = await tryAcquireLockDir(lockDir, opts)
       if (res.acquired) {
         return res
       }
@@ -186,7 +266,7 @@ export namespace Flock {
       })
       await sleep(ms, input.signal)
       waited += ms
-      delay = Math.min(maxDelayMs, Math.floor(delay * 1.7))
+      delay = Math.min(opts.maxDelayMs, Math.floor(delay * 1.7))
     }
   }
 
@@ -195,12 +275,19 @@ export namespace Flock {
 
     if (!(await input.check())) return
 
-    await mkdir(root, { recursive: true })
-    const lockfile = path.join(root, Hash.fast(input.key) + ".lock")
-    const lock = await acquireLockDir(lockfile, {
-      waitTick: input.waitTick,
-      signal: input.signal,
-    })
+    const cfg = opts(input)
+    const dir = input.dir ?? root
+
+    await mkdir(dir, { recursive: true })
+    const lockfile = path.join(dir, Hash.fast(input.key) + ".lock")
+    const lock = await acquireLockDir(
+      lockfile,
+      {
+        waitTick: input.waitTick,
+        signal: input.signal,
+      },
+      cfg,
+    )
     lock.startHeartbeat()
 
     try {

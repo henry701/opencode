@@ -1,0 +1,322 @@
+import { describe, expect, test } from "bun:test"
+import fs from "fs/promises"
+import path from "path"
+import { Flock } from "../../src/util/flock"
+import { Hash } from "../../src/util/hash"
+import { Process } from "../../src/util/process"
+import { tmpdir } from "../fixture/fixture"
+
+const root = path.join(import.meta.dir, "../..")
+const worker = path.join(import.meta.dir, "../fixture/flock-worker.ts")
+
+type Msg = {
+  key: string
+  dir: string
+  staleMs?: number
+  timeoutMs?: number
+  baseDelayMs?: number
+  maxDelayMs?: number
+  holdMs?: number
+  ready?: string
+  active?: string
+  done?: string
+}
+
+function lock(dir: string, key: string) {
+  return path.join(dir, Hash.fast(key) + ".lock")
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms)
+  })
+}
+
+async function exists(file: string) {
+  return fs
+    .stat(file)
+    .then(() => true)
+    .catch(() => false)
+}
+
+async function wait(file: string, timeout = 3_000) {
+  const stop = Date.now() + timeout
+  while (Date.now() < stop) {
+    if (await exists(file)) return
+    await sleep(20)
+  }
+
+  throw new Error(`Timed out waiting for file: ${file}`)
+}
+
+function run(msg: Msg) {
+  return Process.run([process.execPath, worker, JSON.stringify(msg)], {
+    cwd: root,
+    nothrow: true,
+  })
+}
+
+function spawn(msg: Msg) {
+  return Process.spawn([process.execPath, worker, JSON.stringify(msg)], {
+    cwd: root,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+}
+
+describe("util.flock", () => {
+  test("enforces mutual exclusion under process contention", async () => {
+    await using tmp = await tmpdir()
+    const dir = path.join(tmp.path, "locks")
+    const done = path.join(tmp.path, "done.log")
+    const active = path.join(tmp.path, "active")
+    const key = "flock:stress:" + Math.random().toString(36).slice(2)
+    const n = 24
+
+    const out = await Promise.all(
+      Array.from({ length: n }, () =>
+        run({
+          key,
+          dir,
+          done,
+          active,
+          holdMs: 30,
+          staleMs: 1_000,
+          timeoutMs: 15_000,
+        }),
+      ),
+    )
+
+    expect(out.map((x) => x.code)).toEqual(Array.from({ length: n }, () => 0))
+    expect(out.map((x) => x.stderr.toString()).filter(Boolean)).toEqual([])
+
+    const lines = (await fs.readFile(done, "utf8"))
+      .split("\n")
+      .map((x) => x.trim())
+      .filter(Boolean)
+    expect(lines.length).toBe(n)
+  }, 20_000)
+
+  test("times out while waiting when lock is still healthy", async () => {
+    await using tmp = await tmpdir()
+    const dir = path.join(tmp.path, "locks")
+    const key = "flock:timeout:" + Math.random().toString(36).slice(2)
+    const ready = path.join(tmp.path, "ready")
+    const proc = spawn({
+      key,
+      dir,
+      ready,
+      holdMs: 20_000,
+      staleMs: 10_000,
+      timeoutMs: 30_000,
+    })
+
+    try {
+      await wait(ready, 5_000)
+      const err = await Flock.run({
+        key,
+        dir,
+        staleMs: 10_000,
+        timeoutMs: 300,
+        check: async () => true,
+        task: async () => {},
+      }).catch((err) => err)
+
+      expect(err).toBeInstanceOf(Error)
+      if (!(err instanceof Error)) throw err
+      expect(err.message).toContain("Timed out waiting for lock")
+    } finally {
+      await Process.stop(proc).catch(() => undefined)
+      await proc.exited.catch(() => undefined)
+    }
+  }, 15_000)
+
+  test("recovers after a crashed lock owner", async () => {
+    await using tmp = await tmpdir()
+    const dir = path.join(tmp.path, "locks")
+    const key = "flock:crash:" + Math.random().toString(36).slice(2)
+    const ready = path.join(tmp.path, "ready")
+    const proc = spawn({
+      key,
+      dir,
+      ready,
+      holdMs: 20_000,
+      staleMs: 150,
+      timeoutMs: 30_000,
+    })
+
+    await wait(ready, 5_000)
+    await Process.stop(proc)
+    await proc.exited.catch(() => undefined)
+
+    let hit = false
+    await Flock.run({
+      key,
+      dir,
+      staleMs: 150,
+      timeoutMs: 5_000,
+      check: async () => true,
+      task: async () => {
+        hit = true
+      },
+    })
+
+    expect(hit).toBe(true)
+  }, 20_000)
+
+  test("breaks stale lock dirs when heartbeat is missing", async () => {
+    await using tmp = await tmpdir()
+    const dir = path.join(tmp.path, "locks")
+    const key = "flock:missing-heartbeat:" + Math.random().toString(36).slice(2)
+    const lockDir = lock(dir, key)
+
+    await fs.mkdir(lockDir, { recursive: true })
+    const old = new Date(Date.now() - 2_000)
+    await fs.utimes(lockDir, old, old)
+
+    let hit = false
+    await Flock.run({
+      key,
+      dir,
+      staleMs: 100,
+      timeoutMs: 3_000,
+      check: async () => true,
+      task: async () => {
+        hit = true
+      },
+    })
+
+    expect(hit).toBe(true)
+  })
+
+  test("recovers when a stale breaker claim was left behind", async () => {
+    await using tmp = await tmpdir()
+    const dir = path.join(tmp.path, "locks")
+    const key = "flock:stale-breaker:" + Math.random().toString(36).slice(2)
+    const lockDir = lock(dir, key)
+    const breaker = lockDir + ".breaker"
+
+    await fs.mkdir(lockDir, { recursive: true })
+    await fs.writeFile(breaker, "dead")
+
+    const old = new Date(Date.now() - 2_000)
+    await fs.utimes(lockDir, old, old)
+    await fs.utimes(breaker, old, old)
+
+    let hit = false
+    await Flock.run({
+      key,
+      dir,
+      staleMs: 100,
+      timeoutMs: 3_000,
+      check: async () => true,
+      task: async () => {
+        hit = true
+      },
+    })
+
+    expect(hit).toBe(true)
+    expect(await exists(breaker)).toBe(false)
+  })
+
+  test("writes owner metadata while lock is held", async () => {
+    await using tmp = await tmpdir()
+    const dir = path.join(tmp.path, "locks")
+    const key = "flock:meta:" + Math.random().toString(36).slice(2)
+    const file = path.join(lock(dir, key), "meta.json")
+
+    await Flock.run({
+      key,
+      dir,
+      staleMs: 1_000,
+      timeoutMs: 3_000,
+      check: async () => true,
+      task: async () => {
+        const raw = await fs.readFile(file, "utf8")
+        const json = JSON.parse(raw) as {
+          token?: unknown
+          pid?: unknown
+          hostname?: unknown
+          createdAt?: unknown
+        }
+
+        expect(typeof json.token).toBe("string")
+        expect(typeof json.pid).toBe("number")
+        expect(typeof json.hostname).toBe("string")
+        expect(typeof json.createdAt).toBe("string")
+      },
+    })
+  })
+
+  test("refuses token mismatch release and recovers from stale", async () => {
+    await using tmp = await tmpdir()
+    const dir = path.join(tmp.path, "locks")
+    const key = "flock:token:" + Math.random().toString(36).slice(2)
+    const lockDir = lock(dir, key)
+    const meta = path.join(lockDir, "meta.json")
+
+    const err = await Flock.run({
+      key,
+      dir,
+      staleMs: 150,
+      timeoutMs: 3_000,
+      check: async () => true,
+      task: async () => {
+        const raw = await fs.readFile(meta, "utf8")
+        const json = JSON.parse(raw) as { token?: string }
+        json.token = "tampered"
+        await fs.writeFile(meta, JSON.stringify(json, null, 2))
+      },
+    }).catch((err) => err)
+
+    expect(err).toBeInstanceOf(Error)
+    if (!(err instanceof Error)) throw err
+    expect(err.message).toContain("token mismatch")
+    expect(await exists(lockDir)).toBe(true)
+
+    await sleep(220)
+
+    let hit = false
+    await Flock.run({
+      key,
+      dir,
+      staleMs: 150,
+      timeoutMs: 3_000,
+      check: async () => true,
+      task: async () => {
+        hit = true
+      },
+    })
+    expect(hit).toBe(true)
+  })
+
+  test("fails clearly on unwritable lock roots", async () => {
+    if (process.platform === "win32") return
+
+    await using tmp = await tmpdir()
+    const dir = path.join(tmp.path, "locks")
+    const key = "flock:perm:" + Math.random().toString(36).slice(2)
+
+    await fs.mkdir(dir, { recursive: true })
+    await fs.chmod(dir, 0o500)
+
+    try {
+      const err = await Flock.run({
+        key,
+        dir,
+        staleMs: 100,
+        timeoutMs: 500,
+        check: async () => true,
+        task: async () => {},
+      }).catch((err) => err)
+
+      expect(err).toBeInstanceOf(Error)
+      if (!(err instanceof Error)) throw err
+      const text = err.message
+      expect(text.includes("EACCES") || text.includes("EPERM")).toBe(true)
+    } finally {
+      await fs.chmod(dir, 0o700)
+    }
+  })
+})
