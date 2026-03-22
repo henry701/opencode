@@ -158,11 +158,11 @@ export namespace Config {
         }
       }
 
-      deps.push(
-        iife(async () => {
-          await installDependencies(dir)
-        }),
-      )
+      const dep = iife(async () => {
+        await installDependencies(dir)
+      })
+      void dep.catch(() => undefined)
+      deps.push(dep)
 
       result.command = mergeDeep(result.command ?? {}, await loadCommand(dir))
       result.agent = mergeDeep(result.agent, await loadAgent(dir))
