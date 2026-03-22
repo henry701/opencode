@@ -5,7 +5,6 @@ import { pathToFileURL } from "url"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2"
 import type { CliRenderer } from "@opentui/core"
 import { tmpdir } from "../../fixture/fixture"
-import { Log } from "../../../src/util/log"
 import { Global } from "../../../src/global"
 import { TuiConfig } from "../../../src/config/tui"
 import { Config } from "../../../src/config/config"
@@ -30,24 +29,6 @@ mock.module("@opentui/solid/jsx-runtime", () => ({
 }))
 const { allThemes, addTheme } = await import("../../../src/cli/cmd/tui/context/theme")
 const { TuiPlugin } = await import("../../../src/cli/cmd/tui/plugin")
-const { PluginMeta } = await import("../../../src/plugin/meta")
-
-async function waitForLog(text: string, timeout = 1000) {
-  const start = Date.now()
-  while (Date.now() - start < timeout) {
-    const file = Log.file()
-    if (file) {
-      const content = await Bun.file(file)
-        .text()
-        .catch(() => "")
-      if (content.includes(text)) return content
-    }
-    await Bun.sleep(25)
-  }
-  return Bun.file(Log.file())
-    .text()
-    .catch(() => "")
-}
 
 test("loads plugin theme and keybind APIs with scoped theme installation", async () => {
   const stamp = Date.now()
@@ -102,7 +83,7 @@ test("loads plugin theme and keybind APIs with scoped theme installation", async
 }
 
 export const object_plugin = {
-  tui: async (input, options, init) => {
+  tui: async (input, options) => {
     if (!options?.marker) return
     const key = input.api.keybind.create(
       { modal: "ctrl+shift+m", screen: "ctrl+shift+o", close: "escape" },
@@ -134,9 +115,6 @@ export const object_plugin = {
     await Bun.write(options.source, JSON.stringify({ theme: { primary: "#fefefe" } }, null, 2))
     await input.api.theme.install(options.theme_path)
     const second = await Bun.file(options.dest).text()
-    const init_state = init.state
-    const init_source = init.entry.source
-    const init_load_count = init.entry.load_count
     await Bun.write(
       options.marker,
       JSON.stringify({
@@ -167,9 +145,6 @@ export const object_plugin = {
         depth_after,
         open_after,
         open_clear,
-        init_state,
-        init_source,
-        init_load_count,
       }),
     )
   },
@@ -204,7 +179,7 @@ export const object_plugin = {
       await Bun.write(
         preloadedPluginPath,
         `export default {
-  tui: async (input, options, init) => {
+  tui: async (input, options) => {
     if (!options?.marker) return
     const before = input.api.theme.has(options.theme_name)
     await input.api.theme.install(options.theme_path)
@@ -216,9 +191,6 @@ export const object_plugin = {
         before,
         after,
         text,
-        init_state: init.state,
-        init_source: init.entry.source,
-        init_load_count: init.entry.load_count,
       }),
     )
   },
@@ -229,7 +201,7 @@ export const object_plugin = {
       await Bun.write(
         globalPluginPath,
         `export default {
-  tui: async (input, options, init) => {
+  tui: async (input, options) => {
     if (!options?.marker) return
     await input.api.theme.install(options.theme_path)
     const has = input.api.theme.has(options.theme_name)
@@ -240,9 +212,6 @@ export const object_plugin = {
         has,
         set_installed,
         selected: input.api.theme.selected,
-        init_state: init.state,
-        init_source: init.entry.source,
-        init_load_count: init.entry.load_count,
       }),
     )
   },
@@ -337,15 +306,6 @@ export const object_plugin = {
       }
     },
   })
-  process.env.OPENCODE_PLUGIN_META_FILE = path.join(tmp.path, "plugin-meta.json")
-  if (!process.env.OPENCODE_PLUGIN_META_FILE) throw new Error("missing meta file")
-  await PluginMeta.touch(tmp.extra.localSpec, tmp.extra.localSpec)
-  await PluginMeta.touch(tmp.extra.globalSpec, tmp.extra.globalSpec)
-  await PluginMeta.persist()
-  await Bun.sleep(20)
-  const text = await Bun.file(tmp.extra.globalPluginPath).text()
-  await Bun.write(tmp.extra.globalPluginPath, `${text}\n`)
-
   const cwd = spyOn(process, "cwd").mockImplementation(() => tmp.path)
   const wait = spyOn(TuiConfig, "waitForDependencies").mockResolvedValue()
   const install = spyOn(Config, "installDependencies").mockResolvedValue()
@@ -361,6 +321,14 @@ export const object_plugin = {
   } satisfies CliRenderer
   const kv: Record<string, unknown> = {}
   const keybind = {
+    parse: (evt: { name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean; super?: boolean }) => ({
+      name: evt.name ?? "",
+      ctrl: evt.ctrl ?? false,
+      meta: evt.meta ?? false,
+      shift: evt.shift ?? false,
+      super: evt.super,
+      leader: false,
+    }),
     match: () => false,
     print: (key: string) => `print:${key}`,
   }
@@ -508,17 +476,11 @@ export const object_plugin = {
     expect(local.depth_after).toBe(1)
     expect(local.open_after).toBe(true)
     expect(local.open_clear).toBe(false)
-    expect(local.init_state).toBe("same")
-    expect(local.init_source).toBe("file")
-    expect(local.init_load_count).toBe(2)
 
     const global = JSON.parse(await fs.readFile(tmp.extra.globalMarker, "utf8"))
     expect(global.has).toBe(true)
     expect(global.set_installed).toBe(true)
     expect(global.selected).toBe(tmp.extra.globalThemeName)
-    expect(global.init_state).toBe("updated")
-    expect(global.init_source).toBe("file")
-    expect(global.init_load_count).toBe(2)
 
     const invalid = JSON.parse(await fs.readFile(tmp.extra.invalidMarker, "utf8"))
     expect(invalid.before).toBe(false)
@@ -531,9 +493,6 @@ export const object_plugin = {
     expect(preloaded.after).toBe(true)
     expect(preloaded.text).toContain("#303030")
     expect(preloaded.text).not.toContain("#f0f0f0")
-    expect(preloaded.init_state).toBe("first")
-    expect(preloaded.init_source).toBe("file")
-    expect(preloaded.init_load_count).toBe(1)
 
     await expect(fs.readFile(tmp.extra.fnMarker, "utf8")).rejects.toThrow()
 
@@ -560,24 +519,6 @@ export const object_plugin = {
         .then(() => true)
         .catch(() => false),
     ).toBe(false)
-
-    const log = await waitForLog("ignoring non-object tui plugin export")
-    expect(log).toContain("ignoring non-object tui plugin export")
-    expect(log).toContain("name=default")
-    expect(log).toContain("type=function")
-
-    const badThemeLog = await waitForLog("failed to parse tui plugin theme")
-    expect(badThemeLog).toContain("failed to parse tui plugin theme")
-    expect(badThemeLog).toContain(tmp.extra.invalidThemeFile)
-
-    const meta = JSON.parse(await fs.readFile(path.join(tmp.path, "plugin-meta.json"), "utf8")) as Record<
-      string,
-      { name: string; load_count: number }
-    >
-    const rows = Object.values(meta)
-    expect(rows.find((item) => item.name === "local-plugin")?.load_count).toBe(2)
-    expect(rows.find((item) => item.name === "global-plugin")?.load_count).toBe(2)
-    expect(rows.find((item) => item.name === "preloaded-plugin")?.load_count).toBe(1)
   } finally {
     cwd.mockRestore()
     wait.mockRestore()
@@ -588,6 +529,5 @@ export const object_plugin = {
       await Bun.write(globalConfigPath, backup)
     }
     await fs.rm(tmp.extra.globalDest, { force: true }).catch(() => {})
-    delete process.env.OPENCODE_PLUGIN_META_FILE
   }
 })

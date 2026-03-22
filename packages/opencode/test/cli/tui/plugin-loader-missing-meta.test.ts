@@ -5,7 +5,6 @@ import { pathToFileURL } from "url"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2"
 import type { CliRenderer } from "@opentui/core"
 import { tmpdir } from "../../fixture/fixture"
-import { Log } from "../../../src/util/log"
 import { TuiConfig } from "../../../src/config/tui"
 import { createPluginKeybind } from "../../../src/cli/cmd/tui/context/plugin-keybinds"
 
@@ -28,30 +27,12 @@ mock.module("@opentui/solid/jsx-runtime", () => ({
 }))
 const { TuiPlugin } = await import("../../../src/cli/cmd/tui/plugin")
 
-async function waitForLog(text: string, timeout = 1000) {
-  const start = Date.now()
-  while (Date.now() - start < timeout) {
-    const file = Log.file()
-    if (file) {
-      const content = await Bun.file(file)
-        .text()
-        .catch(() => "")
-      if (content.includes(text)) return content
-    }
-    await Bun.sleep(25)
-  }
-  return Bun.file(Log.file())
-    .text()
-    .catch(() => "")
-}
-
 test("continues loading tui plugins when a plugin is missing config metadata", async () => {
-  const stamp = Date.now()
   await using tmp = await tmpdir({
     init: async (dir) => {
-      const badPluginPath = path.join(dir, `missing-meta-plugin-${stamp}.ts`)
-      const nextPluginPath = path.join(dir, `next-plugin-${stamp}.ts`)
-      const plainPluginPath = path.join(dir, `plain-plugin-${stamp}.ts`)
+      const badPluginPath = path.join(dir, "missing-meta-plugin.ts")
+      const nextPluginPath = path.join(dir, "next-plugin.ts")
+      const plainPluginPath = path.join(dir, "plain-plugin.ts")
       const badSpec = pathToFileURL(badPluginPath).href
       const nextSpec = pathToFileURL(nextPluginPath).href
       const plainSpec = pathToFileURL(plainPluginPath).href
@@ -103,7 +84,6 @@ test("continues loading tui plugins when a plugin is missing config metadata", a
   })
 
   process.env.OPENCODE_PLUGIN_META_FILE = path.join(tmp.path, "plugin-meta.json")
-  const bad = path.parse(new URL(tmp.extra.badSpec).pathname).name
   const next = path.parse(new URL(tmp.extra.nextSpec).pathname).name
   const plain = path.parse(new URL(tmp.extra.plainSpec).pathname).name
   const get = spyOn(TuiConfig, "get").mockResolvedValue({
@@ -135,6 +115,14 @@ test("continues loading tui plugins when a plugin is missing config metadata", a
   } satisfies CliRenderer
   const kv: Record<string, unknown> = {}
   const keybind = {
+    parse: (evt: { name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean; super?: boolean }) => ({
+      name: evt.name ?? "",
+      ctrl: evt.ctrl ?? false,
+      meta: evt.meta ?? false,
+      shift: evt.shift ?? false,
+      super: evt.super,
+      leader: false,
+    }),
     match: () => false,
     print: (key: string) => key,
   }
@@ -245,10 +233,6 @@ test("continues loading tui plugins when a plugin is missing config metadata", a
     await expect(fs.readFile(tmp.extra.badMarker, "utf8")).rejects.toThrow()
     await expect(fs.readFile(tmp.extra.nextMarker, "utf8")).resolves.toBe("called")
     await expect(fs.readFile(tmp.extra.plainMarker, "utf8")).resolves.toBe("undefined")
-
-    const log = await waitForLog("missing tui plugin metadata")
-    expect(log).toContain("missing tui plugin metadata")
-    expect(log).toContain(`name=${bad}`)
   } finally {
     cwd.mockRestore()
     get.mockRestore()

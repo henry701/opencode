@@ -34,13 +34,14 @@ describe("plugin.meta", () => {
     expect(two.state).toBe("same")
     expect(two.entry.load_count).toBe(2)
 
-    await Bun.sleep(20)
     await Bun.write(tmp.extra.file, "export default async () => ({ ok: true })\n")
+    const stamp = new Date(Date.now() + 10_000)
+    await fs.utimes(tmp.extra.file, stamp, stamp)
 
     const three = await PluginMeta.touch(spec, spec)
     expect(three.state).toBe("updated")
     expect(three.entry.load_count).toBe(3)
-    expect((three.entry.modified ?? 0) >= (one.entry.modified ?? 0)).toBe(true)
+    expect((three.entry.modified ?? 0) > (one.entry.modified ?? 0)).toBe(true)
 
     await expect(fs.readFile(file, "utf8")).rejects.toThrow()
     await PluginMeta.persist()

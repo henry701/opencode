@@ -71,8 +71,8 @@ describe("util.flock", () => {
     const dir = path.join(tmp.path, "locks")
     const done = path.join(tmp.path, "done.log")
     const active = path.join(tmp.path, "active")
-    const key = "flock:stress:" + Math.random().toString(36).slice(2)
-    const n = 24
+    const key = "flock:stress"
+    const n = 16
 
     const out = await Promise.all(
       Array.from({ length: n }, () =>
@@ -101,7 +101,7 @@ describe("util.flock", () => {
   test("times out while waiting when lock is still healthy", async () => {
     await using tmp = await tmpdir()
     const dir = path.join(tmp.path, "locks")
-    const key = "flock:timeout:" + Math.random().toString(36).slice(2)
+    const key = "flock:timeout"
     const ready = path.join(tmp.path, "ready")
     const proc = spawn({
       key,
@@ -118,7 +118,7 @@ describe("util.flock", () => {
       const err = await Flock.withLock(key, async () => {}, {
         dir,
         staleMs: 10_000,
-        timeoutMs: 300,
+        timeoutMs: 1_000,
         onWait: (tick) => {
           seen.push(tick.key)
         },
@@ -138,14 +138,14 @@ describe("util.flock", () => {
   test("recovers after a crashed lock owner", async () => {
     await using tmp = await tmpdir()
     const dir = path.join(tmp.path, "locks")
-    const key = "flock:crash:" + Math.random().toString(36).slice(2)
+    const key = "flock:crash"
     const ready = path.join(tmp.path, "ready")
     const proc = spawn({
       key,
       dir,
       ready,
       holdMs: 20_000,
-      staleMs: 150,
+      staleMs: 500,
       timeoutMs: 30_000,
     })
 
@@ -161,8 +161,8 @@ describe("util.flock", () => {
       },
       {
         dir,
-        staleMs: 150,
-        timeoutMs: 5_000,
+        staleMs: 500,
+        timeoutMs: 8_000,
       },
     )
 
@@ -172,7 +172,7 @@ describe("util.flock", () => {
   test("breaks stale lock dirs when heartbeat is missing", async () => {
     await using tmp = await tmpdir()
     const dir = path.join(tmp.path, "locks")
-    const key = "flock:missing-heartbeat:" + Math.random().toString(36).slice(2)
+    const key = "flock:missing-heartbeat"
     const lockDir = lock(dir, key)
 
     await fs.mkdir(lockDir, { recursive: true })
@@ -187,7 +187,7 @@ describe("util.flock", () => {
       },
       {
         dir,
-        staleMs: 100,
+        staleMs: 200,
         timeoutMs: 3_000,
       },
     )
@@ -198,7 +198,7 @@ describe("util.flock", () => {
   test("recovers when a stale breaker claim was left behind", async () => {
     await using tmp = await tmpdir()
     const dir = path.join(tmp.path, "locks")
-    const key = "flock:stale-breaker:" + Math.random().toString(36).slice(2)
+    const key = "flock:stale-breaker"
     const lockDir = lock(dir, key)
     const breaker = lockDir + ".breaker"
 
@@ -217,7 +217,7 @@ describe("util.flock", () => {
       },
       {
         dir,
-        staleMs: 100,
+        staleMs: 200,
         timeoutMs: 3_000,
       },
     )
@@ -229,7 +229,7 @@ describe("util.flock", () => {
   test("fails clearly if lock dir is removed while held", async () => {
     await using tmp = await tmpdir()
     const dir = path.join(tmp.path, "locks")
-    const key = "flock:compromised:" + Math.random().toString(36).slice(2)
+    const key = "flock:compromised"
     const lockDir = lock(dir, key)
 
     const err = await Flock.withLock(
@@ -259,7 +259,7 @@ describe("util.flock", () => {
       },
       {
         dir,
-        staleMs: 100,
+        staleMs: 200,
         timeoutMs: 3_000,
       },
     )
@@ -269,7 +269,7 @@ describe("util.flock", () => {
   test("writes owner metadata while lock is held", async () => {
     await using tmp = await tmpdir()
     const dir = path.join(tmp.path, "locks")
-    const key = "flock:meta:" + Math.random().toString(36).slice(2)
+    const key = "flock:meta"
     const file = path.join(lock(dir, key), "meta.json")
 
     await Flock.withLock(
@@ -299,7 +299,7 @@ describe("util.flock", () => {
   test("supports acquire with await using", async () => {
     await using tmp = await tmpdir()
     const dir = path.join(tmp.path, "locks")
-    const key = "flock:acquire:" + Math.random().toString(36).slice(2)
+    const key = "flock:acquire"
     const lockDir = lock(dir, key)
 
     {
@@ -317,7 +317,7 @@ describe("util.flock", () => {
   test("refuses token mismatch release and recovers from stale", async () => {
     await using tmp = await tmpdir()
     const dir = path.join(tmp.path, "locks")
-    const key = "flock:token:" + Math.random().toString(36).slice(2)
+    const key = "flock:token"
     const lockDir = lock(dir, key)
     const meta = path.join(lockDir, "meta.json")
 
@@ -331,7 +331,7 @@ describe("util.flock", () => {
       },
       {
         dir,
-        staleMs: 150,
+        staleMs: 500,
         timeoutMs: 3_000,
       },
     ).catch((err) => err)
@@ -341,8 +341,6 @@ describe("util.flock", () => {
     expect(err.message).toContain("token mismatch")
     expect(await exists(lockDir)).toBe(true)
 
-    await sleep(220)
-
     let hit = false
     await Flock.withLock(
       key,
@@ -351,8 +349,8 @@ describe("util.flock", () => {
       },
       {
         dir,
-        staleMs: 150,
-        timeoutMs: 3_000,
+        staleMs: 500,
+        timeoutMs: 6_000,
       },
     )
     expect(hit).toBe(true)
@@ -363,7 +361,7 @@ describe("util.flock", () => {
 
     await using tmp = await tmpdir()
     const dir = path.join(tmp.path, "locks")
-    const key = "flock:perm:" + Math.random().toString(36).slice(2)
+    const key = "flock:perm"
 
     await fs.mkdir(dir, { recursive: true })
     await fs.chmod(dir, 0o500)

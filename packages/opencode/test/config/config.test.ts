@@ -790,11 +790,15 @@ test("dedupes concurrent config dependency installs for the same dir", async () 
   let calls = 0
   let start = () => {}
   let done = () => {}
+  let blocked = () => {}
   const ready = new Promise<void>((resolve) => {
     start = resolve
   })
   const gate = new Promise<void>((resolve) => {
     done = resolve
+  })
+  const waiting = new Promise<void>((resolve) => {
+    blocked = resolve
   })
   const online = spyOn(Network, "online").mockReturnValue(false)
   const run = spyOn(BunProc, "run").mockImplementation(async (_cmd, opts) => {
@@ -820,9 +824,11 @@ test("dedupes concurrent config dependency installs for the same dir", async () 
     const second = Config.installDependencies(dir, {
       waitTick: (tick) => {
         ticks.push(tick.attempt)
+        blocked()
+        blocked = () => {}
       },
     })
-    await new Promise((resolve) => setTimeout(resolve, 60))
+    await waiting
     done()
     await Promise.all([first, second])
   } finally {
