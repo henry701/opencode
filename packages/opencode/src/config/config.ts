@@ -161,7 +161,9 @@ export namespace Config {
       const dep = iife(async () => {
         await installDependencies(dir)
       })
-      void dep.catch(() => undefined)
+      void dep.catch((err) => {
+        log.warn("background dependency install failed", { dir, error: err })
+      })
       deps.push(dep)
 
       result.command = mergeDeep(result.command ?? {}, await loadCommand(dir))
