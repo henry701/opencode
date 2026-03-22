@@ -7,10 +7,13 @@ import { Hash } from "@/util/hash"
 
 export namespace Flock {
   const root = path.join(Global.Path.state, "locks")
-  const staleMs = 60_000
-  const timeoutMs = 5 * 60_000
-  const baseDelayMs = 100
-  const maxDelayMs = 2_000
+  // Defaults for callers that do not provide timing options.
+  const defaultOpts = {
+    staleMs: 60_000,
+    timeoutMs: 5 * 60_000,
+    baseDelayMs: 100,
+    maxDelayMs: 2_000,
+  }
 
   export interface WaitEvent {
     key: string
@@ -57,19 +60,6 @@ export namespace Flock {
     return code
   }
 
-  function nowMs() {
-    return Date.now()
-  }
-
-  function opts(input: Options): Opts {
-    return {
-      staleMs: input.staleMs ?? staleMs,
-      timeoutMs: input.timeoutMs ?? timeoutMs,
-      baseDelayMs: input.baseDelayMs ?? baseDelayMs,
-      maxDelayMs: input.maxDelayMs ?? maxDelayMs,
-    }
-  }
-
   function sleep(ms: number, signal?: AbortSignal) {
     return new Promise<void>((resolve, reject) => {
       if (signal?.aborted) {
@@ -114,7 +104,8 @@ export namespace Flock {
   }
 
   async function stale(lockDir: string, heartbeatPath: string, metaPath: string, staleMs: number) {
-    const now = nowMs()
+    // Stale detection allows automatic recovery after crashed owners.
+    const now = Date.now()
     const heartbeat = await stats(heartbeatPath)
     if (heartbeat) {
       return now - heartbeat.mtimeMs > staleMs
@@ -156,7 +147,7 @@ export namespace Flock {
         const errCode = code(claimErr)
         if (errCode === "EEXIST") {
           const breaker = await stats(breakerPath)
-          if (breaker && nowMs() - breaker.mtimeMs > opts.staleMs) {
+          if (breaker && Date.now() - breaker.mtimeMs > opts.staleMs) {
             await rm(breakerPath, { recursive: true, force: true }).catch(() => undefined)
           }
           return { acquired: false }
@@ -170,6 +161,7 @@ export namespace Flock {
       }
 
       try {
+        // Breaker ownership ensures only one contender performs stale cleanup.
         if (!(await stale(lockDir, heartbeatPath, metaPath, opts.staleMs))) {
           return { acquired: false }
         }
@@ -211,6 +203,7 @@ export namespace Flock {
 
     const startHeartbeat = (intervalMs = Math.max(100, Math.floor(opts.staleMs / 3))) => {
       if (timer) return
+      // Heartbeat prevents long critical sections from being evicted as stale.
       timer = setInterval(() => {
         const t = new Date()
         void utimes(heartbeatPath, t, t).catch(() => undefined)
@@ -236,6 +229,7 @@ export namespace Flock {
           }
           throw err
         })
+      // Token check prevents deleting a lock that was re-acquired by another process.
       if (current.token !== token) {
         throw new Error("Refusing to release: lock token mismatch (not the owner).")
       }
@@ -255,7 +249,7 @@ export namespace Flock {
     input: { key: string; onWait?: Wait; signal?: AbortSignal },
     opts: Opts,
   ) {
-    const deadline = nowMs() + opts.timeoutMs
+    const deadline = Date.now() + opts.timeoutMs
     let attempt = 0
     let waited = 0
     let delay = opts.baseDelayMs
@@ -268,7 +262,7 @@ export namespace Flock {
         return res
       }
 
-      if (nowMs() > deadline) {
+      if (Date.now() > deadline) {
         throw new Error(`Timed out waiting for lock: ${input.key}`)
       }
 
@@ -288,7 +282,12 @@ export namespace Flock {
 
   export async function acquire(key: string, input: Options = {}): Promise<Lease> {
     input.signal?.throwIfAborted()
-    const cfg = opts(input)
+    const cfg: Opts = {
+      staleMs: input.staleMs ?? defaultOpts.staleMs,
+      timeoutMs: input.timeoutMs ?? defaultOpts.timeoutMs,
+      baseDelayMs: input.baseDelayMs ?? defaultOpts.baseDelayMs,
+      maxDelayMs: input.maxDelayMs ?? defaultOpts.maxDelayMs,
+    }
     const dir = input.dir ?? root
 
     await mkdir(dir, { recursive: true })
