@@ -281,70 +281,72 @@ export namespace Config {
   }
 
   export async function installDependencies(dir: string, input?: InstallInput) {
-    await Flock.run({
-      key: `config-install:${Filesystem.resolve(dir)}`,
+    if (!(await needsInstall(dir))) return
+
+    await using _ = await Flock.acquire(`config-install:${Filesystem.resolve(dir)}`, {
       signal: input?.signal,
-      waitTick: (tick) =>
+      onWait: (tick) =>
         input?.waitTick?.({
           dir,
           attempt: tick.attempt,
           delay: tick.delay,
           waited: tick.waited,
         }),
-      check: () => needsInstall(dir),
-      task: async () => {
-        const pkg = path.join(dir, "package.json")
-        const target = Installation.isLocal() ? "*" : Installation.VERSION
+    })
 
-        const json = await Filesystem.readJson<{ dependencies?: Record<string, string> }>(pkg).catch(() => ({
-          dependencies: {},
-        }))
-        json.dependencies = {
-          ...json.dependencies,
-          "@opencode-ai/plugin": target,
-        }
-        await Filesystem.writeJson(pkg, json)
+    input?.signal?.throwIfAborted()
+    if (!(await needsInstall(dir))) return
 
-        const gitignore = path.join(dir, ".gitignore")
-        const ignore = await Filesystem.exists(gitignore)
-        if (!ignore) {
-          await Filesystem.write(gitignore, ["node_modules", "package.json", "bun.lock", ".gitignore"].join("\n"))
-        }
+    const pkg = path.join(dir, "package.json")
+    const target = Installation.isLocal() ? "*" : Installation.VERSION
 
-        await BunProc.run(
-          [
-            "install",
-            // TODO: get rid of this case (see: https://github.com/oven-sh/bun/issues/19936)
-            ...(proxied() || process.env.CI ? ["--no-cache"] : []),
-          ],
-          {
-            cwd: dir,
-            abort: input?.signal,
-          },
-        ).catch((err) => {
-          if (err instanceof Process.RunFailedError) {
-            const detail = {
-              dir,
-              cmd: err.cmd,
-              code: err.code,
-              stdout: err.stdout.toString(),
-              stderr: err.stderr.toString(),
-            }
-            if (Flag.OPENCODE_STRICT_CONFIG_DEPS) {
-              log.error("failed to install dependencies", detail)
-              throw err
-            }
-            log.warn("failed to install dependencies", detail)
-            return
-          }
+    const json = await Filesystem.readJson<{ dependencies?: Record<string, string> }>(pkg).catch(() => ({
+      dependencies: {},
+    }))
+    json.dependencies = {
+      ...json.dependencies,
+      "@opencode-ai/plugin": target,
+    }
+    await Filesystem.writeJson(pkg, json)
 
-          if (Flag.OPENCODE_STRICT_CONFIG_DEPS) {
-            log.error("failed to install dependencies", { dir, error: err })
-            throw err
-          }
-          log.warn("failed to install dependencies", { dir, error: err })
-        })
+    const gitignore = path.join(dir, ".gitignore")
+    const ignore = await Filesystem.exists(gitignore)
+    if (!ignore) {
+      await Filesystem.write(gitignore, ["node_modules", "package.json", "bun.lock", ".gitignore"].join("\n"))
+    }
+
+    await BunProc.run(
+      [
+        "install",
+        // TODO: get rid of this case (see: https://github.com/oven-sh/bun/issues/19936)
+        ...(proxied() || process.env.CI ? ["--no-cache"] : []),
+      ],
+      {
+        cwd: dir,
+        abort: input?.signal,
       },
+    ).catch((err) => {
+      if (err instanceof Process.RunFailedError) {
+        const detail = {
+          dir,
+          cmd: err.cmd,
+          code: err.code,
+          stdout: err.stdout.toString(),
+          stderr: err.stderr.toString(),
+        }
+        if (Flag.OPENCODE_STRICT_CONFIG_DEPS) {
+          log.error("failed to install dependencies", detail)
+          throw err
+        }
+        log.warn("failed to install dependencies", detail)
+        return
+      }
+
+      if (Flag.OPENCODE_STRICT_CONFIG_DEPS) {
+        log.error("failed to install dependencies", { dir, error: err })
+        throw err
+      }
+      log.warn("failed to install dependencies", { dir, error: err })
     })
   }
 

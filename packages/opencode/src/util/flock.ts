@@ -12,26 +12,23 @@ export namespace Flock {
   const baseDelayMs = 100
   const maxDelayMs = 2_000
 
-  type WaitTick = {
-    lockfile: string
+  export interface WaitEvent {
+    key: string
     attempt: number
     delay: number
     waited: number
   }
 
-  type Wait = (input: WaitTick) => void | Promise<void>
+  export type Wait = (input: WaitEvent) => void | Promise<void>
 
-  type Input<T> = {
-    key: string
-    check: () => Promise<boolean>
-    task: () => Promise<T>
-    waitTick?: Wait
-    signal?: AbortSignal
+  export interface Options {
     dir?: string
+    signal?: AbortSignal
     staleMs?: number
     timeoutMs?: number
     baseDelayMs?: number
     maxDelayMs?: number
+    onWait?: Wait
   }
 
   type Opts = {
@@ -47,6 +44,11 @@ export namespace Flock {
     release: () => Promise<void>
   }
 
+  export interface Lease {
+    release: () => Promise<void>
+    [Symbol.asyncDispose]: () => Promise<void>
+  }
+
   function code(err: unknown) {
     if (typeof err !== "object" || err === null) return
     if (!("code" in err)) return
@@ -59,7 +61,7 @@ export namespace Flock {
     return Date.now()
   }
 
-  function opts(input: Input<unknown>): Opts {
+  function opts(input: Options): Opts {
     return {
       staleMs: input.staleMs ?? staleMs,
       timeoutMs: input.timeoutMs ?? timeoutMs,
@@ -248,7 +250,11 @@ export namespace Flock {
     }
   }
 
-  async function acquireLockDir(lockDir: string, input: { waitTick?: Wait; signal?: AbortSignal }, opts: Opts) {
+  async function acquireLockDir(
+    lockDir: string,
+    input: { key: string; onWait?: Wait; signal?: AbortSignal },
+    opts: Opts,
+  ) {
     const deadline = nowMs() + opts.timeoutMs
     let attempt = 0
     let waited = 0
@@ -263,13 +269,13 @@ export namespace Flock {
       }
 
       if (nowMs() > deadline) {
-        throw new Error(`Timed out waiting for lock: ${lockDir}`)
+        throw new Error(`Timed out waiting for lock: ${input.key}`)
       }
 
       attempt += 1
       const ms = jitter(delay)
-      await input.waitTick?.({
-        lockfile: lockDir,
+      await input.onWait?.({
+        key: input.key,
         attempt,
         delay: ms,
         waited,
@@ -280,32 +286,36 @@ export namespace Flock {
     }
   }
 
-  export async function run<T>(input: Input<T>) {
+  export async function acquire(key: string, input: Options = {}): Promise<Lease> {
     input.signal?.throwIfAborted()
-
-    if (!(await input.check())) return
-
     const cfg = opts(input)
     const dir = input.dir ?? root
 
     await mkdir(dir, { recursive: true })
-    const lockfile = path.join(dir, Hash.fast(input.key) + ".lock")
+    const lockfile = path.join(dir, Hash.fast(key) + ".lock")
     const lock = await acquireLockDir(
       lockfile,
       {
-        waitTick: input.waitTick,
+        key,
+        onWait: input.onWait,
         signal: input.signal,
       },
       cfg,
     )
     lock.startHeartbeat()
 
-    try {
-      input.signal?.throwIfAborted()
-      if (!(await input.check())) return
-      return await input.task()
-    } finally {
-      await lock.release()
+    const release = () => lock.release()
+    return {
+      release,
+      [Symbol.asyncDispose]() {
+        return release()
+      },
     }
+  }
+
+  export async function withLock<T>(key: string, fn: () => Promise<T>, input: Options = {}) {
+    await using _ = await acquire(key, input)
+    input.signal?.throwIfAborted()
+    return await fn()
   }
 }

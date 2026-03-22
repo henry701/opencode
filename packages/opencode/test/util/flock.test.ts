@@ -114,18 +114,21 @@ describe("util.flock", () => {
 
     try {
       await wait(ready, 5_000)
-      const err = await Flock.run({
-        key,
+      const seen: string[] = []
+      const err = await Flock.withLock(key, async () => {}, {
         dir,
         staleMs: 10_000,
         timeoutMs: 300,
-        check: async () => true,
-        task: async () => {},
+        onWait: (tick) => {
+          seen.push(tick.key)
+        },
       }).catch((err) => err)
 
       expect(err).toBeInstanceOf(Error)
       if (!(err instanceof Error)) throw err
       expect(err.message).toContain("Timed out waiting for lock")
+      expect(seen.length).toBeGreaterThan(0)
+      expect(seen.every((x) => x === key)).toBe(true)
     } finally {
       await Process.stop(proc).catch(() => undefined)
       await proc.exited.catch(() => undefined)
@@ -151,16 +154,17 @@ describe("util.flock", () => {
     await proc.exited.catch(() => undefined)
 
     let hit = false
-    await Flock.run({
+    await Flock.withLock(
       key,
-      dir,
-      staleMs: 150,
-      timeoutMs: 5_000,
-      check: async () => true,
-      task: async () => {
+      async () => {
         hit = true
       },
-    })
+      {
+        dir,
+        staleMs: 150,
+        timeoutMs: 5_000,
+      },
+    )
 
     expect(hit).toBe(true)
   }, 20_000)
@@ -176,16 +180,17 @@ describe("util.flock", () => {
     await fs.utimes(lockDir, old, old)
 
     let hit = false
-    await Flock.run({
+    await Flock.withLock(
       key,
-      dir,
-      staleMs: 100,
-      timeoutMs: 3_000,
-      check: async () => true,
-      task: async () => {
+      async () => {
         hit = true
       },
-    })
+      {
+        dir,
+        staleMs: 100,
+        timeoutMs: 3_000,
+      },
+    )
 
     expect(hit).toBe(true)
   })
@@ -205,16 +210,17 @@ describe("util.flock", () => {
     await fs.utimes(breaker, old, old)
 
     let hit = false
-    await Flock.run({
+    await Flock.withLock(
       key,
-      dir,
-      staleMs: 100,
-      timeoutMs: 3_000,
-      check: async () => true,
-      task: async () => {
+      async () => {
         hit = true
       },
-    })
+      {
+        dir,
+        staleMs: 100,
+        timeoutMs: 3_000,
+      },
+    )
 
     expect(hit).toBe(true)
     expect(await exists(breaker)).toBe(false)
@@ -226,32 +232,37 @@ describe("util.flock", () => {
     const key = "flock:compromised:" + Math.random().toString(36).slice(2)
     const lockDir = lock(dir, key)
 
-    const err = await Flock.run({
+    const err = await Flock.withLock(
       key,
-      dir,
-      staleMs: 1_000,
-      timeoutMs: 3_000,
-      check: async () => true,
-      task: async () => {
-        await fs.rm(lockDir, { recursive: true, force: true })
+      async () => {
+        await fs.rm(lockDir, {
+          recursive: true,
+          force: true,
+        })
       },
-    }).catch((err) => err)
+      {
+        dir,
+        staleMs: 1_000,
+        timeoutMs: 3_000,
+      },
+    ).catch((err) => err)
 
     expect(err).toBeInstanceOf(Error)
     if (!(err instanceof Error)) throw err
     expect(err.message).toContain("compromised")
 
     let hit = false
-    await Flock.run({
+    await Flock.withLock(
       key,
-      dir,
-      staleMs: 100,
-      timeoutMs: 3_000,
-      check: async () => true,
-      task: async () => {
+      async () => {
         hit = true
       },
-    })
+      {
+        dir,
+        staleMs: 100,
+        timeoutMs: 3_000,
+      },
+    )
     expect(hit).toBe(true)
   })
 
@@ -261,13 +272,9 @@ describe("util.flock", () => {
     const key = "flock:meta:" + Math.random().toString(36).slice(2)
     const file = path.join(lock(dir, key), "meta.json")
 
-    await Flock.run({
+    await Flock.withLock(
       key,
-      dir,
-      staleMs: 1_000,
-      timeoutMs: 3_000,
-      check: async () => true,
-      task: async () => {
+      async () => {
         const raw = await fs.readFile(file, "utf8")
         const json = JSON.parse(raw) as {
           token?: unknown
@@ -281,7 +288,30 @@ describe("util.flock", () => {
         expect(typeof json.hostname).toBe("string")
         expect(typeof json.createdAt).toBe("string")
       },
-    })
+      {
+        dir,
+        staleMs: 1_000,
+        timeoutMs: 3_000,
+      },
+    )
+  })
+
+  test("supports acquire with await using", async () => {
+    await using tmp = await tmpdir()
+    const dir = path.join(tmp.path, "locks")
+    const key = "flock:acquire:" + Math.random().toString(36).slice(2)
+    const lockDir = lock(dir, key)
+
+    {
+      await using _ = await Flock.acquire(key, {
+        dir,
+        staleMs: 1_000,
+        timeoutMs: 3_000,
+      })
+      expect(await exists(lockDir)).toBe(true)
+    }
+
+    expect(await exists(lockDir)).toBe(false)
   })
 
   test("refuses token mismatch release and recovers from stale", async () => {
@@ -291,19 +321,20 @@ describe("util.flock", () => {
     const lockDir = lock(dir, key)
     const meta = path.join(lockDir, "meta.json")
 
-    const err = await Flock.run({
+    const err = await Flock.withLock(
       key,
-      dir,
-      staleMs: 150,
-      timeoutMs: 3_000,
-      check: async () => true,
-      task: async () => {
+      async () => {
         const raw = await fs.readFile(meta, "utf8")
         const json = JSON.parse(raw) as { token?: string }
         json.token = "tampered"
         await fs.writeFile(meta, JSON.stringify(json, null, 2))
       },
-    }).catch((err) => err)
+      {
+        dir,
+        staleMs: 150,
+        timeoutMs: 3_000,
+      },
+    ).catch((err) => err)
 
     expect(err).toBeInstanceOf(Error)
     if (!(err instanceof Error)) throw err
@@ -313,16 +344,17 @@ describe("util.flock", () => {
     await sleep(220)
 
     let hit = false
-    await Flock.run({
+    await Flock.withLock(
       key,
-      dir,
-      staleMs: 150,
-      timeoutMs: 3_000,
-      check: async () => true,
-      task: async () => {
+      async () => {
         hit = true
       },
-    })
+      {
+        dir,
+        staleMs: 150,
+        timeoutMs: 3_000,
+      },
+    )
     expect(hit).toBe(true)
   })
 
@@ -337,13 +369,10 @@ describe("util.flock", () => {
     await fs.chmod(dir, 0o500)
 
     try {
-      const err = await Flock.run({
-        key,
+      const err = await Flock.withLock(key, async () => {}, {
         dir,
         staleMs: 100,
         timeoutMs: 500,
-        check: async () => true,
-        task: async () => {},
       }).catch((err) => err)
 
       expect(err).toBeInstanceOf(Error)

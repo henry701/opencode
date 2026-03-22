@@ -56,15 +56,12 @@ async function job(input: Msg) {
 async function main() {
   const msg = input()
 
-  await Flock.run({
-    key: msg.key,
+  await Flock.withLock(msg.key, () => job(msg), {
     dir: msg.dir,
     staleMs: msg.staleMs,
     timeoutMs: msg.timeoutMs,
     baseDelayMs: msg.baseDelayMs,
     maxDelayMs: msg.maxDelayMs,
-    check: async () => true,
-    task: () => job(msg),
   })
 }
 
