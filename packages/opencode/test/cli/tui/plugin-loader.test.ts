@@ -1,4 +1,4 @@
-import { expect, mock, spyOn, test } from "bun:test"
+import { beforeAll, describe, expect, mock, spyOn, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { pathToFileURL } from "url"
@@ -30,7 +30,24 @@ mock.module("@opentui/solid/jsx-runtime", () => ({
 const { allThemes, addTheme } = await import("../../../src/cli/cmd/tui/context/theme")
 const { TuiPlugin } = await import("../../../src/cli/cmd/tui/plugin")
 
-test("loads plugin theme and keybind APIs with scoped theme installation", async () => {
+type Row = Record<string, unknown>
+
+type Data = {
+  local: Row
+  global: Row
+  invalid: Row
+  preloaded: Row
+  fn_called: boolean
+  local_installed: string
+  global_installed: string
+  preloaded_installed: string
+  leaked_local_to_global: boolean
+  leaked_global_to_local: boolean
+  local_theme: string
+  global_theme: string
+}
+
+async function load() {
   const stamp = Date.now()
   const globalConfigPath = path.join(Global.Path.config, "tui.json")
   const backup = await Bun.file(globalConfigPath)
@@ -447,78 +464,40 @@ export const object_plugin = {
         },
       },
     })
+    const local = JSON.parse(await fs.readFile(tmp.extra.localMarker, "utf8")) as Row
+    const global = JSON.parse(await fs.readFile(tmp.extra.globalMarker, "utf8")) as Row
+    const invalid = JSON.parse(await fs.readFile(tmp.extra.invalidMarker, "utf8")) as Row
+    const preloaded = JSON.parse(await fs.readFile(tmp.extra.preloadedMarker, "utf8")) as Row
+    const fn_called = await fs
+      .readFile(tmp.extra.fnMarker, "utf8")
+      .then(() => true)
+      .catch(() => false)
+    const local_installed = await fs.readFile(tmp.extra.localDest, "utf8")
+    const global_installed = await fs.readFile(tmp.extra.globalDest, "utf8")
+    const preloaded_installed = await fs.readFile(tmp.extra.preloadedDest, "utf8")
+    const leaked_local_to_global = await fs
+      .stat(path.join(Global.Path.config, "themes", tmp.extra.localThemeFile))
+      .then(() => true)
+      .catch(() => false)
+    const leaked_global_to_local = await fs
+      .stat(path.join(tmp.path, ".opencode", "themes", tmp.extra.globalThemeFile))
+      .then(() => true)
+      .catch(() => false)
 
-    const local = JSON.parse(await fs.readFile(tmp.extra.localMarker, "utf8"))
-    expect(local.before).toBe(false)
-    expect(local.set_missing).toBe(false)
-    expect(local.after).toBe(true)
-    expect(local.set_installed).toBe(true)
-    expect(local.selected).toBe(tmp.extra.localThemeName)
-    expect(local.same).toBe(true)
-    expect(local.key_modal).toBe("ctrl+alt+m")
-    expect(local.key_close).toBe("q")
-    expect(local.key_unknown).toBe("ctrl+k")
-    expect(local.key_print).toBe("print:ctrl+alt+m")
-    expect(local.kv_before).toBe("missing")
-    expect(local.kv_after).toBe("stored")
-    expect(local.kv_ready).toBe(true)
-    expect(local.diff_count).toBe(1)
-    expect(local.diff_file).toBe("src/app.ts")
-    expect(local.todo_count).toBe(1)
-    expect(local.todo_first).toBe("ship it")
-    expect(local.lsp_count).toBe(1)
-    expect(local.mcp_count).toBe(1)
-    expect(local.mcp_first).toBe("github")
-    expect(local.depth_before).toBe(0)
-    expect(local.open_before).toBe(false)
-    expect(local.size_before).toBe("medium")
-    expect(local.size_after).toBe("large")
-    expect(local.depth_after).toBe(1)
-    expect(local.open_after).toBe(true)
-    expect(local.open_clear).toBe(false)
-
-    const global = JSON.parse(await fs.readFile(tmp.extra.globalMarker, "utf8"))
-    expect(global.has).toBe(true)
-    expect(global.set_installed).toBe(true)
-    expect(global.selected).toBe(tmp.extra.globalThemeName)
-
-    const invalid = JSON.parse(await fs.readFile(tmp.extra.invalidMarker, "utf8"))
-    expect(invalid.before).toBe(false)
-    expect(invalid.set_missing).toBe(false)
-    expect(invalid.after).toBe(false)
-    expect(invalid.set_installed).toBe(false)
-
-    const preloaded = JSON.parse(await fs.readFile(tmp.extra.preloadedMarker, "utf8"))
-    expect(preloaded.before).toBe(true)
-    expect(preloaded.after).toBe(true)
-    expect(preloaded.text).toContain("#303030")
-    expect(preloaded.text).not.toContain("#f0f0f0")
-
-    await expect(fs.readFile(tmp.extra.fnMarker, "utf8")).rejects.toThrow()
-
-    const localInstalled = await fs.readFile(tmp.extra.localDest, "utf8")
-    expect(localInstalled).toContain("#101010")
-    expect(localInstalled).not.toContain("#fefefe")
-
-    const globalInstalled = await fs.readFile(tmp.extra.globalDest, "utf8")
-    expect(globalInstalled).toContain("#202020")
-
-    const preloadedInstalled = await fs.readFile(tmp.extra.preloadedDest, "utf8")
-    expect(preloadedInstalled).toContain("#303030")
-    expect(preloadedInstalled).not.toContain("#f0f0f0")
-
-    expect(
-      await fs
-        .stat(path.join(Global.Path.config, "themes", tmp.extra.localThemeFile))
-        .then(() => true)
-        .catch(() => false),
-    ).toBe(false)
-    expect(
-      await fs
-        .stat(path.join(tmp.path, ".opencode", "themes", tmp.extra.globalThemeFile))
-        .then(() => true)
-        .catch(() => false),
-    ).toBe(false)
+    return {
+      local,
+      global,
+      invalid,
+      preloaded,
+      fn_called,
+      local_installed,
+      global_installed,
+      preloaded_installed,
+      leaked_local_to_global,
+      leaked_global_to_local,
+      local_theme: tmp.extra.localThemeName,
+      global_theme: tmp.extra.globalThemeName,
+    } satisfies Data
   } finally {
     cwd.mockRestore()
     wait.mockRestore()
@@ -530,4 +509,68 @@ export const object_plugin = {
     }
     await fs.rm(tmp.extra.globalDest, { force: true }).catch(() => {})
   }
+}
+
+describe("tui.plugin.loader", () => {
+  let data: Data
+
+  beforeAll(async () => {
+    data = await load()
+  })
+
+  test("passes keybind, kv, state, and dialog APIs to object plugins", () => {
+    expect(data.local.key_modal).toBe("ctrl+alt+m")
+    expect(data.local.key_close).toBe("q")
+    expect(data.local.key_unknown).toBe("ctrl+k")
+    expect(data.local.key_print).toBe("print:ctrl+alt+m")
+    expect(data.local.kv_before).toBe("missing")
+    expect(data.local.kv_after).toBe("stored")
+    expect(data.local.kv_ready).toBe(true)
+    expect(data.local.diff_count).toBe(1)
+    expect(data.local.diff_file).toBe("src/app.ts")
+    expect(data.local.todo_count).toBe(1)
+    expect(data.local.todo_first).toBe("ship it")
+    expect(data.local.lsp_count).toBe(1)
+    expect(data.local.mcp_count).toBe(1)
+    expect(data.local.mcp_first).toBe("github")
+    expect(data.local.depth_before).toBe(0)
+    expect(data.local.open_before).toBe(false)
+    expect(data.local.size_before).toBe("medium")
+    expect(data.local.size_after).toBe("large")
+    expect(data.local.depth_after).toBe(1)
+    expect(data.local.open_after).toBe(true)
+    expect(data.local.open_clear).toBe(false)
+  })
+
+  test("installs themes in the correct scope and remains resilient", () => {
+    expect(data.local.before).toBe(false)
+    expect(data.local.set_missing).toBe(false)
+    expect(data.local.after).toBe(true)
+    expect(data.local.set_installed).toBe(true)
+    expect(data.local.selected).toBe(data.local_theme)
+    expect(data.local.same).toBe(true)
+
+    expect(data.global.has).toBe(true)
+    expect(data.global.set_installed).toBe(true)
+    expect(data.global.selected).toBe(data.global_theme)
+
+    expect(data.invalid.before).toBe(false)
+    expect(data.invalid.set_missing).toBe(false)
+    expect(data.invalid.after).toBe(false)
+    expect(data.invalid.set_installed).toBe(false)
+
+    expect(data.preloaded.before).toBe(true)
+    expect(data.preloaded.after).toBe(true)
+    expect(data.preloaded.text).toContain("#303030")
+    expect(data.preloaded.text).not.toContain("#f0f0f0")
+
+    expect(data.fn_called).toBe(false)
+    expect(data.local_installed).toContain("#101010")
+    expect(data.local_installed).not.toContain("#fefefe")
+    expect(data.global_installed).toContain("#202020")
+    expect(data.preloaded_installed).toContain("#303030")
+    expect(data.preloaded_installed).not.toContain("#f0f0f0")
+    expect(data.leaked_local_to_global).toBe(false)
+    expect(data.leaked_global_to_local).toBe(false)
+  })
 })
