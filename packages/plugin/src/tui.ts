@@ -61,7 +61,6 @@ export type TuiKeybindMap = Record<string, string>
 export type TuiKeybindSet = {
   readonly all: TuiKeybindMap
   get: (name: string) => string
-  parse: (evt: ParsedKey) => TuiKeybind
   match: (name: string, evt: ParsedKey) => boolean
   print: (name: string) => string
 }

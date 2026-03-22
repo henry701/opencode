@@ -6,7 +6,6 @@ import type { ParsedKey, Renderable } from "@opentui/core"
 import { createStore } from "solid-js/store"
 import { useKeyboard, useRenderer } from "@opentui/solid"
 import { createSimpleContext } from "./helper"
-import { createPluginKeybind, type PluginKeybindMap } from "./plugin-keybinds"
 import { useTuiConfig } from "./tui-config"
 
 export type KeybindKey = keyof NonNullable<TuiConfig.Info["keybinds"]> & string
@@ -99,9 +98,6 @@ export const { use: useKeybind, provider: KeybindProvider } = createSimpleContex
         const lead = keybinds().leader?.[0]
         if (!lead) return text
         return text.replace("<leader>", Keybind.toString(lead))
-      },
-      create(defaults: PluginKeybindMap, overrides?: Record<string, unknown>) {
-        return createPluginKeybind(result, defaults, overrides)
       },
     }
     return result

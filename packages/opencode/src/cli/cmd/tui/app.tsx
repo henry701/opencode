@@ -61,6 +61,7 @@ import { TuiConfig } from "@/config/tui"
 import type { TuiApi, TuiDialogSelectOption, TuiRouteDefinition } from "@opencode-ai/plugin/tui"
 import { TuiPlugin } from "./plugin"
 import { FormatError, FormatUnknownError } from "@/cli/error"
+import { createPluginKeybind } from "@/cli/cmd/tui/context/plugin-keybinds"
 
 async function getTerminalBackgroundColor(): Promise<"dark" | "light"> {
   // can't set raw mode if not a TTY
@@ -363,7 +364,7 @@ function createTuiApi(input: ApiInput): TuiApi<JSX.Element> {
         return input.keybind.print(key)
       },
       create(defaults, overrides) {
-        return input.keybind.create(defaults, overrides)
+        return createPluginKeybind(input.keybind, defaults, overrides)
       },
     },
     kv: {

@@ -10,7 +10,6 @@ describe("createPluginKeybind", () => {
 
   test("uses defaults when overrides are missing", () => {
     const api = {
-      parse: () => "parsed",
       match: () => false,
       print: (key: string) => key,
     }
@@ -23,7 +22,6 @@ describe("createPluginKeybind", () => {
 
   test("applies valid overrides", () => {
     const api = {
-      parse: () => "parsed",
       match: () => false,
       print: (key: string) => key,
     }
@@ -40,7 +38,6 @@ describe("createPluginKeybind", () => {
 
   test("ignores invalid overrides", () => {
     const api = {
-      parse: () => "parsed",
       match: () => false,
       print: (key: string) => key,
     }
@@ -54,22 +51,9 @@ describe("createPluginKeybind", () => {
     expect(bind.get("extra")).toBe("extra")
   })
 
-  test("delegates parse", () => {
-    const evt = { name: "x" } as ParsedKey
-    const api = {
-      parse: (value: ParsedKey) => value,
-      match: () => false,
-      print: (key: string) => key,
-    }
-    const bind = createPluginKeybind(api, defaults)
-
-    expect(bind.parse(evt)).toBe(evt)
-  })
-
   test("resolves names for match", () => {
     const list: string[] = []
     const api = {
-      parse: () => "parsed",
       match: (key: string) => {
         list.push(key)
         return true
@@ -89,7 +73,6 @@ describe("createPluginKeybind", () => {
   test("resolves names for print", () => {
     const list: string[] = []
     const api = {
-      parse: () => "parsed",
       match: () => false,
       print: (key: string) => {
         list.push(key)

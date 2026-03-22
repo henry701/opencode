@@ -2,16 +2,14 @@ import type { ParsedKey } from "@opentui/core"
 
 export type PluginKeybindMap = Record<string, string>
 
-type Base<Info> = {
-  parse: (evt: ParsedKey) => Info
+type Base = {
   match: (key: string, evt: ParsedKey) => boolean
   print: (key: string) => string
 }
 
-export type PluginKeybind<Info> = {
+export type PluginKeybind = {
   readonly all: PluginKeybindMap
   get: (name: string) => string
-  parse: (evt: ParsedKey) => Info
   match: (name: string, evt: ParsedKey) => boolean
   print: (name: string) => string
 }
@@ -22,11 +20,11 @@ const txt = (value: unknown) => {
   return value
 }
 
-export function createPluginKeybind<Info>(
-  base: Base<Info>,
+export function createPluginKeybind(
+  base: Base,
   defaults: PluginKeybindMap,
   overrides?: Record<string, unknown>,
-): PluginKeybind<Info> {
+): PluginKeybind {
   const all = Object.freeze(
     Object.fromEntries(Object.entries(defaults).map(([name, value]) => [name, txt(overrides?.[name]) ?? value])),
   ) as PluginKeybindMap
@@ -37,7 +35,6 @@ export function createPluginKeybind<Info>(
       return all
     },
     get,
-    parse: (evt) => base.parse(evt),
     match: (name, evt) => base.match(get(name), evt),
     print: (name) => base.print(get(name)),
   }
