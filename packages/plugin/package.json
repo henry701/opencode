@@ -21,7 +21,7 @@
     "zod": "catalog:"
   },
   "peerDependencies": {
-    "@opentui/core": ">=0.1.87"
+    "@opentui/core": ">=0.1.90"
   },
   "peerDependenciesMeta": {
     "@opentui/core": {
@@ -29,7 +29,7 @@
     }
   },
   "devDependencies": {
-    "@opentui/core": "0.0.0-20260318-39211c40",
+    "@opentui/core": "0.1.90",
     "@tsconfig/node22": "catalog:",
     "@types/node": "catalog:",
     "typescript": "catalog:",
