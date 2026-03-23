@@ -1,7 +1,7 @@
-import { render, TimeToFirstDraw, useKeyboard, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
+import { render, TimeToFirstDraw, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { Clipboard } from "@tui/util/clipboard"
 import { Selection } from "@tui/util/selection"
-import { createCliRenderer, MouseButton, TextAttributes, type CliRendererConfig, type ParsedKey } from "@opentui/core"
+import { createCliRenderer, MouseButton, TextAttributes, type CliRendererConfig } from "@opentui/core"
 import { RouteProvider, useRoute } from "@tui/context/route"
 import {
   Switch,
@@ -20,7 +20,7 @@ import {
 import { win32DisableProcessedInput, win32FlushInputBuffer, win32InstallCtrlCGuard } from "./win32"
 import { Flag } from "@/flag/flag"
 import semver from "semver"
-import { Dialog as DialogUI, DialogProvider, useDialog } from "@tui/ui/dialog"
+import { DialogProvider, useDialog } from "@tui/ui/dialog"
 import { DialogProvider as DialogProviderList } from "@tui/component/dialog-provider"
 import { SDKProvider, useSDK } from "@tui/context/sdk"
 import { SyncProvider, useSync } from "@tui/context/sync"
@@ -43,8 +43,6 @@ import { FrecencyProvider } from "./component/prompt/frecency"
 import { PromptStashProvider } from "./component/prompt/stash"
 import { DialogAlert } from "./ui/dialog-alert"
 import { DialogConfirm } from "./ui/dialog-confirm"
-import { DialogPrompt } from "./ui/dialog-prompt"
-import { DialogSelect, type DialogSelectOption as SelectOption } from "./ui/dialog-select"
 import { ToastProvider, useToast } from "./ui/toast"
 import { Spinner } from "@tui/component/spinner"
 import { ExitProvider, useExit } from "./context/exit"
@@ -58,10 +56,9 @@ import { writeHeapSnapshot } from "v8"
 import { PromptRefProvider, usePromptRef } from "./context/prompt"
 import { TuiConfigProvider } from "./context/tui-config"
 import { TuiConfig } from "@/config/tui"
-import type { TuiApi, TuiDialogSelectOption, TuiRouteDefinition } from "@opencode-ai/plugin/tui"
 import { TuiPlugin } from "./plugin"
+import { createTuiApi, type RouteMap } from "./plugin-api"
 import { FormatError, FormatUnknownError } from "@/cli/error"
-import { createPluginKeybind } from "@/cli/cmd/tui/context/plugin-keybinds"
 
 async function getTerminalBackgroundColor(): Promise<"dark" | "light"> {
   // can't set raw mode if not a TTY
@@ -140,263 +137,6 @@ function rendererConfig(_config: TuiConfig.Info): CliRendererConfig {
         Clipboard.copy(text).catch((error) => {
           console.error(`Failed to copy console selection to clipboard: ${error}`)
         })
-      },
-    },
-  }
-}
-
-type RouteEntry = {
-  key: symbol
-  render: TuiRouteDefinition<JSX.Element>["render"]
-}
-
-type RouteMap = Map<string, RouteEntry[]>
-
-type ApiInput = {
-  command: ReturnType<typeof useCommandDialog>
-  dialog: ReturnType<typeof useDialog>
-  keybind: ReturnType<typeof useKeybind>
-  kv: ReturnType<typeof useKV>
-  route: ReturnType<typeof useRoute>
-  routes: RouteMap
-  bump: () => void
-  sync: ReturnType<typeof useSync>
-  theme: ReturnType<typeof useTheme>
-  toast: ReturnType<typeof useToast>
-}
-
-function routeRegister(routes: RouteMap, list: TuiRouteDefinition<JSX.Element>[], bump: () => void) {
-  const key = Symbol()
-  for (const item of list) {
-    const prev = routes.get(item.name) ?? []
-    prev.push({ key, render: item.render })
-    routes.set(item.name, prev)
-  }
-  bump()
-
-  return () => {
-    for (const item of list) {
-      const prev = routes.get(item.name)
-      if (!prev) continue
-      const next = prev.filter((x) => x.key !== key)
-      if (!next.length) {
-        routes.delete(item.name)
-        continue
-      }
-      routes.set(item.name, next)
-    }
-    bump()
-  }
-}
-
-function routeNavigate(route: ReturnType<typeof useRoute>, name: string, params?: Record<string, unknown>) {
-  if (name === "home") {
-    route.navigate({ type: "home" })
-    return
-  }
-
-  if (name === "session") {
-    const sessionID = params?.sessionID
-    if (typeof sessionID !== "string") return
-    route.navigate({ type: "session", sessionID })
-    return
-  }
-
-  route.navigate({ type: "plugin", id: name, data: params })
-}
-
-function routeCurrent(route: ReturnType<typeof useRoute>): TuiApi<JSX.Element>["route"]["current"] {
-  if (route.data.type === "home") return { name: "home" }
-  if (route.data.type === "session") {
-    return {
-      name: "session",
-      params: {
-        sessionID: route.data.sessionID,
-        initialPrompt: route.data.initialPrompt,
-      },
-    }
-  }
-
-  return {
-    name: route.data.id,
-    params: route.data.data,
-  }
-}
-
-function mapOption<Value>(item: TuiDialogSelectOption<Value, JSX.Element>): SelectOption<Value> {
-  return {
-    ...item,
-    onSelect: () => item.onSelect?.(),
-  }
-}
-
-function pickOption<Value>(item: SelectOption<Value>): TuiDialogSelectOption<Value, JSX.Element> {
-  return {
-    title: item.title,
-    value: item.value,
-    description: item.description,
-    footer: item.footer,
-    category: item.category,
-    disabled: item.disabled,
-  }
-}
-
-function mapOptionCb<Value>(cb?: (item: TuiDialogSelectOption<Value, JSX.Element>) => void) {
-  if (!cb) return
-  return (item: SelectOption<Value>) => cb(pickOption(item))
-}
-
-function stateApi(sync: ReturnType<typeof useSync>): TuiApi<JSX.Element>["state"] {
-  return {
-    session: {
-      diff(sessionID) {
-        return sync.data.session_diff[sessionID] ?? []
-      },
-      todo(sessionID) {
-        return sync.data.todo[sessionID] ?? []
-      },
-    },
-    lsp() {
-      return sync.data.lsp.map((item) => ({ id: item.id, root: item.root, status: item.status }))
-    },
-    mcp() {
-      return Object.entries(sync.data.mcp)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([name, item]) => ({
-          name,
-          status: item.status,
-          error: item.status === "failed" ? item.error : undefined,
-        }))
-    },
-  }
-}
-
-function createTuiApi(input: ApiInput): TuiApi<JSX.Element> {
-  return {
-    command: {
-      register(cb) {
-        input.command.register(() => cb())
-      },
-      trigger(value) {
-        input.command.trigger(value)
-      },
-    },
-    route: {
-      register(list) {
-        return routeRegister(input.routes, list, input.bump)
-      },
-      navigate(name, params) {
-        routeNavigate(input.route, name, params)
-      },
-      get current() {
-        return routeCurrent(input.route)
-      },
-    },
-    ui: {
-      Dialog(props) {
-        return (
-          <DialogUI size={props.size} onClose={props.onClose}>
-            {props.children as JSX.Element}
-          </DialogUI>
-        )
-      },
-      DialogAlert(props) {
-        return <DialogAlert {...props} />
-      },
-      DialogConfirm(props) {
-        return <DialogConfirm {...props} />
-      },
-      DialogPrompt(props) {
-        return <DialogPrompt {...props} description={props.description as (() => JSX.Element) | undefined} />
-      },
-      DialogSelect(props) {
-        return (
-          <DialogSelect
-            title={props.title}
-            placeholder={props.placeholder}
-            options={props.options.map(mapOption)}
-            flat={props.flat}
-            onMove={mapOptionCb(props.onMove)}
-            onFilter={props.onFilter}
-            onSelect={mapOptionCb(props.onSelect)}
-            skipFilter={props.skipFilter}
-            current={props.current}
-          />
-        )
-      },
-      toast(inputToast) {
-        input.toast.show({
-          title: inputToast.title,
-          message: inputToast.message,
-          variant: inputToast.variant ?? "info",
-          duration: inputToast.duration,
-        })
-      },
-      dialog: {
-        replace(render, onClose) {
-          input.dialog.replace(render, onClose)
-        },
-        clear() {
-          input.dialog.clear()
-        },
-        setSize(size) {
-          input.dialog.setSize(size)
-        },
-        get size() {
-          return input.dialog.size
-        },
-        get depth() {
-          return input.dialog.stack.length
-        },
-        get open() {
-          return input.dialog.stack.length > 0
-        },
-      },
-    },
-    keybind: {
-      match(key, evt: ParsedKey) {
-        return input.keybind.match(key, evt)
-      },
-      print(key) {
-        return input.keybind.print(key)
-      },
-      create(defaults, overrides) {
-        return createPluginKeybind(input.keybind, defaults, overrides)
-      },
-    },
-    kv: {
-      get(key, fallback) {
-        return input.kv.get(key, fallback)
-      },
-      set(key, value) {
-        input.kv.set(key, value)
-      },
-      get ready() {
-        return input.kv.ready
-      },
-    },
-    state: stateApi(input.sync),
-    theme: {
-      get current() {
-        return input.theme.theme
-      },
-      get selected() {
-        return input.theme.selected
-      },
-      has(name) {
-        return input.theme.has(name)
-      },
-      set(name) {
-        return input.theme.set(name)
-      },
-      async install(_jsonPath) {
-        throw new Error("theme.install is only available in plugin context")
-      },
-      mode() {
-        return input.theme.mode()
-      },
-      get ready() {
-        return input.theme.ready
       },
     },
   }
