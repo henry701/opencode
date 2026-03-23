@@ -25,7 +25,7 @@ mock.module("@opentui/solid/jsx-runtime", () => ({
   jsxs: () => null,
   jsxDEV: () => null,
 }))
-const { TuiPlugin } = await import("../../../src/cli/cmd/tui/plugin")
+const { TuiPlugin } = await import("../../../src/cli/cmd/tui/plugin/plugin")
 
 test("continues loading tui plugins when a plugin is missing config metadata", async () => {
   await using tmp = await tmpdir({

@@ -7,7 +7,7 @@ import { Installation } from "@/installation"
 import { useDirectory } from "../../context/directory"
 import { useKV } from "../../context/kv"
 import { TodoItem } from "../../component/todo-item"
-import { TuiPlugin } from "../../plugin"
+import { TuiPlugin } from "../../plugin/plugin"
 
 const money = new Intl.NumberFormat("en-US", {
   style: "currency",

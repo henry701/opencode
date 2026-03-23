@@ -21,10 +21,10 @@ import { isRecord } from "@/util/record"
 import { Instance } from "@/project/instance"
 import { isDeprecatedPlugin, resolvePluginTarget, uniqueModuleEntries } from "@/plugin/shared"
 import { PluginMeta } from "@/plugin/meta"
-import { addTheme, hasTheme } from "./context/theme"
+import { addTheme, hasTheme } from "../context/theme"
 import { Global } from "@/global"
 import { Filesystem } from "@/util/filesystem"
-import { INTERNAL_TUI_PLUGINS, type InternalTuiPlugin } from "./internal-plugin"
+import { INTERNAL_TUI_PLUGINS, type InternalTuiPlugin } from "./internal"
 
 type SlotProps<K extends keyof TuiSlotMap> = {
   name: K

@@ -28,7 +28,7 @@ mock.module("@opentui/solid/jsx-runtime", () => ({
   jsxDEV: () => null,
 }))
 const { allThemes, addTheme } = await import("../../../src/cli/cmd/tui/context/theme")
-const { TuiPlugin } = await import("../../../src/cli/cmd/tui/plugin")
+const { TuiPlugin } = await import("../../../src/cli/cmd/tui/plugin/plugin")
 
 type Row = Record<string, unknown>
 

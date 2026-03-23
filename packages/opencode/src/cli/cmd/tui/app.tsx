@@ -56,8 +56,8 @@ import { writeHeapSnapshot } from "v8"
 import { PromptRefProvider, usePromptRef } from "./context/prompt"
 import { TuiConfigProvider } from "./context/tui-config"
 import { TuiConfig } from "@/config/tui"
-import { TuiPlugin } from "./plugin"
-import { createTuiApi, type RouteMap } from "./plugin-api"
+import { TuiPlugin } from "./plugin/plugin"
+import { createTuiApi, type RouteMap } from "./plugin/api"
 import { FormatError, FormatUnknownError } from "@/cli/error"
 
 async function getTerminalBackgroundColor(): Promise<"dark" | "light"> {
