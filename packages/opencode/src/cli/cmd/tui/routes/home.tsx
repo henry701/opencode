@@ -15,7 +15,7 @@ import { Installation } from "@/installation"
 import { useKV } from "../context/kv"
 import { useCommandDialog } from "../component/dialog-command"
 import { useLocal } from "../context/local"
-import { TuiPlugin } from "../plugin/plugin"
+import { TuiPlugin } from "../plugin"
 
 // TODO: what is the best way to do this?
 let once = false

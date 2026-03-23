@@ -4,12 +4,8 @@ import {
   type TuiPluginInit,
   type TuiPluginInput,
   type TuiTheme,
-  type TuiSlotContext,
-  type TuiSlotMap,
-  type TuiSlots,
-  type SlotMode,
 } from "@opencode-ai/plugin/tui"
-import { createSlot, createSolidSlotRegistry, type JSX, type SolidPlugin } from "@opentui/solid"
+import type { JSX } from "@opentui/solid"
 import type { CliRenderer } from "@opentui/core"
 import path from "path"
 import { fileURLToPath } from "url"
@@ -25,15 +21,8 @@ import { addTheme, hasTheme } from "../context/theme"
 import { Global } from "@/global"
 import { Filesystem } from "@/util/filesystem"
 import { INTERNAL_TUI_PLUGINS, type InternalTuiPlugin } from "./internal"
+import { getTuiSlotPlugin, setupSlots, Slot as View, type InitInput } from "./slots"
 
-type SlotProps<K extends keyof TuiSlotMap> = {
-  name: K
-  mode?: SlotMode
-  children?: JSX.Element
-} & TuiSlotMap[K]
-
-type Slot = <K extends keyof TuiSlotMap>(props: SlotProps<K>) => JSX.Element | null
-type InitInput = Omit<TuiPluginInput<CliRenderer, JSX.Element>, "slots">
 type Loaded = {
   item?: Config.PluginSpec
   spec: string
@@ -47,24 +36,6 @@ type Deps = {
 }
 
 const log = Log.create({ service: "tui.plugin" })
-
-function empty<K extends keyof TuiSlotMap>(_props: SlotProps<K>) {
-  return null
-}
-
-function isTuiSlotPlugin(value: unknown): value is SolidPlugin<TuiSlotMap, TuiSlotContext> {
-  if (!isRecord(value)) return false
-  if (typeof value.id !== "string") return false
-  if (!isRecord(value.slots)) return false
-  return true
-}
-
-function getTuiSlotPlugin(value: unknown) {
-  if (isTuiSlotPlugin(value)) return value
-  if (!isRecord(value)) return
-  if (!isTuiSlotPlugin(value.slots)) return
-  return value.slots
-}
 
 function isTuiPlugin(value: unknown): value is TuiPluginFn<CliRenderer, JSX.Element> {
   return typeof value === "function"
@@ -306,38 +277,7 @@ async function applyPlugin(input: TuiPluginInput<CliRenderer, JSX.Element>, load
 export namespace TuiPlugin {
   let dir = ""
   let loaded: Promise<void> | undefined
-  let view: Slot = empty
-
-  export const Slot: Slot = (props) => view(props)
-
-  function setupSlots(input: InitInput): TuiSlots {
-    const reg = createSolidSlotRegistry<TuiSlotMap, TuiSlotContext>(
-      input.renderer,
-      {
-        theme: input.api.theme,
-      },
-      {
-        onPluginError(event) {
-          console.error("[tui.slot] plugin error", {
-            plugin: event.pluginId,
-            slot: event.slot,
-            phase: event.phase,
-            source: event.source,
-            message: event.error.message,
-          })
-        },
-      },
-    )
-
-    const slot = createSlot<TuiSlotMap, TuiSlotContext>(reg)
-    view = (props) => slot(props)
-    return {
-      register(pluginSlot) {
-        if (!isTuiSlotPlugin(pluginSlot)) return () => {}
-        return reg.register(pluginSlot)
-      },
-    }
-  }
+  export const Slot = View
 
   export async function init(input: InitInput) {
     const cwd = process.cwd()
