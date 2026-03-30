@@ -129,48 +129,24 @@ jobs:
           UPSTREAM_LOG: ${{ steps.merge.outputs.upstream_log }}
         run: |
           current_date=$(date -u +"%Y-%m-%d %H:%M UTC")
-          
-          body=$(cat << 'BODY_EOF'
-## ⚠️ Upstream sync failed — manual merge required
-
-**Date:** ${current_date}
-**Upstream commit:** `${upstream_short}` (${upstream_hash})
-
-### Conflicting files
-```
-${CONFLICTED_FILES_NL}
-```
-
-### Incoming upstream commits
-```
-${upstream_log}
-```
-
-### Resolve locally
-```bash
-git fetch upstream dev
-git checkout dev
-git merge upstream/dev
-# fix conflicts, then:
-git add .
-git commit
-git push origin dev
-```
-BODY_EOF
-          )
-          
-          # Substitute variables in the body
           upstream_hash="$UPSTREAM_HASH"
           upstream_short="$UPSTREAM_SHORT"
-          conflicted_files="$CONFLICTED_FILES"
           conflicted_files_nl="${CONFLICTED_FILES//,/$'\n'}"
           upstream_log="$UPSTREAM_LOG"
-          body=$(CONFLICTED_FILES_NL="$conflicted_files_nl" \
-                 UPSTREAM_HASH="$upstream_hash" \
-                 UPSTREAM_SHORT="$upstream_short" \
-                 UPSTREAM_LOG="$upstream_log" \
-                 current_date="$current_date" \
-                 envsubst <<< "$body")
+
+          resolve_steps=$(printf '%s' \
+            'git fetch upstream dev\n' \
+            'git checkout dev\n' \
+            'git merge upstream/dev\n' \
+            '# fix conflicts, then:\n' \
+            'git add .\n' \
+            'git commit\n' \
+            'git push origin dev')
+
+          body=$(printf \
+            '## Warning: Upstream sync failed -- manual merge required\n\n**Date:** %s\n**Upstream commit:** `%s` (%s)\n\n### Conflicting files\n```\n%s\n```\n\n### Incoming upstream commits\n```\n%s\n```\n\n### Resolve locally\n```bash\n%s\n```' \
+            "$current_date" "$upstream_short" "$upstream_hash" \
+            "$conflicted_files_nl" "$upstream_log" "$resolve_steps")
 
           existing_issue=$(gh issue list \
             --label "upstream-conflict" \
