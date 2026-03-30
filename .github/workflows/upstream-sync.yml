@@ -19,68 +19,78 @@ jobs:
 
     steps:
       - name: Checkout fork
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
         with:
           ref: dev
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Configure git
+        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Add upstream and fetch
+        shell: bash
         run: |
-          git remote add upstream https://github.com/anomalyco/opencode.git
+          if ! git remote get-url upstream >/dev/null 2>&1; then
+            git remote add upstream https://github.com/anomalyco/opencode.git
+          fi
           git fetch upstream dev
 
       - name: Check if up-to-date
         id: check
+        shell: bash
+        env:
+          FORCE_INPUT: ${{ inputs.force }}
         run: |
-          if git merge-base --is-ancestor upstream/dev HEAD && [ "${{ inputs.force }}" != "true" ]; then
-            echo "status=up-to-date" >> $GITHUB_OUTPUT
+          if git merge-base --is-ancestor upstream/dev HEAD && [[ "$FORCE_INPUT" != "true" ]]; then
+            echo "status=up-to-date" >> "$GITHUB_OUTPUT"
           else
-            echo "status=pending" >> $GITHUB_OUTPUT
+            echo "status=pending" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Attempt merge
         id: merge
         if: steps.check.outputs.status == 'pending'
+        shell: bash
         run: |
-          UPSTREAM_HASH=$(git rev-parse upstream/dev)
-          UPSTREAM_SHORT=$(git rev-parse --short upstream/dev)
-          UPSTREAM_LOG=$(git log HEAD..upstream/dev --oneline | head -20)
+          upstream_hash=$(git rev-parse upstream/dev)
+          upstream_short=$(git rev-parse --short upstream/dev)
+          upstream_log=$(git log HEAD..upstream/dev --oneline | head -20)
 
           if git merge --no-edit upstream/dev; then
-            echo "status=merged" >> $GITHUB_OUTPUT
-            echo "upstream_hash=$UPSTREAM_HASH" >> $GITHUB_OUTPUT
-            echo "upstream_short=$UPSTREAM_SHORT" >> $GITHUB_OUTPUT
+            echo "status=merged" >> "$GITHUB_OUTPUT"
+            echo "upstream_hash=${upstream_hash}" >> "$GITHUB_OUTPUT"
+            echo "upstream_short=${upstream_short}" >> "$GITHUB_OUTPUT"
             {
               echo "upstream_log<<EOF"
-              echo "$UPSTREAM_LOG"
+              echo "$upstream_log"
               echo "EOF"
-            } >> $GITHUB_OUTPUT
+            } >> "$GITHUB_OUTPUT"
           else
-            CONFLICTED=$(git diff --name-only --diff-filter=U | paste -sd ',' -)
+            conflicted=$(git diff --name-only --diff-filter=U | paste -sd ',' - || echo "")
             git merge --abort
-            echo "status=conflict" >> $GITHUB_OUTPUT
-            echo "upstream_hash=$UPSTREAM_HASH" >> $GITHUB_OUTPUT
-            echo "upstream_short=$UPSTREAM_SHORT" >> $GITHUB_OUTPUT
-            echo "conflicted_files=$CONFLICTED" >> $GITHUB_OUTPUT
+            echo "status=conflict" >> "$GITHUB_OUTPUT"
+            echo "upstream_hash=${upstream_hash}" >> "$GITHUB_OUTPUT"
+            echo "upstream_short=${upstream_short}" >> "$GITHUB_OUTPUT"
+            echo "conflicted_files=${conflicted}" >> "$GITHUB_OUTPUT"
             {
               echo "upstream_log<<EOF"
-              echo "$UPSTREAM_LOG"
+              echo "$upstream_log"
               echo "EOF"
-            } >> $GITHUB_OUTPUT
+            } >> "$GITHUB_OUTPUT"
           fi
 
       - name: Push merged changes
         if: steps.merge.outputs.status == 'merged'
+        shell: bash
         run: git push origin dev
 
       - name: Ensure upstream-conflict label exists
         if: steps.merge.outputs.status == 'conflict'
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -91,19 +101,26 @@ jobs:
 
       - name: Close stale conflict issues on clean merge
         if: steps.check.outputs.status == 'up-to-date' || steps.merge.outputs.status == 'merged'
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh issue list \
+          issue_numbers=$(gh issue list \
             --label "upstream-conflict" \
             --state open \
             --json number \
-            --jq '.[].number' \
-          | xargs -r -I {} gh issue close {} \
-              --comment "✅ Upstream sync succeeded — conflict no longer present."
+            --jq '.[].number' || echo "")
+          
+          if [[ -n "$issue_numbers" ]]; then
+            echo "$issue_numbers" | while IFS= read -r issue_num; do
+              [[ -n "$issue_num" ]] && gh issue close "$issue_num" \
+                --comment "✅ Upstream sync succeeded — conflict no longer present."
+            done
+          fi
 
       - name: Open or update conflict issue
         if: steps.merge.outputs.status == 'conflict'
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPSTREAM_HASH: ${{ steps.merge.outputs.upstream_hash }}
@@ -111,48 +128,64 @@ jobs:
           CONFLICTED_FILES: ${{ steps.merge.outputs.conflicted_files }}
           UPSTREAM_LOG: ${{ steps.merge.outputs.upstream_log }}
         run: |
-          BODY=$(cat << BODY_EOF
-          ## ⚠️ Upstream sync failed — manual merge required
+          current_date=$(date -u +"%Y-%m-%d %H:%M UTC")
+          
+          body=$(cat << 'BODY_EOF'
+## ⚠️ Upstream sync failed — manual merge required
 
-          **Date:** $(date -u +"%Y-%m-%d %H:%M UTC")
-          **Upstream commit:** \`$UPSTREAM_SHORT\` ($UPSTREAM_HASH)
+**Date:** ${current_date}
+**Upstream commit:** `${upstream_short}` (${upstream_hash})
 
-          ### Conflicting files
-          \`\`\`
-          ${CONFLICTED_FILES//,/$'\n'}
-          \`\`\`
+### Conflicting files
+```
+${CONFLICTED_FILES_NL}
+```
 
-          ### Incoming upstream commits
-          \`\`\`
-          $UPSTREAM_LOG
-          \`\`\`
+### Incoming upstream commits
+```
+${upstream_log}
+```
 
-          ### Resolve locally
-          \`\`\`bash
-          git fetch upstream dev
-          git checkout dev
-          git merge upstream/dev
-          # fix conflicts, then:
-          git add .
-          git commit
-          git push origin dev
-          \`\`\`
-          BODY_EOF
+### Resolve locally
+```bash
+git fetch upstream dev
+git checkout dev
+git merge upstream/dev
+# fix conflicts, then:
+git add .
+git commit
+git push origin dev
+```
+BODY_EOF
           )
+          
+          # Substitute variables in the body
+          upstream_hash="$UPSTREAM_HASH"
+          upstream_short="$UPSTREAM_SHORT"
+          conflicted_files="$CONFLICTED_FILES"
+          conflicted_files_nl="${CONFLICTED_FILES//,/$'\n'}"
+          upstream_log="$UPSTREAM_LOG"
+          body=$(CONFLICTED_FILES_NL="$conflicted_files_nl" \
+                 UPSTREAM_HASH="$upstream_hash" \
+                 UPSTREAM_SHORT="$upstream_short" \
+                 UPSTREAM_LOG="$upstream_log" \
+                 current_date="$current_date" \
+                 envsubst <<< "$body")
 
-          EXISTING=$(gh issue list \
+          existing_issue=$(gh issue list \
             --label "upstream-conflict" \
             --state open \
             --json number \
-            --jq '.[0].number // empty')
+            --jq '.[0].number // empty' || echo "")
 
-          if [ -n "$EXISTING" ]; then
-            gh issue comment "$EXISTING" --body "$BODY"
-            gh issue edit "$EXISTING" \
-              --title "⚠️ Upstream sync conflict — $(date -u +%Y-%m-%d)"
+          issue_title="⚠️ Upstream sync conflict — $(date -u +%Y-%m-%d)"
+
+          if [[ -n "$existing_issue" ]]; then
+            gh issue comment "$existing_issue" --body "$body"
+            gh issue edit "$existing_issue" --title "$issue_title"
           else
             gh issue create \
-              --title "⚠️ Upstream sync conflict — $(date -u +%Y-%m-%d)" \
-              --body "$BODY" \
+              --title "$issue_title" \
+              --body "$body" \
               --label "upstream-conflict"
           fi
