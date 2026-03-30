@@ -1,0 +1,158 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force merge even if already up-to-date'
+        type: boolean
+        default: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream and fetch
+        run: |
+          git remote add upstream https://github.com/anomalyco/opencode.git
+          git fetch upstream dev
+
+      - name: Check if up-to-date
+        id: check
+        run: |
+          if git merge-base --is-ancestor upstream/dev HEAD && [ "${{ inputs.force }}" != "true" ]; then
+            echo "status=up-to-date" >> $GITHUB_OUTPUT
+          else
+            echo "status=pending" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Attempt merge
+        id: merge
+        if: steps.check.outputs.status == 'pending'
+        run: |
+          UPSTREAM_HASH=$(git rev-parse upstream/dev)
+          UPSTREAM_SHORT=$(git rev-parse --short upstream/dev)
+          UPSTREAM_LOG=$(git log HEAD..upstream/dev --oneline | head -20)
+
+          if git merge --no-edit upstream/dev; then
+            echo "status=merged" >> $GITHUB_OUTPUT
+            echo "upstream_hash=$UPSTREAM_HASH" >> $GITHUB_OUTPUT
+            echo "upstream_short=$UPSTREAM_SHORT" >> $GITHUB_OUTPUT
+            {
+              echo "upstream_log<<EOF"
+              echo "$UPSTREAM_LOG"
+              echo "EOF"
+            } >> $GITHUB_OUTPUT
+          else
+            CONFLICTED=$(git diff --name-only --diff-filter=U | paste -sd ',' -)
+            git merge --abort
+            echo "status=conflict" >> $GITHUB_OUTPUT
+            echo "upstream_hash=$UPSTREAM_HASH" >> $GITHUB_OUTPUT
+            echo "upstream_short=$UPSTREAM_SHORT" >> $GITHUB_OUTPUT
+            echo "conflicted_files=$CONFLICTED" >> $GITHUB_OUTPUT
+            {
+              echo "upstream_log<<EOF"
+              echo "$UPSTREAM_LOG"
+              echo "EOF"
+            } >> $GITHUB_OUTPUT
+          fi
+
+      - name: Push merged changes
+        if: steps.merge.outputs.status == 'merged'
+        run: git push origin dev
+
+      - name: Ensure upstream-conflict label exists
+        if: steps.merge.outputs.status == 'conflict'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create "upstream-conflict" \
+            --color "FF4444" \
+            --description "Auto-merge from upstream failed due to conflicts" \
+            2>/dev/null || true
+
+      - name: Close stale conflict issues on clean merge
+        if: steps.check.outputs.status == 'up-to-date' || steps.merge.outputs.status == 'merged'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue list \
+            --label "upstream-conflict" \
+            --state open \
+            --json number \
+            --jq '.[].number' \
+          | xargs -r -I {} gh issue close {} \
+              --comment "✅ Upstream sync succeeded — conflict no longer present."
+
+      - name: Open or update conflict issue
+        if: steps.merge.outputs.status == 'conflict'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_HASH: ${{ steps.merge.outputs.upstream_hash }}
+          UPSTREAM_SHORT: ${{ steps.merge.outputs.upstream_short }}
+          CONFLICTED_FILES: ${{ steps.merge.outputs.conflicted_files }}
+          UPSTREAM_LOG: ${{ steps.merge.outputs.upstream_log }}
+        run: |
+          BODY=$(cat << BODY_EOF
+          ## ⚠️ Upstream sync failed — manual merge required
+
+          **Date:** $(date -u +"%Y-%m-%d %H:%M UTC")
+          **Upstream commit:** \`$UPSTREAM_SHORT\` ($UPSTREAM_HASH)
+
+          ### Conflicting files
+          \`\`\`
+          ${CONFLICTED_FILES//,/$'\n'}
+          \`\`\`
+
+          ### Incoming upstream commits
+          \`\`\`
+          $UPSTREAM_LOG
+          \`\`\`
+
+          ### Resolve locally
+          \`\`\`bash
+          git fetch upstream dev
+          git checkout dev
+          git merge upstream/dev
+          # fix conflicts, then:
+          git add .
+          git commit
+          git push origin dev
+          \`\`\`
+          BODY_EOF
+          )
+
+          EXISTING=$(gh issue list \
+            --label "upstream-conflict" \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')
+
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+            gh issue edit "$EXISTING" \
+              --title "⚠️ Upstream sync conflict — $(date -u +%Y-%m-%d)"
+          else
+            gh issue create \
+              --title "⚠️ Upstream sync conflict — $(date -u +%Y-%m-%d)" \
+              --body "$BODY" \
+              --label "upstream-conflict"
+          fi
