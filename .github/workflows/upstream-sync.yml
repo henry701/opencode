@@ -15,7 +15,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      issues: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -90,80 +89,42 @@ jobs:
         shell: bash
         run: git push origin dev
 
-      - name: Ensure upstream-conflict label exists
+      - name: Report conflict to job summary
         if: steps.merge.outputs.status == 'conflict'
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh label create "upstream-conflict" \
-            --color "FF4444" \
-            --description "Auto-merge from upstream failed due to conflicts" \
-            2>/dev/null || true
-
-      - name: Close stale conflict issues on clean merge
-        if: steps.check.outputs.status == 'up-to-date' || steps.merge.outputs.status == 'merged'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          issue_numbers=$(gh issue list \
-            --label "upstream-conflict" \
-            --state open \
-            --json number \
-            --jq '.[].number' || echo "")
-          
-          if [[ -n "$issue_numbers" ]]; then
-            echo "$issue_numbers" | while IFS= read -r issue_num; do
-              [[ -n "$issue_num" ]] && gh issue close "$issue_num" \
-                --comment "✅ Upstream sync succeeded — conflict no longer present."
-            done
-          fi
-
-      - name: Open or update conflict issue
-        if: steps.merge.outputs.status == 'conflict'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPSTREAM_HASH: ${{ steps.merge.outputs.upstream_hash }}
           UPSTREAM_SHORT: ${{ steps.merge.outputs.upstream_short }}
           CONFLICTED_FILES: ${{ steps.merge.outputs.conflicted_files }}
           UPSTREAM_LOG: ${{ steps.merge.outputs.upstream_log }}
         run: |
-          current_date=$(date -u +"%Y-%m-%d %H:%M UTC")
-          upstream_hash="$UPSTREAM_HASH"
-          upstream_short="$UPSTREAM_SHORT"
           conflicted_files_nl="${CONFLICTED_FILES//,/$'\n'}"
-          upstream_log="$UPSTREAM_LOG"
+          cat >> "$GITHUB_STEP_SUMMARY" << SUMMARY_EOF
+          ## ⚠️ Upstream sync conflict — manual merge required
 
-          resolve_steps=$(printf '%s' \
-            'git fetch upstream dev\n' \
-            'git checkout dev\n' \
-            'git merge upstream/dev\n' \
-            '# fix conflicts, then:\n' \
-            'git add .\n' \
-            'git commit\n' \
-            'git push origin dev')
+          **Date:** $(date -u +"%Y-%m-%d %H:%M UTC")
+          **Upstream commit:** \`${UPSTREAM_SHORT}\` (${UPSTREAM_HASH})
 
-          body=$(printf \
-            '## Warning: Upstream sync failed -- manual merge required\n\n**Date:** %s\n**Upstream commit:** `%s` (%s)\n\n### Conflicting files\n```\n%s\n```\n\n### Incoming upstream commits\n```\n%s\n```\n\n### Resolve locally\n```bash\n%s\n```' \
-            "$current_date" "$upstream_short" "$upstream_hash" \
-            "$conflicted_files_nl" "$upstream_log" "$resolve_steps")
+          ### Conflicting files
+          \`\`\`
+          ${conflicted_files_nl}
+          \`\`\`
 
-          existing_issue=$(gh issue list \
-            --label "upstream-conflict" \
-            --state open \
-            --json number \
-            --jq '.[0].number // empty' || echo "")
+          ### Incoming upstream commits
+          \`\`\`
+          ${UPSTREAM_LOG}
+          \`\`\`
 
-          issue_title="⚠️ Upstream sync conflict — $(date -u +%Y-%m-%d)"
-
-          if [[ -n "$existing_issue" ]]; then
-            gh issue comment "$existing_issue" --body "$body"
-            gh issue edit "$existing_issue" --title "$issue_title"
-          else
-            gh issue create \
-              --title "$issue_title" \
-              --body "$body" \
-              --label "upstream-conflict"
-          fi
+          ### Resolve locally
+          \`\`\`bash
+          git fetch upstream dev
+          git checkout dev
+          git merge upstream/dev
+          # fix conflicts, then:
+          git add .
+          git commit
+          git push origin dev
+          \`\`\`
+          SUMMARY_EOF
+          # Fail the step so the run shows as failed and triggers email notification
+          exit 1
