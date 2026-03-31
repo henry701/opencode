@@ -189,10 +189,12 @@ export namespace ProviderTransform {
     return msgs
   }
 
-  function applyCaching(msgs: ModelMessage[], model: Provider.Model): ModelMessage[] {
+  function applyCaching(msgs: ModelMessage[], model: Provider.Model, extendedTTL?: boolean): ModelMessage[] {
     const system = msgs.filter((msg) => msg.role === "system").slice(0, 2)
     const final = msgs.filter((msg) => msg.role !== "system").slice(-2)
 
+    // Use 1h cache TTL on first system block (2x write cost vs 1.25x for default 5-min)
+    const anthropicCache = extendedTTL ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" }
     const providerOptions = {
       anthropic: {
         cacheControl: { type: "ephemeral" },
@@ -212,6 +214,9 @@ export namespace ProviderTransform {
     }
 
     for (const msg of unique([...system, ...final])) {
+      const options = msg === system[0]
+        ? { ...providerOptions, anthropic: { cacheControl: anthropicCache } }
+        : providerOptions
       const useMessageLevelOptions =
         model.providerID === "anthropic" ||
         model.providerID.includes("bedrock") ||
@@ -226,12 +231,12 @@ export namespace ProviderTransform {
           lastContent.type !== "tool-approval-request" &&
           lastContent.type !== "tool-approval-response"
         ) {
-          lastContent.providerOptions = mergeDeep(lastContent.providerOptions ?? {}, providerOptions)
+          lastContent.providerOptions = mergeDeep(lastContent.providerOptions ?? {}, options)
           continue
         }
       }
 
-      msg.providerOptions = mergeDeep(msg.providerOptions ?? {}, providerOptions)
+      msg.providerOptions = mergeDeep(msg.providerOptions ?? {}, options)
     }
 
     return msgs
@@ -288,7 +293,7 @@ export namespace ProviderTransform {
         model.api.npm === "@ai-sdk/anthropic") &&
       model.api.npm !== "@ai-sdk/gateway"
     ) {
-      msgs = applyCaching(msgs, model)
+      msgs = applyCaching(msgs, model, (options.extendedTTL as boolean) ?? Flag.OPENCODE_EXPERIMENTAL_CACHE_1H_TTL)
     }
 
     // Remap providerOptions keys from stored providerID to expected SDK key

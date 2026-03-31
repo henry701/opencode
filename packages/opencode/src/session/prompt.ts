@@ -1504,7 +1504,13 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   instruction.system().pipe(Effect.orDie),
                   Effect.promise(() => MessageV2.toModelMessages(msgs, model)),
                 ])
-                const system = [...env, ...(skills ? [skills] : []), ...instructions]
+                const system = [
+                  ...(skills.global ? [skills.global] : []),
+                  ...env,
+                  ...(skills.project ? [skills.project] : []),
+                  ...instructions,
+                ]
+                const systemSplit = skills.global ? 1 : 0
                 const format = lastUser.format ?? { type: "text" as const }
                 if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
                 const result = yield* handle.process({
@@ -1513,6 +1519,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   permission: session.permission,
                   sessionID,
                   system,
+                  systemSplit,
                   messages: [...modelMsgs, ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS }] : [])],
                   tools,
                   model,

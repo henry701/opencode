@@ -161,7 +161,10 @@ export namespace Instruction {
           return paths
         })
 
+        let cachedSystem: string[] | undefined
         const system = Effect.fn("Instruction.system")(function* () {
+          if (Flag.OPENCODE_EXPERIMENTAL_CACHE_STABILIZATION && cachedSystem) return cachedSystem
+
           const config = yield* cfg.get()
           const paths = yield* systemPaths()
           const urls = (config.instructions ?? []).filter(
@@ -171,10 +174,12 @@ export namespace Instruction {
           const files = yield* Effect.forEach(Array.from(paths), read, { concurrency: 8 })
           const remote = yield* Effect.forEach(urls, fetch, { concurrency: 4 })
 
-          return [
+          const result = [
             ...Array.from(paths).flatMap((item, i) => (files[i] ? [`Instructions from: ${item}\n${files[i]}`] : [])),
             ...urls.flatMap((item, i) => (remote[i] ? [`Instructions from: ${item}\n${remote[i]}`] : [])),
           ]
+          if (Flag.OPENCODE_EXPERIMENTAL_CACHE_STABILIZATION) cachedSystem = result
+          return result
         })
 
         const find = Effect.fn("Instruction.find")(function* (dir: string) {

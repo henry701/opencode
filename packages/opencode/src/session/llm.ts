@@ -29,6 +29,7 @@ export namespace LLM {
     agent: Agent.Info
     permission?: Permission.Ruleset
     system: string[]
+    systemSplit?: number
     messages: ModelMessage[]
     small?: boolean
     tools: Record<string, Tool>
@@ -98,19 +99,17 @@ export namespace LLM {
     // TODO: move this to a proper hook
     const isOpenaiOauth = provider.id === "openai" && auth?.type === "oauth"
 
-    const system: string[] = []
-    system.push(
-      [
-        // use agent prompt otherwise provider prompt
-        ...(input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)),
-        // any custom prompt passed into this call
-        ...input.system,
-        // any custom prompt from last user message
-        ...(input.user.system ? [input.user.system] : []),
-      ]
-        .filter((x) => x)
-        .join("\n"),
-    )
+    const prompt = input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)
+    const split = input.systemSplit ?? input.system.length
+    const shouldSplit = provider.options?.["splitSystemPrompt"] !== false
+    const system = shouldSplit
+      ? [
+          [...prompt, ...input.system.slice(0, split)].filter(Boolean).join("\n"),
+          [...input.system.slice(split), ...(input.user.system ? [input.user.system] : [])].filter(Boolean).join("\n"),
+        ].filter(Boolean)
+      : [
+          [...prompt, ...input.system, ...(input.user.system ? [input.user.system] : [])].filter(Boolean).join("\n"),
+        ].filter(Boolean)
 
     const header = system[0]
     await Plugin.trigger(
@@ -119,7 +118,7 @@ export namespace LLM {
       { system },
     )
     // rejoin to maintain 2-part structure for caching if header unchanged
-    if (system.length > 2 && system[0] === header) {
+    if (shouldSplit && system.length > 2 && system[0] === header) {
       const rest = system.slice(1)
       system.length = 0
       system.push(header, rest.join("\n"))
