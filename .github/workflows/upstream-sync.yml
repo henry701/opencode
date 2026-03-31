@@ -60,7 +60,7 @@ jobs:
         run: |
           upstream_hash=$(git rev-parse upstream/dev)
           upstream_short=$(git rev-parse --short upstream/dev)
-          upstream_log=$(git log HEAD..upstream/dev --oneline | head -20)
+          upstream_log=$(git log HEAD..upstream/dev --oneline | head -20 || true)
 
           if git merge --no-edit upstream/dev; then
             echo "status=merged" >> "$GITHUB_OUTPUT"
