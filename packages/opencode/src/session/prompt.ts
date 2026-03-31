@@ -319,15 +319,17 @@ export namespace SessionPrompt {
       }
 
       if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
+
+      // Check if the last assistant message has tool parts — some OpenAI-compatible providers
+      // (e.g. Gemini, LiteLLM) return finish_reason "stop" instead of "tool_calls" when tools
+      // were called, which would cause the agent loop to exit prematurely.
+      const lastAssistantMsg = msgs.findLast((m) => m.info.role === "assistant" && m.info.id === lastAssistant?.id)
+      const hasToolCalls = lastAssistantMsg?.parts.some((p) => p.type === "tool") ?? false
+
       if (
         lastAssistant?.finish &&
-        ![
-          "tool-calls",
-          // in v6 unknown became other but other existed in v5 too and was distinctly different
-          // I think there are certain providers that used to have bad stop reasons, not rlly sure which
-          // ones if any still have this?
-          // "unknown",
-        ].includes(lastAssistant.finish) &&
+        !["tool-calls"].includes(lastAssistant.finish) &&
+        !hasToolCalls &&
         lastUser.id < lastAssistant.id
       ) {
         log.info("exiting loop", { sessionID })
@@ -678,13 +680,17 @@ export namespace SessionPrompt {
 
       await Plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
-      // Build system prompt, adding structured output instruction if needed
+      // Build system prompt: global instructions + global skills first (stable), then env + project (dynamic)
+      const instructions = await InstructionPrompt.system()
       const skills = await SystemPrompt.skills(agent)
       const system = [
+        ...instructions.global,
+        ...(skills.global ? [skills.global] : []),
         ...(await SystemPrompt.environment(model)),
-        ...(skills ? [skills] : []),
-        ...(await InstructionPrompt.system()),
+        ...(skills.project ? [skills.project] : []),
+        ...instructions.project,
       ]
+      const systemSplit = instructions.global.length + (skills.global ? 1 : 0)
       const format = lastUser.format ?? { type: "text" }
       if (format.type === "json_schema") {
         system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
@@ -697,6 +703,7 @@ export namespace SessionPrompt {
         abort,
         sessionID,
         system,
+        systemSplit,
         messages: [
           ...(await MessageV2.toModelMessages(msgs, model)),
           ...(isLastStep

@@ -450,10 +450,7 @@ export const BashTool = Tool.define("bash", async () => {
   log.info("bash tool using shell", { shell })
 
   return {
-    description: DESCRIPTION.replaceAll("${directory}", Instance.directory)
-      .replaceAll("${os}", process.platform)
-      .replaceAll("${shell}", name)
-      .replaceAll("${chaining}", chain)
+    description: DESCRIPTION.replaceAll("${chaining}", chain)
       .replaceAll("${maxLines}", String(Truncate.MAX_LINES))
       .replaceAll("${maxBytes}", String(Truncate.MAX_BYTES)),
     parameters: z.object({
@@ -462,7 +459,7 @@ export const BashTool = Tool.define("bash", async () => {
       workdir: z
         .string()
         .describe(
-          `The working directory to run the command in. Defaults to ${Instance.directory}. Use this instead of 'cd' commands.`,
+          `The working directory to run the command in. Defaults to the current working directory. Use this instead of 'cd' commands.`,
         )
         .optional(),
       description: z

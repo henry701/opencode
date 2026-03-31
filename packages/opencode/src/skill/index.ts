@@ -30,6 +30,7 @@ export namespace Skill {
     description: z.string(),
     location: z.string(),
     content: z.string(),
+    scope: z.enum(["global", "project"]).default("project"),
   })
   export type Info = z.infer<typeof Info>
 
@@ -63,7 +64,7 @@ export namespace Skill {
     readonly available: (agent?: Agent.Info) => Effect.Effect<Info[]>
   }
 
-  const add = Effect.fnUntraced(function* (state: State, match: string, bus: Bus.Interface) {
+  const add = Effect.fnUntraced(function* (state: State, match: string, bus: Bus.Interface, scope: "global" | "project" = "project") {
     const md = yield* Effect.tryPromise({
       try: () => ConfigMarkdown.parse(match),
       catch: (err) => err,
@@ -100,6 +101,7 @@ export namespace Skill {
       description: parsed.data.description,
       location: match,
       content: md.content,
+      scope,
     }
   })
 
@@ -108,7 +110,7 @@ export namespace Skill {
     bus: Bus.Interface,
     root: string,
     pattern: string,
-    opts?: { dot?: boolean; scope?: string },
+    opts?: { dot?: boolean; scope?: "global" | "project" },
   ) {
     const matches = yield* Effect.tryPromise({
       try: () =>
@@ -128,7 +130,7 @@ export namespace Skill {
       }),
     )
 
-    yield* Effect.forEach(matches, (match) => add(state, match, bus), {
+    yield* Effect.forEach(matches, (match) => add(state, match, bus, opts?.scope ?? "project"), {
       concurrency: "unbounded",
       discard: true,
     })
@@ -169,7 +171,7 @@ export namespace Skill {
 
     const configDirs = yield* config.directories()
     for (const dir of configDirs) {
-      yield* scan(state, bus, dir, OPENCODE_SKILL_PATTERN)
+      yield* scan(state, bus, dir, OPENCODE_SKILL_PATTERN, { scope: "global" })
     }
 
     const cfg = yield* config.get()
