@@ -1,6 +1,6 @@
 import type { Message, Part } from "@opencode-ai/sdk/v2/client"
 
-export type SessionContextBreakdownKey = "system" | "user" | "assistant" | "tool" | "other"
+export type SessionContextBreakdownKey = "system" | "user" | "assistant" | "tool" | "toolDefs" | "other"
 
 export type SessionContextBreakdownSegment = {
   key: SessionContextBreakdownKey
@@ -33,13 +33,17 @@ const charsFromAssistantPart = (part: Part) => {
 }
 
 const build = (
-  tokens: { system: number; user: number; assistant: number; tool: number; other: number },
+  tokens: { system: number; user: number; assistant: number; tool: number; toolDefs: number; other: number },
   input: number,
 ) => {
   return [
     {
       key: "system",
       tokens: tokens.system,
+    },
+    {
+      key: "toolDefs",
+      tokens: tokens.toolDefs,
     },
     {
       key: "user",
@@ -75,6 +79,18 @@ export function estimateSessionContextBreakdown(args: {
 }) {
   if (!args.input) return []
 
+  const toolDefsChars = (() => {
+    let lastToolDefs = ""
+    for (let i = args.messages.length - 1; i >= 0; i--) {
+      const msg = args.messages[i]
+      if (msg.role === "assistant" && "tool_defs" in msg && typeof msg.tool_defs === "string") {
+        lastToolDefs = msg.tool_defs
+        break
+      }
+    }
+    return lastToolDefs.length
+  })()
+
   const counts = args.messages.reduce(
     (acc, msg) => {
       const parts = args.parts[msg.id] ?? []
@@ -105,6 +121,7 @@ export function estimateSessionContextBreakdown(args: {
       user: 0,
       assistant: 0,
       tool: 0,
+      toolDefs: toolDefsChars,
     },
   )
 
@@ -113,8 +130,9 @@ export function estimateSessionContextBreakdown(args: {
     user: estimateTokens(counts.user),
     assistant: estimateTokens(counts.assistant),
     tool: estimateTokens(counts.tool),
+    toolDefs: estimateTokens(counts.toolDefs),
   }
-  const estimated = tokens.system + tokens.user + tokens.assistant + tokens.tool
+  const estimated = tokens.system + tokens.user + tokens.assistant + tokens.tool + tokens.toolDefs
 
   if (estimated <= args.input) {
     return build({ ...tokens, other: args.input - estimated }, args.input)
@@ -126,7 +144,8 @@ export function estimateSessionContextBreakdown(args: {
     user: Math.floor(tokens.user * scale),
     assistant: Math.floor(tokens.assistant * scale),
     tool: Math.floor(tokens.tool * scale),
+    toolDefs: Math.floor(tokens.toolDefs * scale),
   }
-  const total = scaled.system + scaled.user + scaled.assistant + scaled.tool
+  const total = scaled.system + scaled.user + scaled.assistant + scaled.tool + scaled.toolDefs
   return build({ ...scaled, other: Math.max(0, args.input - total) }, args.input)
 }

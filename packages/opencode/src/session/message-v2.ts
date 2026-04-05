@@ -444,6 +444,8 @@ export namespace MessageV2 {
     structured: z.any().optional(),
     variant: z.string().optional(),
     finish: z.string().optional(),
+    tool_defs: z.string().optional(),
+    system_prompt: z.string().optional(),
   }).meta({
     ref: "AssistantMessage",
   })
