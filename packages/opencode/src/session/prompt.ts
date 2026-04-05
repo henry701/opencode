@@ -1541,16 +1541,17 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   toolChoice: format.type === "json_schema" ? "required" : undefined,
                 })
 
-                const toolDefsChanged = (() => {
+                const shouldStore = (() => {
                   for (let i = msgs.length - 1; i >= 0; i--) {
                     const m = msgs[i]
-                    if (m.info.role === "assistant" && m.info.tool_defs === toolDefs) {
-                      return false
+                    if (m.info.role === "assistant") {
+                      const sameToolDefs = m.info.tool_defs === toolDefs
+                      const sameSystem = m.info.system_prompt === fullSystem
+                      if (sameToolDefs && sameSystem) return false
                     }
                   }
                   return true
                 })()
-                const shouldStore = step === 1 || toolDefsChanged
 
                 if (shouldStore) {
                   handle.message.tool_defs = toolDefs
