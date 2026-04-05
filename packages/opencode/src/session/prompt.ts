@@ -1514,6 +1514,18 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 const systemSplit = skills.global ? 1 : 0
                 const format = lastUser.format ?? { type: "text" as const }
                 if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
+
+                const providerPrompt = agent.prompt ? [agent.prompt] : SystemPrompt.provider(model)
+                const fullSystem = [...providerPrompt, ...system].filter(Boolean).join("\n")
+
+                const toolDefs = JSON.stringify(
+                  Object.entries(tools).map(([name, t]) => ({
+                    name,
+                    description: t.description,
+                    parameters: t.inputSchema,
+                  })),
+                )
+
                 const result = yield* handle.process({
                   user: lastUser,
                   agent,
@@ -1526,6 +1538,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   model,
                   toolChoice: format.type === "json_schema" ? "required" : undefined,
                 })
+
+                handle.message.tool_defs = toolDefs
+                handle.message.system_prompt = fullSystem
+                yield* sessions.updateMessage(handle.message)
 
                 if (structured !== undefined) {
                   handle.message.structured = structured
@@ -1556,6 +1572,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                     overflow: !handle.message.finish,
                   })
                 }
+
                 return "continue" as const
               }),
               Effect.fnUntraced(function* (exit) {

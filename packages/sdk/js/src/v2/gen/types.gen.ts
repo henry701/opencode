@@ -596,6 +596,8 @@ export type AssistantMessage = {
   structured?: unknown
   variant?: string
   finish?: string
+  tool_defs?: string
+  system_prompt?: string
 }
 
 export type Message = UserMessage | AssistantMessage
@@ -5121,6 +5123,7 @@ export type AppSkillsResponses = {
     description: string
     location: string
     content: string
+    scope?: "global" | "project"
   }>
 }
 
