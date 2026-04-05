@@ -160,6 +160,28 @@ export function SessionContextTab() {
     return trimmed
   })
 
+  const systemMessage = createMemo(() => {
+    const prompt = systemPrompt()
+    if (!prompt) return
+    const msg = findLast(visibleUserMessages(), (m) => !!m.system)
+    return {
+      id: "system",
+      sessionID: params.id ?? "",
+      role: "system",
+      time: { created: msg?.time.created ?? 0 },
+      system: prompt,
+      agent: msg?.agent ?? "",
+      model: msg?.model ?? { providerID: "", modelID: "" },
+    } as unknown as Message
+  })
+
+  const messagesWithSystem = createMemo(() => {
+    const sys = systemMessage()
+    const msgs = messages()
+    if (!sys) return msgs
+    return [sys, ...msgs]
+  })
+
   const providerLabel = createMemo(() => {
     const c = ctx()
     if (!c) return "—"
@@ -328,7 +350,7 @@ export function SessionContextTab() {
         <div class="flex flex-col gap-2">
           <div class="text-12-regular text-text-weak">{language.t("context.rawMessages.title")}</div>
           <Accordion multiple>
-            <For each={messages()}>
+            <For each={messagesWithSystem()}>
               {(message) => (
                 <RawMessage message={message} getParts={getParts} onRendered={restoreScroll} time={formatter().time} />
               )}
