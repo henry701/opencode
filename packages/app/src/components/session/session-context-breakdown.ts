@@ -79,12 +79,17 @@ export function estimateSessionContextBreakdown(args: {
 }) {
   if (!args.input) return []
 
-  const toolDefsChars = args.messages.reduce((sum, msg) => {
-    if (msg.role === "assistant" && "tool_defs" in msg && typeof msg.tool_defs === "string") {
-      return sum + msg.tool_defs.length
+  const toolDefsChars = (() => {
+    let lastToolDefs = ""
+    for (let i = args.messages.length - 1; i >= 0; i--) {
+      const msg = args.messages[i]
+      if (msg.role === "assistant" && "tool_defs" in msg && typeof msg.tool_defs === "string") {
+        lastToolDefs = msg.tool_defs
+        break
+      }
     }
-    return sum
-  }, 0)
+    return lastToolDefs.length
+  })()
 
   const counts = args.messages.reduce(
     (acc, msg) => {

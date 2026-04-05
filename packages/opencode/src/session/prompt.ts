@@ -1516,7 +1516,9 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
 
                 const providerPrompt = agent.prompt ? [agent.prompt] : SystemPrompt.provider(model)
-                const fullSystem = [...providerPrompt, ...system].filter(Boolean).join("\n")
+                const fullSystem = [...providerPrompt, ...system, ...(lastUser.system ? [lastUser.system] : [])]
+                  .filter(Boolean)
+                  .join("\n")
 
                 const toolDefs = JSON.stringify(
                   Object.entries(tools).map(([name, t]) => ({
@@ -1539,9 +1541,22 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   toolChoice: format.type === "json_schema" ? "required" : undefined,
                 })
 
-                handle.message.tool_defs = toolDefs
-                handle.message.system_prompt = fullSystem
-                yield* sessions.updateMessage(handle.message)
+                const toolDefsChanged = (() => {
+                  for (let i = msgs.length - 1; i >= 0; i--) {
+                    const m = msgs[i]
+                    if (m.info.role === "assistant" && m.info.tool_defs === toolDefs) {
+                      return false
+                    }
+                  }
+                  return true
+                })()
+                const shouldStore = step === 1 || toolDefsChanged
+
+                if (shouldStore) {
+                  handle.message.tool_defs = toolDefs
+                  handle.message.system_prompt = fullSystem
+                  yield* sessions.updateMessage(handle.message)
+                }
 
                 if (structured !== undefined) {
                   handle.message.structured = structured
