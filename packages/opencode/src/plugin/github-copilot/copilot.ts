@@ -37,6 +37,46 @@ function fix(model: Model): Model {
   }
 }
 
+
+const SYNTHETIC_PATTERNS = [
+  /^Tool \w+ returned an attachment:/,
+  /^What did we do so far\?/,
+  /^The following tool was executed by the user$/,
+  /^Tool result:/i,
+  /^Tool output:/i,
+]
+
+function isSynthetic(text: string): boolean {
+  if (!text || typeof text !== "string") return false
+  const trimmed = text.trim()
+  return SYNTHETIC_PATTERNS.some((p) => p.test(trimmed))
+}
+
+function hasSyntheticContent(content: unknown): boolean {
+  if (typeof content === "string") return isSynthetic(content)
+  if (!Array.isArray(content)) return false
+  return content.some((part: any) => isSynthetic(part.text || part.content || ""))
+}
+
+function detectAgent(messages: any[]): boolean {
+  if (!Array.isArray(messages) || messages.length === 0) return false
+  const hasNonUser = messages.some((msg: any) => ["assistant", "tool"].includes(msg.role))
+  if (hasNonUser) return true
+  const last = messages[messages.length - 1]
+  if (last?.role === "user" && hasSyntheticContent(last.content)) return true
+  return false
+}
+
+function detectVision(messages: any[]): boolean {
+  return (
+    messages?.some((msg: any) => {
+      if (!Array.isArray(msg.content)) return false
+      return msg.content.some((part: any) => part.type === "image_url" || part.type === "input_image" || part.type === "image" ||
+        (part.type === "tool_result" && Array.isArray(part.content) && part.content.some((n: any) => n.type === "image")))
+    }) ?? false
+  )
+}
+
 export async function CopilotAuthPlugin(input: PluginInput): Promise<Hooks> {
   const sdk = input.client
   return {
@@ -79,54 +119,14 @@ export async function CopilotAuthPlugin(input: PluginInput): Promise<Hooks> {
             const { isVision, isAgent } = iife(() => {
               try {
                 const body = typeof init?.body === "string" ? JSON.parse(init.body) : init?.body
-
-                // Completions API
-                if (body?.messages && url.includes("completions")) {
-                  const last = body.messages[body.messages.length - 1]
-                  return {
-                    isVision: body.messages.some(
-                      (msg: any) =>
-                        Array.isArray(msg.content) && msg.content.some((part: any) => part.type === "image_url"),
-                    ),
-                    isAgent: last?.role !== "user",
-                  }
+                const messages = body?.messages || body?.input || []
+                return {
+                  isVision: detectVision(messages),
+                  isAgent: detectAgent(messages),
                 }
-
-                // Responses API
-                if (body?.input) {
-                  const last = body.input[body.input.length - 1]
-                  return {
-                    isVision: body.input.some(
-                      (item: any) =>
-                        Array.isArray(item?.content) && item.content.some((part: any) => part.type === "input_image"),
-                    ),
-                    isAgent: last?.role !== "user",
-                  }
-                }
-
-                // Messages API
-                if (body?.messages) {
-                  const last = body.messages[body.messages.length - 1]
-                  const hasNonToolCalls =
-                    Array.isArray(last?.content) && last.content.some((part: any) => part?.type !== "tool_result")
-                  return {
-                    isVision: body.messages.some(
-                      (item: any) =>
-                        Array.isArray(item?.content) &&
-                        item.content.some(
-                          (part: any) =>
-                            part?.type === "image" ||
-                            // images can be nested inside tool_result content
-                            (part?.type === "tool_result" &&
-                              Array.isArray(part?.content) &&
-                              part.content.some((nested: any) => nested?.type === "image")),
-                        ),
-                    ),
-                    isAgent: !(last?.role === "user" && hasNonToolCalls),
-                  }
-                }
-              } catch {}
-              return { isVision: false, isAgent: false }
+              } catch {
+                return { isVision: false, isAgent: false }
+              }
             })
 
             const headers: Record<string, string> = {
