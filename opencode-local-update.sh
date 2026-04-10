@@ -1,27 +1,25 @@
 #!/usr/bin/env bash
-# opencode-local-update.sh — pull, build, install opencode-local; skip if already on same commit.
+# opencode-local-update.sh — update local production checkout, then build and install opencode-local.
 # Invoked by opencode-local-build.service.
 set -euo pipefail
 
-REPO_ROOT="/home/henry/My_Programming/OpenSourceCopies/opencode"
-PKG_DIR="$REPO_ROOT/packages/opencode"
-INSTALL_DIR="$HOME/.local/bin"
-BINARY_NAME="opencode-local"
-SERVICE_NAME="opencode-server"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STAMP_FILE="$HOME/.local/share/opencode-local-build.stamp"
+REMOTE_NAME="henry701"
+BRANCH_NAME="production"
+REMOTE_REF="$REMOTE_NAME/$BRANCH_NAME"
 
-export PATH="$INSTALL_DIR:/usr/local/bin:/usr/bin:/bin:$REPO_ROOT/node_modules/.bin"
-export SSH_AUTH_SOCK="/run/user/$(id -u)/ssh-tpm-agent.sock"
+export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$REPO_ROOT/node_modules/.bin"
+export SSH_AUTH_SOCK="/run/user/$UID/ssh-tpm-agent.sock"
 
 cd "$REPO_ROOT"
 
-echo "==> Fetching henry701/production..."
-git fetch henry701 production 2>&1
+echo "==> Fetching $REMOTE_REF..."
+git fetch "$REMOTE_NAME" "$BRANCH_NAME" 2>&1
 
-REMOTE_HASH=$(git rev-parse henry701/production)
-REMOTE_SHORT=$(git rev-parse --short henry701/production)
+REMOTE_HASH=$(git rev-parse "$REMOTE_REF")
+REMOTE_SHORT=$(git rev-parse --short "$REMOTE_REF")
 
-# Duplicate detection: compare against last installed commit
 LAST_HASH=""
 [[ -f "$STAMP_FILE" ]] && LAST_HASH=$(cat "$STAMP_FILE")
 
@@ -30,36 +28,19 @@ if [[ "$REMOTE_HASH" == "$LAST_HASH" ]]; then
   exit 0
 fi
 
-echo "==> New commit detected: $REMOTE_SHORT (was: ${LAST_HASH:0:9:-none})"
-echo "==> Resetting to henry701/production..."
-git checkout production
-git reset --hard henry701/production
+LAST_SHORT="none"
+[[ -n "$LAST_HASH" ]] && LAST_SHORT="${LAST_HASH:0:9}"
+
+echo "==> New commit detected: $REMOTE_SHORT (was: $LAST_SHORT)"
+echo "==> Resetting to $REMOTE_REF..."
+git checkout "$BRANCH_NAME"
+git reset --hard "$REMOTE_REF"
 
 echo "==> Installing dependencies..."
-cd "$REPO_ROOT"
-bun install 2>&1 | tail -3
+bun install --minimum-release-age 0 --frozen-lockfile
 
-echo "==> Building (native linux-x64, --single)..."
-cd "$PKG_DIR"
-bun run script/build.ts --single
+echo "==> Building and reinstalling from $BRANCH_NAME..."
+"$REPO_ROOT/build-local.sh"
 
-BUILT_BIN="$PKG_DIR/dist/opencode-linux-x64/bin/opencode"
-[[ ! -f "$BUILT_BIN" ]] && { echo "ERROR: binary not found at $BUILT_BIN" >&2; exit 1; }
-
-echo "==> Smoke test..."
-"$BUILT_BIN" --version
-
-echo "==> Installing to $INSTALL_DIR/$BINARY_NAME..."
-mkdir -p "$INSTALL_DIR"
-cp -f "$BUILT_BIN" "$INSTALL_DIR/$BINARY_NAME"
-chmod +x "$INSTALL_DIR/$BINARY_NAME"
-echo "    installed: $("$INSTALL_DIR/$BINARY_NAME" --version)"
-
-echo "==> Restarting $SERVICE_NAME..."
-XDG_RUNTIME_DIR="/run/user/$(id -u)" systemctl --user restart "$SERVICE_NAME"
-sleep 1
-XDG_RUNTIME_DIR="/run/user/$(id -u)" systemctl --user status "$SERVICE_NAME" --no-pager | tail -4
-
-# Stamp the successfully installed commit
 echo "$REMOTE_HASH" > "$STAMP_FILE"
 echo "==> Done — stamped $REMOTE_SHORT"
