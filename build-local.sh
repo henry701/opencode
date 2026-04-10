@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # build-local.sh — build opencode for current platform and install as opencode-local
-# Untracked, do not commit.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
