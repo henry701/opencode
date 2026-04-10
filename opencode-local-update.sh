@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # opencode-local-update.sh — pull, build, install opencode-local; skip if already on same commit.
-# Invoked by opencode-local-build.service. Not committed to the repo.
+# Invoked by opencode-local-build.service.
 set -euo pipefail
 
 REPO_ROOT="/home/henry/My_Programming/OpenSourceCopies/opencode"
@@ -15,11 +15,11 @@ export SSH_AUTH_SOCK="/run/user/$(id -u)/ssh-tpm-agent.sock"
 
 cd "$REPO_ROOT"
 
-echo "==> Fetching henry701/dev..."
-git fetch henry701 dev 2>&1
+echo "==> Fetching henry701/production..."
+git fetch henry701 production 2>&1
 
-REMOTE_HASH=$(git rev-parse henry701/dev)
-REMOTE_SHORT=$(git rev-parse --short henry701/dev)
+REMOTE_HASH=$(git rev-parse henry701/production)
+REMOTE_SHORT=$(git rev-parse --short henry701/production)
 
 # Duplicate detection: compare against last installed commit
 LAST_HASH=""
@@ -31,9 +31,9 @@ if [[ "$REMOTE_HASH" == "$LAST_HASH" ]]; then
 fi
 
 echo "==> New commit detected: $REMOTE_SHORT (was: ${LAST_HASH:0:9:-none})"
-echo "==> Resetting to henry701/dev..."
-git checkout dev
-git reset --hard henry701/dev
+echo "==> Resetting to henry701/production..."
+git checkout production
+git reset --hard henry701/production
 
 echo "==> Installing dependencies..."
 cd "$REPO_ROOT"
