@@ -12,17 +12,24 @@ on:
 
 jobs:
   sync:
+    name: Sync ${{ matrix.branch }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    strategy:
+      fail-fast: false
+      matrix:
+        branch:
+          - production
+          - dev
 
     steps:
       - name: Checkout fork
         uses: actions/checkout@v4.2.2
         with:
-          ref: production
+          ref: ${{ matrix.branch }}
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -38,7 +45,7 @@ jobs:
           if ! git remote get-url upstream >/dev/null 2>&1; then
             git remote add upstream https://github.com/anomalyco/opencode.git
           fi
-          git fetch upstream production
+          git fetch upstream ${{ matrix.branch }}
 
       - name: Check if up-to-date
         id: check
@@ -46,7 +53,7 @@ jobs:
         env:
           FORCE_INPUT: ${{ inputs.force }}
         run: |
-          if git merge-base --is-ancestor upstream/production HEAD && [[ "$FORCE_INPUT" != "true" ]]; then
+          if git merge-base --is-ancestor upstream/${{ matrix.branch }} HEAD && [[ "$FORCE_INPUT" != "true" ]]; then
             echo "status=up-to-date" >> "$GITHUB_OUTPUT"
           else
             echo "status=pending" >> "$GITHUB_OUTPUT"
@@ -57,11 +64,11 @@ jobs:
         if: steps.check.outputs.status == 'pending'
         shell: bash
         run: |
-          upstream_hash=$(git rev-parse upstream/production)
-          upstream_short=$(git rev-parse --short upstream/production)
-          upstream_log=$(git log HEAD..upstream/production --oneline | head -20 || true)
+          upstream_hash=$(git rev-parse upstream/${{ matrix.branch }})
+          upstream_short=$(git rev-parse --short upstream/${{ matrix.branch }})
+          upstream_log=$(git log HEAD..upstream/${{ matrix.branch }} --oneline | head -20 || true)
 
-          if git merge --no-edit upstream/production; then
+          if git merge --no-edit upstream/${{ matrix.branch }}; then
             echo "status=merged" >> "$GITHUB_OUTPUT"
             echo "upstream_hash=${upstream_hash}" >> "$GITHUB_OUTPUT"
             echo "upstream_short=${upstream_short}" >> "$GITHUB_OUTPUT"
@@ -87,12 +94,13 @@ jobs:
       - name: Push merged changes
         if: steps.merge.outputs.status == 'merged'
         shell: bash
-        run: git push origin production
+        run: git push origin ${{ matrix.branch }}
 
       - name: Report conflict to job summary
         if: steps.merge.outputs.status == 'conflict'
         shell: bash
         env:
+          TARGET_BRANCH: ${{ matrix.branch }}
           UPSTREAM_HASH: ${{ steps.merge.outputs.upstream_hash }}
           UPSTREAM_SHORT: ${{ steps.merge.outputs.upstream_short }}
           CONFLICTED_FILES: ${{ steps.merge.outputs.conflicted_files }}
@@ -100,9 +108,10 @@ jobs:
         run: |
           conflicted_files_nl="${CONFLICTED_FILES//,/$'\n'}"
           cat >> "$GITHUB_STEP_SUMMARY" << SUMMARY_EOF
-          ## ⚠️ Upstream sync conflict — manual merge required
+          ## ⚠️ Upstream sync conflict on ${TARGET_BRANCH} — manual merge required
 
           **Date:** $(date -u +"%Y-%m-%d %H:%M UTC")
+          **Branch:** \`${TARGET_BRANCH}\`
           **Upstream commit:** \`${UPSTREAM_SHORT}\` (${UPSTREAM_HASH})
 
           ### Conflicting files
@@ -117,13 +126,13 @@ jobs:
 
           ### Resolve locally
           \`\`\`bash
-          git fetch upstream production
-          git checkout production
-          git merge upstream/production
+          git fetch upstream ${TARGET_BRANCH}
+          git checkout ${TARGET_BRANCH}
+          git merge upstream/${TARGET_BRANCH}
           # fix conflicts, then:
           git add .
           git commit
-          git push origin production
+          git push origin ${TARGET_BRANCH}
           \`\`\`
           SUMMARY_EOF
           exit 1
