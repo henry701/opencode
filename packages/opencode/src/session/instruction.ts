@@ -1,6 +1,6 @@
 import os from "os"
 import path from "path"
-import { Effect, Layer, ServiceMap } from "effect"
+import { Effect, Layer, Context } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { Config } from "@/config/config"
 import { InstanceState } from "@/effect/instance-state"
@@ -64,7 +64,7 @@ export namespace Instruction {
     ) => Effect.Effect<{ filepath: string; content: string }[], AppFileSystem.Error>
   }
 
-  export class Service extends ServiceMap.Service<Service, Interface>()("@opencode/Instruction") {}
+  export class Service extends Context.Service<Service, Interface>()("@opencode/Instruction") {}
 
   export const layer: Layer.Layer<Service, never, AppFileSystem.Service | Config.Service | HttpClient.HttpClient> =
     Layer.effect(
@@ -253,16 +253,8 @@ export namespace Instruction {
     return runPromise((svc) => svc.systemPaths())
   }
 
-  export async function system() {
-    return runPromise((svc) => svc.system())
-  }
-
   export function loaded(messages: MessageV2.WithParts[]) {
     return extract(messages)
-  }
-
-  export async function find(dir: string) {
-    return runPromise((svc) => svc.find(dir))
   }
 
   export async function resolve(messages: MessageV2.WithParts[], filepath: string, messageID: MessageID) {
