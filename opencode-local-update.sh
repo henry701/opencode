@@ -38,8 +38,5 @@ HEAD_HASH="$(git rev-parse HEAD)"
 HEAD_SHORT="$(git rev-parse --short HEAD)"
 
 echo "==> Building current $BRANCH_NAME checkout at $HEAD_SHORT ($HEAD_HASH)..."
-echo "==> Installing dependencies..."
-bun install --minimum-release-age 0 --frozen-lockfile
-
 echo "==> Building and reinstalling from $BRANCH_NAME..."
 "$REPO_ROOT/build-local.sh"
