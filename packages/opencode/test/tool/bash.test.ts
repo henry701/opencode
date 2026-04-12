@@ -1196,7 +1196,7 @@ describe("tool.bash truncation", () => {
     await Instance.provide({
       directory: projectRoot,
       fn: async () => {
-        const bash = await BashTool.init()
+        const bash = await initBash()
         expect(bash.description).not.toContain(Instance.directory)
         const schema = JSON.stringify(bash.parameters)
         expect(schema).not.toContain(Instance.directory)
