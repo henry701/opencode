@@ -1,4 +1,4 @@
-import { Ripgrep } from "../file/ripgrep"
+import { Context, Effect, Layer } from "effect"
 
 import { Instance } from "../project/instance"
 
@@ -34,63 +34,70 @@ export namespace SystemPrompt {
     return [PROMPT_DEFAULT]
   }
 
+  export interface Skills {
+    readonly global?: string
+    readonly project?: string
+  }
+
+  export interface Interface {
+    readonly environment: (model: Provider.Model) => string[]
+    readonly skills: (agent: Agent.Info) => Effect.Effect<Skills>
+  }
+
+  export class Service extends Context.Service<Service, Interface>()("@opencode/SystemPrompt") {}
+
   let cachedDate: Date | undefined
 
-  export async function environment(model: Provider.Model) {
-    const project = Instance.project
-    const date = Flag.OPENCODE_EXPERIMENTAL_CACHE_STABILIZATION
-      ? (cachedDate ??= new Date())
-      : new Date()
-    return [
-      [
-        `You are powered by the model named ${model.api.id}. The exact model ID is ${model.providerID}/${model.api.id}`,
-        `Here is some useful information about the environment you are running in:`,
-        `<env>`,
-        `  Working directory: ${Instance.directory}`,
-        `  Workspace root folder: ${Instance.worktree}`,
-        `  Is directory a git repo: ${project.vcs === "git" ? "yes" : "no"}`,
-        `  Platform: ${process.platform}`,
-        `  Today's date: ${date.toDateString()}`,
-        `</env>`,
-        `<directories>`,
-        `  ${
-          project.vcs === "git" && false
-            ? await Ripgrep.tree({
-                cwd: Instance.directory,
-                limit: 50,
-              })
-            : ""
-        }`,
-        `</directories>`,
-      ].join("\n"),
-    ]
-  }
+  export const layer = Layer.effect(
+    Service,
+    Effect.gen(function* () {
+      const skill = yield* Skill.Service
 
-  export async function skills(agent: Agent.Info): Promise<{ global?: string; project?: string }> {
-    if (Permission.disabled(["skill"], agent.permission).has("skill")) return {}
+      return Service.of({
+        environment(model) {
+          const project = Instance.project
+          const date = Flag.OPENCODE_EXPERIMENTAL_CACHE_STABILIZATION
+            ? (cachedDate ??= new Date())
+            : new Date()
+          return [
+            [
+              `You are powered by the model named ${model.api.id}. The exact model ID is ${model.providerID}/${model.api.id}`,
+              `Here is some useful information about the environment you are running in:`,
+              `<env>`,
+              `  Working directory: ${Instance.directory}`,
+              `  Workspace root folder: ${Instance.worktree}`,
+              `  Is directory a git repo: ${project.vcs === "git" ? "yes" : "no"}`,
+              `  Platform: ${process.platform}`,
+              `  Today's date: ${date.toDateString()}`,
+              `</env>`,
+            ].join("\n"),
+          ]
+        },
 
-    const list = await Skill.available(agent)
-    const globalSkills = list.filter((s) => s.scope === "global")
-    const projectSkills = list.filter((s) => s.scope === "project")
+        skills: Effect.fn("SystemPrompt.skills")(function* (agent: Agent.Info) {
+          if (Permission.disabled(["skill"], agent.permission).has("skill")) return {}
 
-    // the agents seem to ingest the information about skills a bit better if we present a more verbose
-    // version of them here and a less verbose version in tool description, rather than vice versa.
-    const preamble = [
-      "Skills provide specialized instructions and workflows for specific tasks.",
-      "Use the skill tool to load a skill when a task matches its description.",
-    ].join("\n")
+          const list = yield* skill.available(agent)
+          const globalList = list.filter((item) => item.scope === "global")
+          const projectList = list.filter((item) => item.scope === "project")
+          const preamble = [
+            "Skills provide specialized instructions and workflows for specific tasks.",
+            "Use the skill tool to load a skill when a task matches its description.",
+          ].join("\n")
 
-    const global = globalSkills.length > 0
-      ? [preamble, Skill.fmt(globalSkills, { verbose: true })].join("\n")
-      : undefined
+          return {
+            global: globalList.length > 0 ? [preamble, Skill.fmt(globalList, { verbose: true })].join("\n") : undefined,
+            project: projectList.length > 0
+              ? [
+                  ...(globalList.length === 0 ? [preamble] : []),
+                  Skill.fmt(projectList, { verbose: true }),
+                ].join("\n")
+              : undefined,
+          }
+        }),
+      })
+    }),
+  )
 
-    const project = projectSkills.length > 0
-      ? [
-          ...(globalSkills.length === 0 ? [preamble] : []),
-          Skill.fmt(projectSkills, { verbose: true }),
-        ].join("\n")
-      : undefined
-
-    return { global, project }
-  }
+  export const defaultLayer = layer.pipe(Layer.provide(Skill.defaultLayer))
 }
