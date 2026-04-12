@@ -1,65 +1,42 @@
 #!/usr/bin/env bash
-# opencode-local-update.sh — pull, build, install opencode-local; skip if already on same commit.
-# Invoked by opencode-local-build.service. Not committed to the repo.
+# opencode-local-update.sh — build and install the currently checked-out production branch.
+# Invoked manually or by opencode-local-build.service. This script pulls the current upstream with --ff-only.
 set -euo pipefail
 
-REPO_ROOT="/home/henry/My_Programming/OpenSourceCopies/opencode"
-PKG_DIR="$REPO_ROOT/packages/opencode"
-INSTALL_DIR="$HOME/.local/bin"
-BINARY_NAME="opencode-local"
-SERVICE_NAME="opencode-server"
-STAMP_FILE="$HOME/.local/share/opencode-local-build.stamp"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BRANCH_NAME="production"
 
-export PATH="$INSTALL_DIR:/usr/local/bin:/usr/bin:/bin:$REPO_ROOT/node_modules/.bin"
-export SSH_AUTH_SOCK="/run/user/$(id -u)/ssh-tpm-agent.sock"
+export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$REPO_ROOT/node_modules/.bin"
+export SSH_AUTH_SOCK="/run/user/$UID/ssh-tpm-agent.sock"
 
 cd "$REPO_ROOT"
 
-echo "==> Fetching henry701/dev..."
-git fetch henry701 dev 2>&1
+CURRENT_BRANCH="$(git branch --show-current)"
 
-REMOTE_HASH=$(git rev-parse henry701/dev)
-REMOTE_SHORT=$(git rev-parse --short henry701/dev)
-
-# Duplicate detection: compare against last installed commit
-LAST_HASH=""
-[[ -f "$STAMP_FILE" ]] && LAST_HASH=$(cat "$STAMP_FILE")
-
-if [[ "$REMOTE_HASH" == "$LAST_HASH" ]]; then
-  echo "==> Already on $REMOTE_SHORT — nothing to do."
-  exit 0
+if [[ "$CURRENT_BRANCH" != "$BRANCH_NAME" ]]; then
+  echo "ERROR: current branch is '$CURRENT_BRANCH'; checkout '$BRANCH_NAME' before building." >&2
+  exit 1
 fi
 
-echo "==> New commit detected: $REMOTE_SHORT (was: ${LAST_HASH:0:9:-none})"
-echo "==> Resetting to henry701/dev..."
-git checkout dev
-git reset --hard henry701/dev
+if ! UPSTREAM_REF="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)"; then
+  echo "ERROR: branch '$BRANCH_NAME' has no upstream configured." >&2
+  exit 1
+fi
 
-echo "==> Installing dependencies..."
-cd "$REPO_ROOT"
-bun install 2>&1 | tail -3
+UPSTREAM_REMOTE="${UPSTREAM_REF%%/*}"
+UPSTREAM_BRANCH="${UPSTREAM_REF#*/}"
 
-echo "==> Building (native linux-x64, --single)..."
-cd "$PKG_DIR"
-bun run script/build.ts --single
+if [[ "$UPSTREAM_BRANCH" != "$BRANCH_NAME" ]]; then
+  echo "ERROR: upstream branch is '$UPSTREAM_BRANCH'; expected '$BRANCH_NAME'." >&2
+  exit 1
+fi
 
-BUILT_BIN="$PKG_DIR/dist/opencode-linux-x64/bin/opencode"
-[[ ! -f "$BUILT_BIN" ]] && { echo "ERROR: binary not found at $BUILT_BIN" >&2; exit 1; }
+echo "==> Pulling $UPSTREAM_REF..."
+git pull --ff-only "$UPSTREAM_REMOTE" "$UPSTREAM_BRANCH"
 
-echo "==> Smoke test..."
-"$BUILT_BIN" --version
+HEAD_HASH="$(git rev-parse HEAD)"
+HEAD_SHORT="$(git rev-parse --short HEAD)"
 
-echo "==> Installing to $INSTALL_DIR/$BINARY_NAME..."
-mkdir -p "$INSTALL_DIR"
-cp -f "$BUILT_BIN" "$INSTALL_DIR/$BINARY_NAME"
-chmod +x "$INSTALL_DIR/$BINARY_NAME"
-echo "    installed: $("$INSTALL_DIR/$BINARY_NAME" --version)"
-
-echo "==> Restarting $SERVICE_NAME..."
-XDG_RUNTIME_DIR="/run/user/$(id -u)" systemctl --user restart "$SERVICE_NAME"
-sleep 1
-XDG_RUNTIME_DIR="/run/user/$(id -u)" systemctl --user status "$SERVICE_NAME" --no-pager | tail -4
-
-# Stamp the successfully installed commit
-echo "$REMOTE_HASH" > "$STAMP_FILE"
-echo "==> Done — stamped $REMOTE_SHORT"
+echo "==> Building current $BRANCH_NAME checkout at $HEAD_SHORT ($HEAD_HASH)..."
+echo "==> Building and reinstalling from $BRANCH_NAME..."
+"$REPO_ROOT/build-local.sh"
