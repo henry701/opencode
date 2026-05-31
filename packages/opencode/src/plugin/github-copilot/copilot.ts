@@ -29,15 +29,13 @@ function base(enterpriseUrl?: string) {
 
 // Patterns that identify synthetic (system-injected) user messages.
 // These are not real user input and should not be billed as user-initiated.
-const SYNTHETIC_PATTERNS = [
-  /^Tool \w+ returned an attachment:/,
+export const SYNTHETIC_PATTERNS = [
   /^What did we do so far\?/,
   /^The following tool was executed by the user$/,
-  /^Tool result:/i,
-  /^Tool output:/i,
+  /^Attached media from tool result:/,
 ]
 
-function isSynthetic(text: string): boolean {
+export function isSynthetic(text: string): boolean {
   if (!text || typeof text !== "string") return false
   return SYNTHETIC_PATTERNS.some((p) => p.test(text.trim()))
 }
@@ -50,7 +48,7 @@ function hasSyntheticContent(content: unknown): boolean {
 
 // Check if a conversation has any assistant/tool messages or a synthetic last user message.
 // If so the entire turn is agent-initiated and should be billed as such.
-function detectAgent(messages: any[]): boolean {
+export function detectAgent(messages: any[]): boolean {
   if (!Array.isArray(messages) || messages.length === 0) return false
   const hasNonUser = messages.some((msg: any) => ["assistant", "tool"].includes(msg.role))
   if (hasNonUser) return true
@@ -127,7 +125,6 @@ export async function CopilotAuthPlugin(input: PluginInput): Promise<Hooks> {
             const info = await getAuth()
             if (info.type !== "oauth") return fetch(request, init)
 
-            const url = request instanceof URL ? request.href : typeof request === "string" ? request : request.url
             const { isVision, isAgent } = iife(() => {
               try {
                 const body = typeof init?.body === "string" ? JSON.parse(init.body) : init?.body

@@ -1,33 +1,6 @@
 import { describe, expect, test } from "bun:test"
-
-const SYNTHETIC_PATTERNS = [
-  /^Tool \w+ returned an attachment:/,
-  /^What did we do so far\?/,
-  /^The following tool was executed by the user$/,
-  /^Tool result:/i,
-  /^Tool output:/i,
-]
-
-function isSynthetic(text: string): boolean {
-  if (!text || typeof text !== "string") return false
-  const trimmed = text.trim()
-  return SYNTHETIC_PATTERNS.some((p) => p.test(trimmed))
-}
-
-function hasSyntheticContent(content: unknown): boolean {
-  if (typeof content === "string") return isSynthetic(content)
-  if (!Array.isArray(content)) return false
-  return content.some((part: any) => isSynthetic(part.text || part.content || ""))
-}
-
-function detectAgent(messages: any[]): boolean {
-  if (!Array.isArray(messages) || messages.length === 0) return false
-  const hasNonUser = messages.some((msg: any) => ["assistant", "tool"].includes(msg.role))
-  if (hasNonUser) return true
-  const last = messages[messages.length - 1]
-  if (last?.role === "user" && hasSyntheticContent(last.content)) return true
-  return false
-}
+import { SYNTHETIC_PATTERNS, isSynthetic, detectAgent } from "../../src/plugin/github-copilot/copilot"
+import { SYNTHETIC_ATTACHMENT_PROMPT } from "../../src/session/message-v2"
 
 function getInitiator(body: any): "user" | "agent" {
   const messages = body?.messages || body?.input || []
@@ -35,10 +8,16 @@ function getInitiator(body: any): "user" | "agent" {
 }
 
 describe("plugin.copilot", () => {
+  describe("SYNTHETIC_PATTERNS", () => {
+    test("only three patterns matching real synthetic strings", () => {
+      expect(SYNTHETIC_PATTERNS).toHaveLength(3)
+    })
+  })
+
   describe("isSynthetic", () => {
     test("detects tool attachment pattern", () => {
-      expect(isSynthetic("Tool read_file returned an attachment:")).toBe(true)
-      expect(isSynthetic("Tool bash returned an attachment:")).toBe(true)
+      expect(isSynthetic("Attached media from tool result:")).toBe(true)
+      expect(isSynthetic(SYNTHETIC_ATTACHMENT_PROMPT)).toBe(true)
     })
 
     test("detects compaction pattern", () => {
@@ -48,6 +27,12 @@ describe("plugin.copilot", () => {
 
     test("detects subtask pattern", () => {
       expect(isSynthetic("The following tool was executed by the user")).toBe(true)
+    })
+
+    test("phantom patterns from old code no longer match", () => {
+      expect(isSynthetic("Tool read_file returned an attachment:")).toBe(false)
+      expect(isSynthetic("Tool result: foo")).toBe(false)
+      expect(isSynthetic("Tool bash returned an attachment:")).toBe(false)
     })
 
     test("ignores normal user messages", () => {
@@ -83,7 +68,7 @@ describe("plugin.copilot", () => {
     })
 
     test("synthetic tool attachment returns agent", () => {
-      expect(getInitiator({ messages: [{ role: "user", content: "Tool read_file returned an attachment:" }] })).toBe("agent")
+      expect(getInitiator({ messages: [{ role: "user", content: "Attached media from tool result:" }] })).toBe("agent")
     })
 
     test("synthetic compaction returns agent", () => {
@@ -94,7 +79,7 @@ describe("plugin.copilot", () => {
       expect(getInitiator({
         messages: [{
           role: "user",
-          content: [{ type: "text", text: "Tool bash returned an attachment:" }, { type: "file", url: "file://out.txt" }],
+          content: [{ type: "text", text: "Attached media from tool result:" }, { type: "file", url: "file://out.txt" }],
         }],
       })).toBe("agent")
     })
@@ -111,7 +96,7 @@ describe("plugin.copilot", () => {
         messages: [
           { role: "user", content: "Read file.txt" },
           { role: "assistant", content: "Reading..." },
-          { role: "user", content: "Tool read_file returned an attachment:" },
+          { role: "user", content: "Attached media from tool result:" },
         ],
       })).toBe("agent")
     })
