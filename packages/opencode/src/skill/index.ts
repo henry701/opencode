@@ -35,7 +35,7 @@ export const Info = Schema.Struct({
   description: Schema.optional(Schema.String),
   location: Schema.String,
   content: Schema.String,
-  scope: Schema.optional(Schema.Literal("global", "project"), { default: () => "project" as const }),
+  scope: Schema.optional(Schema.Literals(["global", "project"])),
 })
 export type Info = Schema.Schema.Type<typeof Info>
 
