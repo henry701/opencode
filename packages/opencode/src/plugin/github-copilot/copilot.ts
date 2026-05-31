@@ -1,11 +1,10 @@
 import type { Hooks, PluginInput } from "@opencode-ai/plugin"
 import type { Model } from "@opencode-ai/sdk/v2"
-import { InstallationVersion } from "@/installation/version"
+import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { iife } from "@/util/iife"
-import { Log } from "../../util"
+import * as Log from "@opencode-ai/core/util/log"
 import { setTimeout as sleep } from "node:timers/promises"
 import { CopilotModels } from "./models"
-import { MessageV2 } from "@/session/message-v2"
 
 const log = Log.create({ service: "plugin.copilot" })
 
@@ -28,18 +27,53 @@ function base(enterpriseUrl?: string) {
   return enterpriseUrl ? `https://copilot-api.${normalizeDomain(enterpriseUrl)}` : "https://api.githubcopilot.com"
 }
 
-// Check if a message is a synthetic user msg used to attach an image from a tool call
-function imgMsg(msg: any): boolean {
-  if (msg?.role !== "user") return false
+// Patterns that identify synthetic (system-injected) user messages.
+// These are not real user input and should not be billed as user-initiated.
+const SYNTHETIC_PATTERNS = [
+  /^Tool \w+ returned an attachment:/,
+  /^What did we do so far\?/,
+  /^The following tool was executed by the user$/,
+  /^Tool result:/i,
+  /^Tool output:/i,
+]
 
-  // Handle the 3 api formats
+function isSynthetic(text: string): boolean {
+  if (!text || typeof text !== "string") return false
+  return SYNTHETIC_PATTERNS.some((p) => p.test(text.trim()))
+}
 
-  const content = msg.content
-  if (typeof content === "string") return content === MessageV2.SYNTHETIC_ATTACHMENT_PROMPT
+function hasSyntheticContent(content: unknown): boolean {
+  if (typeof content === "string") return isSynthetic(content)
   if (!Array.isArray(content)) return false
-  return content.some(
-    (part: any) =>
-      (part?.type === "text" || part?.type === "input_text") && part.text === MessageV2.SYNTHETIC_ATTACHMENT_PROMPT,
+  return content.some((part: any) => isSynthetic(part.text || part.content || ""))
+}
+
+// Check if a conversation has any assistant/tool messages or a synthetic last user message.
+// If so the entire turn is agent-initiated and should be billed as such.
+function detectAgent(messages: any[]): boolean {
+  if (!Array.isArray(messages) || messages.length === 0) return false
+  const hasNonUser = messages.some((msg: any) => ["assistant", "tool"].includes(msg.role))
+  if (hasNonUser) return true
+  const last = messages[messages.length - 1]
+  if (last?.role === "user" && hasSyntheticContent(last.content)) return true
+  return false
+}
+
+// Unified vision detection across Completions/Responses/Messages API formats.
+function detectVision(messages: any[]): boolean {
+  return (
+    messages?.some((msg: any) => {
+      if (!Array.isArray(msg.content)) return false
+      return msg.content.some(
+        (part: any) =>
+          part.type === "image_url" ||
+          part.type === "input_image" ||
+          part.type === "image" ||
+          (part.type === "tool_result" &&
+            Array.isArray(part.content) &&
+            part.content.some((nested: any) => nested.type === "image")),
+      )
+    }) ?? false
   )
 }
 
@@ -98,50 +132,12 @@ export async function CopilotAuthPlugin(input: PluginInput): Promise<Hooks> {
               try {
                 const body = typeof init?.body === "string" ? JSON.parse(init.body) : init?.body
 
-                // Completions API
-                if (body?.messages && url.includes("completions")) {
-                  const last = body.messages[body.messages.length - 1]
-                  return {
-                    isVision: body.messages.some(
-                      (msg: any) =>
-                        Array.isArray(msg.content) && msg.content.some((part: any) => part.type === "image_url"),
-                    ),
-                    isAgent: last?.role !== "user" || imgMsg(last),
-                  }
-                }
+                const messages = body?.messages ?? body?.input
+                if (!messages) return { isVision: false, isAgent: false }
 
-                // Responses API
-                if (body?.input) {
-                  const last = body.input[body.input.length - 1]
-                  return {
-                    isVision: body.input.some(
-                      (item: any) =>
-                        Array.isArray(item?.content) && item.content.some((part: any) => part.type === "input_image"),
-                    ),
-                    isAgent: last?.role !== "user" || imgMsg(last),
-                  }
-                }
-
-                // Messages API
-                if (body?.messages) {
-                  const last = body.messages[body.messages.length - 1]
-                  const hasNonToolCalls =
-                    Array.isArray(last?.content) && last.content.some((part: any) => part?.type !== "tool_result")
-                  return {
-                    isVision: body.messages.some(
-                      (item: any) =>
-                        Array.isArray(item?.content) &&
-                        item.content.some(
-                          (part: any) =>
-                            part?.type === "image" ||
-                            // images can be nested inside tool_result content
-                            (part?.type === "tool_result" &&
-                              Array.isArray(part?.content) &&
-                              part.content.some((nested: any) => nested?.type === "image")),
-                        ),
-                    ),
-                    isAgent: !(last?.role === "user" && hasNonToolCalls) || imgMsg(last),
-                  }
+                return {
+                  isVision: detectVision(messages),
+                  isAgent: detectAgent(messages),
                 }
               } catch {}
               return { isVision: false, isAgent: false }
