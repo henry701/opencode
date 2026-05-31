@@ -1,7 +1,7 @@
 import { Context, Effect, Layer } from "effect"
 
 import { InstanceState } from "@/effect/instance-state"
-import { Flag } from "@opencode-ai/core/flag"
+import { Flag } from "@opencode-ai/core/flag/flag"
 
 import PROMPT_ANTHROPIC from "./prompt/anthropic.txt"
 import PROMPT_DEFAULT from "./prompt/default.txt"
