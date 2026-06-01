@@ -109,7 +109,7 @@ describe("run runtime boot", () => {
           inputClear: ["ctrl+l"],
           inputSubmit: ["ctrl+s"],
           inputNewline: ["shift+return"],
-          inputQueue: ["alt+return"],
+          inputQueue: ["ctrl+shift+return"],
         },
       }),
     )
@@ -126,7 +126,7 @@ describe("run runtime boot", () => {
     expect(formatBindings(result.inputClear, result.leader)).toBe("ctrl+l")
     expect(formatBindings(result.inputSubmit, result.leader)).toBe("ctrl+s")
     expect(formatBindings(result.inputNewline, result.leader)).toBe("shift+return")
-    expect(formatBindings(result.inputQueue, result.leader)).toBe("alt+return")
+    expect(formatBindings(result.inputQueue, result.leader)).toBe("ctrl+shift+return")
   })
 
   test("falls back to default keybinds when config load fails", async () => {
@@ -144,7 +144,7 @@ describe("run runtime boot", () => {
     expect(formatBindings(result.inputClear, result.leader)).toBe("ctrl+c")
     expect(formatBindings(result.inputSubmit, result.leader)).toBe("return")
     expect(formatBindings(result.inputNewline, result.leader)).toBe("shift+return, ctrl+return, ctrl+j")
-    expect(formatBindings(result.inputQueue, result.leader)).toBe("alt+return")
+    expect(formatBindings(result.inputQueue, result.leader)).toBe("ctrl+shift+return")
   })
 
   test("reads diff style and falls back to auto", async () => {
