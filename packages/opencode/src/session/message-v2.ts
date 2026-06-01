@@ -1143,6 +1143,41 @@ export function firstUnprocessedDeferred(msgs: WithParts[]) {
   return unprocessedDeferredUsers(msgs)[0]
 }
 
+/** True while an immediate turn (including steer) still needs model follow-up. */
+export function immediateTurnUnsettled(msgs: WithParts[]) {
+  const { assistant: lastAssistant } = latest(msgs)
+  if (!lastAssistant) {
+    return msgs.some((msg) => msg.info.role === "user" && msg.info.delivery !== "deferred")
+  }
+
+  const lastAssistantMsg = msgs.findLast(
+    (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant.id,
+  )
+
+  if (!lastAssistant.finish || ["tool-calls", "unknown"].includes(lastAssistant.finish)) return true
+
+  const parent = msgs.find((msg) => msg.info.id === lastAssistant.parentID)?.info
+  if (parent?.role === "user") {
+    if (assistantNeedsToolFollowup(msgs, parent, lastAssistant, lastAssistantMsg)) return true
+  }
+
+  for (const msg of msgs) {
+    const info = msg.info
+    if (info.role !== "user" || info.delivery === "deferred") continue
+    if (info.id <= lastAssistant.id) continue
+
+    const answer = msgs.findLast(
+      (entry) => entry.info.role === "assistant" && entry.info.parentID === info.id,
+    )
+    if (!answer || answer.info.role !== "assistant") return true
+    const assistant = answer.info
+    if (!assistant.finish || ["tool-calls", "unknown"].includes(assistant.finish)) return true
+    if (assistantNeedsToolFollowup(msgs, info, assistant, answer)) return true
+  }
+
+  return false
+}
+
 /** True while the latest assistant for this user still needs a follow-up step (e.g. after tool results). */
 export function assistantNeedsToolFollowup(
   msgs: WithParts[],

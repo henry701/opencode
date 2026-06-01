@@ -4,6 +4,33 @@ import { listDeferredQueued, pendingDeferredMessageIds } from "../../../src/cli/
 import { runPromptPreview } from "../../../src/queue/preview"
 import type { RunPrompt } from "../../../src/cli/cmd/run/types"
 
+test("listDeferredQueued prefers in-memory pending queue", () => {
+  const items = listDeferredQueued({
+    pending: [
+      { id: "u2", text: "queued one" },
+      { id: "u3", text: "queued two" },
+    ],
+    messages: [],
+    parts: {},
+    pendingAssistantID: "a1",
+  })
+
+  expect(items).toEqual([
+    { id: "u2", text: "queued one" },
+    { id: "u3", text: "queued two" },
+  ])
+})
+
+test("listDeferredQueued shows in-memory pending without a pending assistant", () => {
+  const items = listDeferredQueued({
+    pending: [{ id: "u2", text: "queued one" }],
+    messages: [],
+    parts: {},
+  })
+
+  expect(items).toEqual([{ id: "u2", text: "queued one" }])
+})
+
 test("listDeferredQueued returns pending deferred user messages", () => {
   const items = listDeferredQueued({
     messages: [

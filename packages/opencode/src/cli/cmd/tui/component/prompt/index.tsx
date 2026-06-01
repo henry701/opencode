@@ -158,6 +158,7 @@ export function Prompt(props: PromptProps) {
   const keymap = useOpencodeKeymap()
   const agentShortcut = useCommandShortcut("agent.cycle")
   const paletteShortcut = useCommandShortcut("command.palette.show")
+  const submitShortcut = useCommandShortcut("prompt.submit")
   const renderer = useRenderer()
   const dimensions = useTerminalDimensions()
   const { theme, syntax } = useTheme()
@@ -167,6 +168,7 @@ export function Prompt(props: PromptProps) {
   const shell = createMemo(() => props.placeholders?.shell ?? [])
   const fileContextEnabled = createMemo(() => kv.get("file_context_enabled", true))
   const [dismissedEditorSelectionKey, setDismissedEditorSelectionKey] = createSignal<string>()
+  const [editingQueuedMessageID, setEditingQueuedMessageID] = createSignal<string | undefined>()
   const editorContext = createMemo(() => {
     const selection = fileContextEnabled() ? editor.selection() : undefined
     if (!selection) return
@@ -670,6 +672,7 @@ export function Prompt(props: PromptProps) {
   const queueItems = createMemo(() => {
     if (!props.sessionID) return []
     return listDeferredQueued({
+      pending: sync.data.deferred_queue[props.sessionID],
       messages: sync.data.message[props.sessionID] ?? [],
       parts: sync.data.part,
       pendingAssistantID: pendingAssistant(),
@@ -680,7 +683,13 @@ export function Prompt(props: PromptProps) {
     target: inputTarget,
     enabled: (() => {
       cursorVersion()
-      return inputTarget() !== undefined && !props.disabled && !auto()?.visible && input !== undefined
+      return (
+        inputTarget() !== undefined &&
+        !props.disabled &&
+        !auto()?.visible &&
+        input !== undefined &&
+        !editingQueuedMessageID()
+      )
     })(),
     commands: [
       {
@@ -757,6 +766,7 @@ export function Prompt(props: PromptProps) {
         parts: [],
       })
       setStore("extmarkToPartIndex", new Map())
+      setEditingQueuedMessageID(undefined)
     },
     submit() {
       void submit()
@@ -1166,6 +1176,7 @@ export function Prompt(props: PromptProps) {
   }
 
   function resetPromptAfterSend(currentMode: typeof store.mode, sessionID: string, editorParts: ReturnType<typeof editorContextParts>) {
+    setEditingQueuedMessageID(undefined)
     history.append({
       ...store.prompt,
       mode: currentMode,
@@ -1194,10 +1205,17 @@ export function Prompt(props: PromptProps) {
     if (!props.sessionID || props.disabled) return false
     const sessionID = props.sessionID
     const parts = sync.data.part[messageID] ?? []
-    const promptInfo = partsToPromptInfo(parts)
+    const queued = sync.data.deferred_queue[sessionID]?.find((item) => item.id === messageID)
+    const promptInfo =
+      parts.length > 0
+        ? partsToPromptInfo(parts)
+        : queued?.text
+          ? { input: queued.text, parts: [] as PromptInfo["parts"] }
+          : { input: "", parts: [] as PromptInfo["parts"] }
     if (!promptInfo.input.trim() && promptInfo.parts.length === 0) return false
 
     await sdk.client.session.revert({ sessionID, messageID }).catch(() => {})
+    setEditingQueuedMessageID(messageID)
     input.setText(promptInfo.input)
     setStore("prompt", promptInfo)
     setStore("extmarkToPartIndex", new Map())
@@ -1216,6 +1234,8 @@ export function Prompt(props: PromptProps) {
   }
 
   async function queueInner() {
+    if (editingQueuedMessageID()) return submitInner()
+
     setWarpNotice(undefined)
     syncPromptInputFromTextarea()
     if (props.disabled) return false
@@ -1619,10 +1639,18 @@ export function Prompt(props: PromptProps) {
     () => !!local.agent.current() && store.mode === "normal" && showVariant(),
     animationsEnabled,
   )
-  const borderHighlight = createMemo(() => tint(theme.border, highlight(), agentMetaAlpha()))
+  const borderHighlight = createMemo(() => {
+    if (editingQueuedMessageID()) return theme.primary
+    return tint(theme.border, highlight(), agentMetaAlpha())
+  })
 
   const placeholderText = createMemo(() => {
     if (props.showPlaceholder === false) return undefined
+    if (editingQueuedMessageID()) {
+      const submit = submitShortcut()
+      if (!submit) return "Press Return to send now"
+      return `Press ${submit} to send now`
+    }
     if (store.mode === "shell") {
       if (!shell().length) return undefined
       const example = shell()[store.placeholder % shell().length]
@@ -1703,6 +1731,7 @@ export function Prompt(props: PromptProps) {
           >
             <PromptQueueDock
               items={queueItems}
+              editing={() => !!editingQueuedMessageID()}
               disabled={props.disabled}
               onEdit={(id: string) => {
                 void editQueuedMessage(id)

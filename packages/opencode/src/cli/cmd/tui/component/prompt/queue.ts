@@ -5,12 +5,15 @@ import type { PromptInfo } from "./history"
 import { strip } from "./part"
 
 export type DeferredQueueInput = {
+  pending?: QueuedItem[]
   messages: Message[]
   parts: Record<string, Part[] | undefined>
   pendingAssistantID?: string
 }
 
+/** Pending prompts held in memory until the active turn dequeues them. */
 export function listDeferredQueued(input: DeferredQueueInput) {
+  if (input.pending?.length) return input.pending
   if (!input.pendingAssistantID) return [] as QueuedItem[]
 
   const pending = input.messages.find((message) => message.id === input.pendingAssistantID)

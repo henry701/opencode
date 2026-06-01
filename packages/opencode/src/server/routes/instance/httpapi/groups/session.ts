@@ -98,6 +98,8 @@ export const SessionPaths = {
   deleteMessage: `${root}/:sessionID/message/:messageID`,
   deletePart: `${root}/:sessionID/message/:messageID/part/:partID`,
   updatePart: `${root}/:sessionID/message/:messageID/part/:partID`,
+  updateDeferred: `${root}/:sessionID/deferred/:messageID`,
+  sendDeferred: `${root}/:sessionID/deferred/:messageID/send`,
 } as const
 
 export const SessionApi = HttpApi.make("session")
@@ -436,6 +438,30 @@ export const SessionApi = HttpApi.make("session")
           OpenApi.annotations({
             identifier: "part.update",
             description: "Update a part in a message.",
+          }),
+        ),
+        HttpApiEndpoint.patch("updateDeferred", SessionPaths.updateDeferred, {
+          params: { sessionID: SessionID, messageID: MessageID },
+          query: WorkspaceRoutingQuery,
+          payload: Schema.Unknown,
+          success: described(Schema.Boolean, "Successfully updated queued prompt"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.deferred.update",
+            description: "Update a prompt waiting in the in-memory deferred queue.",
+          }),
+        ),
+        HttpApiEndpoint.post("sendDeferred", SessionPaths.sendDeferred, {
+          params: { sessionID: SessionID, messageID: MessageID },
+          query: WorkspaceRoutingQuery,
+          payload: Schema.Unknown,
+          success: described(Schema.Unknown, "Assistant response after sending queued prompt now"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionBusyError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.deferred.send",
+            description: "Persist and run a queued prompt immediately.",
           }),
         ),
       )

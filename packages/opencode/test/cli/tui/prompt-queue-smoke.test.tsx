@@ -1,8 +1,10 @@
 /** @jsxImportSource @opentui/solid */
+import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
 import { afterEach, expect, test } from "bun:test"
 import type { Message } from "@opencode-ai/sdk/v2"
-import { testRender } from "@opentui/solid"
+import { testRender, useRenderer } from "@opentui/solid"
 import type { JSX as SolidJSX } from "solid-js"
+import { onCleanup } from "solid-js"
 import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { PromptQueueDock } from "../../../src/cli/cmd/tui/component/prompt/queue-dock"
@@ -12,6 +14,7 @@ import { tmpdir } from "../../fixture/fixture"
 import { KVProvider } from "../../../src/cli/cmd/tui/context/kv"
 import { ThemeProvider } from "../../../src/cli/cmd/tui/context/theme"
 import { TuiConfigProvider } from "../../../src/cli/cmd/tui/context/tui-config"
+import { OpencodeKeymapProvider, registerOpencodeKeymap } from "../../../src/cli/cmd/tui/keymap"
 
 const active: { destroy: () => void }[] = []
 
@@ -23,13 +26,25 @@ afterEach(() => {
 
 function withTheme(component: () => SolidJSX.Element) {
   const config = createTuiResolvedConfig()
-  return (
-    <TuiConfigProvider config={config}>
-      <KVProvider>
-        <ThemeProvider mode="dark">{component()}</ThemeProvider>
-      </KVProvider>
-    </TuiConfigProvider>
-  )
+
+  function Harness() {
+    const renderer = useRenderer()
+    const keymap = createDefaultOpenTuiKeymap(renderer)
+    const off = registerOpencodeKeymap(keymap, renderer, config)
+    onCleanup(off)
+
+    return (
+      <OpencodeKeymapProvider keymap={keymap}>
+        <TuiConfigProvider config={config}>
+          <KVProvider>
+            <ThemeProvider mode="dark">{component()}</ThemeProvider>
+          </KVProvider>
+        </TuiConfigProvider>
+      </OpencodeKeymapProvider>
+    )
+  }
+
+  return <Harness />
 }
 
 async function renderFrame(
@@ -84,6 +99,8 @@ test("queue dock lists deferred messages in fifo order with screencap artifact",
   expect(frame.indexOf("first queued")).toBeLessThan(frame.indexOf("second queued"))
   expect(frame.indexOf("second queued")).toBeLessThan(frame.indexOf("third queued"))
   expect(frame).toContain("[edit]")
+  expect(frame).toContain("[send now]")
+  expect(frame).toContain("1. first queued")
 })
 
 test("runs serve API smoke script when bash is available", async () => {

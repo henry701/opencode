@@ -1654,3 +1654,26 @@ describe("session.message-v2.latest", () => {
     expect(state.tasks[0]).toMatchObject({ type: "compaction", auto: true })
   })
 })
+
+describe("immediateTurnUnsettled", () => {
+  test("steer message before assistant reply keeps turn unsettled", () => {
+    const msgs: MessageV2.WithParts[] = [
+      { info: { ...userInfo("u1"), delivery: "immediate" }, parts: [] },
+      { info: { ...assistantInfo("a1", "u1"), finish: "stop" }, parts: [] },
+      { info: { ...userInfo("u2"), delivery: "immediate" }, parts: [] },
+    ]
+
+    expect(MessageV2.immediateTurnUnsettled(msgs)).toBe(true)
+  })
+
+  test("completed steer settles the immediate turn", () => {
+    const msgs: MessageV2.WithParts[] = [
+      { info: { ...userInfo("u1"), delivery: "immediate" }, parts: [] },
+      { info: { ...assistantInfo("a1", "u1"), finish: "stop" }, parts: [] },
+      { info: { ...userInfo("u2"), delivery: "immediate" }, parts: [] },
+      { info: { ...assistantInfo("a2", "u2"), finish: "stop" }, parts: [] },
+    ]
+
+    expect(MessageV2.immediateTurnUnsettled(msgs)).toBe(false)
+  })
+})

@@ -35,6 +35,7 @@ import {
   UpdatePayload,
 } from "../groups/session"
 import { PermissionNotFoundError } from "../errors"
+import * as ApiError from "../errors"
 import * as SessionError from "./session-errors"
 
 const tryParseJson = (text: string) =>
@@ -403,6 +404,28 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return yield* session.updatePart(payload)
     })
 
+    const updateDeferred = Effect.fn("SessionHttpApi.updateDeferred")(function* (ctx: {
+      params: { sessionID: SessionID; messageID: MessageID }
+      payload: unknown
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      const message = ctx.payload as MessageV2.WithParts
+      const ok = yield* promptSvc.updateDeferredQueue(ctx.params.sessionID, ctx.params.messageID, message)
+      if (!ok) return yield* Effect.fail(ApiError.notFound("Queued message not found"))
+      return true
+    })
+
+    const sendDeferred = Effect.fn("SessionHttpApi.sendDeferred")(function* (ctx: {
+      params: { sessionID: SessionID; messageID: MessageID }
+      payload: unknown
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      const message = ctx.payload as MessageV2.WithParts | undefined
+      return yield* promptSvc
+        .sendDeferredNow(ctx.params.sessionID, ctx.params.messageID, message)
+        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+    })
+
     return handlers
       .handle("list", list)
       .handle("status", status)
@@ -431,5 +454,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("deleteMessage", deleteMessage)
       .handle("deletePart", deletePart)
       .handle("updatePart", updatePart)
+      .handle("updateDeferred", updateDeferred)
+      .handle("sendDeferred", sendDeferred)
   }),
 )

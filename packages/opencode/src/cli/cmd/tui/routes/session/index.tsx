@@ -24,7 +24,6 @@ import { Spinner } from "@tui/component/spinner"
 import { generateSubtleSyntax, selectedForeground, useTheme } from "@tui/context/theme"
 import { BoxRenderable, ScrollBoxRenderable, addDefaultParsers, TextAttributes, RGBA } from "@opentui/core"
 import { Prompt, type PromptRef } from "@tui/component/prompt"
-import { pendingDeferredMessageIds } from "@tui/component/prompt/queue"
 import type {
   AssistantMessage,
   Part,
@@ -213,14 +212,6 @@ export function Session() {
   const pending = createMemo(() => {
     return messages().findLast((x) => x.role === "assistant" && !x.time.completed)?.id
   })
-
-  const pendingDeferred = createMemo(() =>
-    pendingDeferredMessageIds({
-      messages: messages(),
-      parts: sync.data.part,
-      pendingAssistantID: pending(),
-    }),
-  )
 
   const lastAssistant = createMemo(() => {
     return messages().findLast((x) => x.role === "assistant")
@@ -1229,7 +1220,7 @@ export function Session() {
                       <Match when={revert()?.messageID && message.id >= revert()!.messageID}>
                         <></>
                       </Match>
-                      <Match when={message.role === "user" && !pendingDeferred().has(message.id)}>
+                      <Match when={message.role === "user"}>
                         <UserMessage
                           index={index()}
                           onMouseUp={() => {

@@ -1222,6 +1222,60 @@ it.instance(
 )
 
 it.instance(
+  "deferred prompt is not persisted until the run loop dequeues it",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const gate = yield* Deferred.make<void>()
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+
+      yield* llm.hold("open", deferredAsPromise(gate))
+      yield* llm.text("done")
+
+      const run = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "open" }],
+        })
+        .pipe(Effect.forkChild)
+
+      yield* llm.wait(1)
+
+      const id = MessageID.ascending()
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        messageID: id,
+        agent: "build",
+        model: ref,
+        delivery: "deferred",
+        parts: [{ type: "text", text: "queued" }],
+      })
+
+      const queued = (yield* sessions.messages({ sessionID: chat.id })).filter(
+        (msg) => msg.info.role === "user" && msg.info.id === id,
+      )
+      expect(queued).toHaveLength(0)
+
+      yield* Deferred.succeed(gate, void 0)
+      const exit = yield* Fiber.await(run)
+      expect(Exit.isSuccess(exit)).toBe(true)
+
+      const persisted = (yield* sessions.messages({ sessionID: chat.id })).filter(
+        (msg) =>
+          msg.info.role === "user" &&
+          msg.parts.some((part) => part.type === "text" && part.text === "queued"),
+      )
+      expect(persisted).toHaveLength(1)
+      if (persisted[0]?.info.role === "user") expect(persisted[0].info.id).not.toBe(id)
+    }),
+  3_000,
+)
+
+it.instance(
   "deferred prompt joins the active run instead of starting a separate turn",
   () =>
     Effect.gen(function* () {
@@ -1490,6 +1544,199 @@ it.instance(
         .filter((msg) => msg.info.role === "assistant")
         .map((msg) => (msg.info.role === "assistant" ? msg.info.parentID : ""))
       expect(parents.filter((id) => deferred.some((user) => user.info.id === id)).length).toBe(3)
+    }),
+  10_000,
+)
+
+it.instance(
+  "deferred queue stays out of transcript until each item is dequeued (sleep haiku fifo)",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const gate = yield* Deferred.make<void>()
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Sleep, haiku, factorial 128" })
+
+      yield* llm.hold("open", deferredAsPromise(gate))
+      yield* llm.text("haiku-done")
+      yield* llm.text("APPLE")
+      yield* llm.text("ORANGE")
+      yield* llm.text("BANANA")
+
+      const run = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          parts: [
+            {
+              type: "text",
+              text: "Sleep 15 seconds, then once the tool call returns, think about a Haiku and send it to me.",
+            },
+          ],
+        })
+        .pipe(Effect.forkChild)
+
+      yield* llm.wait(1)
+
+      for (const text of ["Say APPLE", "Say ORANGE", "Say BANANA!!!"]) {
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          delivery: "deferred",
+          parts: [{ type: "text", text }],
+        })
+      }
+
+      const whileHeld = (yield* sessions.messages({ sessionID: chat.id })).filter(
+        (msg) => msg.info.role === "user" && msg.info.delivery === "deferred",
+      )
+      expect(whileHeld).toHaveLength(0)
+
+      const inputsWhileHeld = yield* llm.inputs
+      expect(JSON.stringify(inputsWhileHeld)).not.toContain("Say APPLE")
+      expect(JSON.stringify(inputsWhileHeld)).not.toContain("Say ORANGE")
+      expect(JSON.stringify(inputsWhileHeld)).not.toContain("Say BANANA")
+
+      yield* Deferred.succeed(gate, void 0)
+
+      const exit = yield* Fiber.await(run)
+      expect(Exit.isSuccess(exit)).toBe(true)
+
+      const inputs = yield* llm.inputs
+      const serialized = inputs.map((input) => JSON.stringify(input.messages))
+      const appleIndex = serialized.findIndex((body) => body.includes("Say APPLE"))
+      const orangeIndex = serialized.findIndex((body) => body.includes("Say ORANGE"))
+      const bananaIndex = serialized.findIndex((body) => body.includes("Say BANANA"))
+      expect(appleIndex).toBeGreaterThan(0)
+      expect(orangeIndex).toBeGreaterThan(appleIndex)
+      expect(bananaIndex).toBeGreaterThan(orangeIndex)
+      expect(serialized.slice(0, appleIndex).join()).not.toContain("Say APPLE")
+      expect(serialized.slice(0, orangeIndex).join()).not.toContain("Say ORANGE")
+      expect(serialized.slice(0, bananaIndex).join()).not.toContain("Say BANANA")
+
+      const msgs = yield* sessions.messages({ sessionID: chat.id })
+      const users = msgs
+        .filter((msg) => msg.info.role === "user")
+        .map((msg) => (msg.info.role === "user" ? msg.info : undefined))
+        .filter((info): info is MessageV2.User => info !== undefined)
+      const assistants = msgs
+        .filter((msg) => msg.info.role === "assistant")
+        .map((msg) => (msg.info.role === "assistant" ? msg.info : undefined))
+        .filter((info): info is MessageV2.Assistant => info !== undefined)
+
+      const openUser = users.find((user) => user.delivery !== "deferred")
+      if (!openUser) throw new Error("expected open user")
+      const openAssistants = assistants.filter((assistant) => assistant.parentID === openUser.id)
+      expect(openAssistants).toHaveLength(1)
+
+      const deferredUsers = users.filter((user) => user.delivery === "deferred")
+      expect(deferredUsers).toHaveLength(3)
+
+      const timeline = msgs.map((msg) => msg.info.id)
+      for (const deferred of deferredUsers) {
+        const userIndex = timeline.indexOf(deferred.id)
+        const assistant = assistants.find((entry) => entry.parentID === deferred.id)
+        if (!assistant) throw new Error(`expected assistant for ${deferred.id}`)
+        const assistantIndex = timeline.indexOf(assistant.id)
+        expect(userIndex).toBeGreaterThan(-1)
+        expect(assistantIndex).toBeGreaterThan(userIndex)
+        for (const other of deferredUsers) {
+          if (other.id === deferred.id) continue
+          const otherIndex = timeline.indexOf(other.id)
+          if (otherIndex < userIndex) expect(assistantIndex).toBeGreaterThan(otherIndex)
+        }
+      }
+
+      const openIndex = timeline.indexOf(openUser.id)
+      const firstDeferredIndex = timeline.indexOf(deferredUsers[0]!.id)
+      expect(firstDeferredIndex).toBeGreaterThan(openIndex)
+      const lastOpenAssistantIndex = timeline.indexOf(openAssistants[0]!.id)
+      expect(firstDeferredIndex).toBeGreaterThan(lastOpenAssistantIndex)
+    }),
+  10_000,
+)
+
+it.instance(
+  "steering does not dequeue deferred prompts until the steer turn finishes",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const openGate = yield* Deferred.make<void>()
+      const steerGate = yield* Deferred.make<void>()
+      const prompt = yield* SessionPrompt.Service
+      const runState = yield* SessionRunState.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+
+      yield* llm.hold("open", deferredAsPromise(openGate))
+      yield* llm.text("open-done")
+      yield* llm.hold("steer", deferredAsPromise(steerGate))
+      yield* llm.text("queue-1-done")
+
+      const run = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "open turn" }],
+        })
+        .pipe(Effect.forkChild)
+
+      yield* llm.wait(1)
+
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        delivery: "deferred",
+        parts: [{ type: "text", text: "queued-one" }],
+      })
+
+      expect(yield* runState.hasDeferred(chat.id)).toBe(true)
+
+      yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          delivery: "immediate",
+          parts: [{ type: "text", text: "steer now" }],
+        })
+        .pipe(Effect.forkChild)
+
+      yield* pollWithTimeout(
+        sessions.messages({ sessionID: chat.id }).pipe(
+          Effect.map((msgs) =>
+            msgs.some(
+              (msg) =>
+                msg.info.role === "user" &&
+                msg.parts.some((part) => part.type === "text" && part.text === "steer now"),
+            )
+              ? true
+              : undefined,
+          ),
+        ),
+        "timed out waiting for steer message",
+      )
+      expect(yield* runState.hasDeferred(chat.id)).toBe(true)
+
+      yield* Deferred.succeed(openGate, void 0)
+      yield* llm.wait(2)
+
+      expect(yield* runState.hasDeferred(chat.id)).toBe(true)
+      const inputsBeforeSteerDone = yield* llm.inputs
+      expect(JSON.stringify(inputsBeforeSteerDone)).not.toContain("queued-one")
+
+      yield* Deferred.succeed(steerGate, void 0)
+
+      const exit = yield* Fiber.await(run)
+      expect(Exit.isSuccess(exit)).toBe(true)
+
+      expect(yield* runState.hasDeferred(chat.id)).toBe(false)
+      expect(JSON.stringify(yield* llm.inputs)).toContain("queued-one")
     }),
   10_000,
 )

@@ -366,6 +366,18 @@ export const Event = {
       error: MessageV2.Assistant.fields.error,
     }),
   ),
+  DeferredUpdated: BusEvent.define(
+    "session.deferred.updated",
+    Schema.Struct({
+      sessionID: SessionID,
+      items: Schema.Array(
+        Schema.Struct({
+          id: MessageID,
+          text: Schema.String,
+        }),
+      ),
+    }),
+  ),
 }
 
 export function plan(input: { slug: string; time: { created: number } }, instance: InstanceContext) {

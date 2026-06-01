@@ -95,6 +95,16 @@ export interface Interface {
   readonly shell: (input: ShellInput) => Effect.Effect<MessageV2.WithParts, Session.BusyError>
   readonly command: (input: CommandInput) => Effect.Effect<MessageV2.WithParts, Image.Error>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
+  readonly updateDeferredQueue: (
+    sessionID: SessionID,
+    messageID: MessageID,
+    message: MessageV2.WithParts,
+  ) => Effect.Effect<boolean>
+  readonly sendDeferredNow: (
+    sessionID: SessionID,
+    messageID: MessageID,
+    message?: MessageV2.WithParts,
+  ) => Effect.Effect<MessageV2.WithParts>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionPrompt") {}
@@ -691,7 +701,130 @@ export const layer = Layer.effect(
       return yield* provider.defaultModel().pipe(Effect.orDie)
     })
 
-    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: PromptInput) {
+    const persistUserMessage = Effect.fn("SessionPrompt.persistUserMessage")(function* (message: MessageV2.WithParts) {
+      const info = message.info
+      const parts = message.parts
+      if (info.role !== "user") return
+
+      const parsed = decodeMessageInfo(info, { errors: "all", propertyOrder: "original" })
+      if (Exit.isFailure(parsed)) {
+        log.error("invalid user message before save", {
+          sessionID: info.sessionID,
+          messageID: info.id,
+          agent: info.agent,
+          model: info.model,
+          cause: Cause.pretty(parsed.cause),
+        })
+      }
+      parts.forEach((part, index) => {
+        const p = decodeMessagePart(part, { errors: "all", propertyOrder: "original" })
+        if (Exit.isSuccess(p)) return
+        log.error("invalid user part before save", {
+          sessionID: info.sessionID,
+          messageID: info.id,
+          partID: part.id,
+          partType: part.type,
+          index,
+          cause: Cause.pretty(p.cause),
+          part,
+        })
+      })
+
+      yield* sessions.updateMessage(info)
+      for (const part of parts) yield* sessions.updatePart(part)
+      const nextPrompt = parts.reduce(
+        (result, part) => {
+          if (part.type === "text") {
+            if (part.synthetic) result.synthetic.push(part.text)
+            else result.text.push(part.text)
+            const reference = referencePromptMetadata(part.metadata?.reference)
+            if (reference) {
+              result.references.push(
+                new ReferenceAttachment({
+                  name: reference.name,
+                  kind: reference.kind,
+                  uri: reference.path ? pathToFileURL(reference.path).href : undefined,
+                  repository: reference.repository,
+                  branch: reference.branch,
+                  target: reference.target,
+                  targetUri: reference.targetPath ? pathToFileURL(reference.targetPath).href : undefined,
+                  problem: reference.problem,
+                  source: new Source({
+                    start: reference.source.start,
+                    end: reference.source.end,
+                    text: reference.source.value,
+                  }),
+                }),
+              )
+            }
+          }
+          if (part.type === "file") {
+            result.files.push(
+              new FileAttachment({
+                uri: part.url,
+                mime: part.mime,
+                name: part.filename,
+                source: part.source
+                  ? new Source({
+                      start: part.source.text.start,
+                      end: part.source.text.end,
+                      text: part.source.text.value,
+                    })
+                  : undefined,
+              }),
+            )
+          }
+          if (part.type === "agent") {
+            result.agents.push(
+              new AgentAttachment({
+                name: part.name,
+                source: part.source
+                  ? new Source({
+                      start: part.source.start,
+                      end: part.source.end,
+                      text: part.source.value,
+                    })
+                  : undefined,
+              }),
+            )
+          }
+          return result
+        },
+        {
+          text: [] as string[],
+          files: [] as FileAttachment[],
+          agents: [] as AgentAttachment[],
+          references: [] as ReferenceAttachment[],
+          synthetic: [] as string[],
+        },
+      )
+      if (flags.experimentalEventSystem) {
+        yield* events.publish(SessionEvent.Prompted, {
+          sessionID: info.sessionID,
+          timestamp: DateTime.makeUnsafe(info.time.created),
+          prompt: {
+            text: nextPrompt.text.join("\n"),
+            files: nextPrompt.files,
+            agents: nextPrompt.agents,
+            references: nextPrompt.references,
+          },
+        })
+      }
+      for (const text of nextPrompt.synthetic) {
+        if (flags.experimentalEventSystem) {
+          yield* events.publish(SessionEvent.Synthetic, {
+            sessionID: info.sessionID,
+            timestamp: DateTime.makeUnsafe(info.time.created),
+            text,
+          })
+        }
+      }
+    })
+
+    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (
+      input: PromptInput,
+      opts?: { persist?: boolean },
+    ) {
       const agentName = input.agent
       const ag = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
       if (!ag) {
@@ -1095,123 +1228,10 @@ export const layer = Layer.effect(
           : Effect.succeed(part),
       )
 
-      const parsed = decodeMessageInfo(info, { errors: "all", propertyOrder: "original" })
-      if (Exit.isFailure(parsed)) {
-        log.error("invalid user message before save", {
-          sessionID: input.sessionID,
-          messageID: info.id,
-          agent: info.agent,
-          model: info.model,
-          cause: Cause.pretty(parsed.cause),
-        })
-      }
-      parts.forEach((part, index) => {
-        const p = decodeMessagePart(part, { errors: "all", propertyOrder: "original" })
-        if (Exit.isSuccess(p)) return
-        log.error("invalid user part before save", {
-          sessionID: input.sessionID,
-          messageID: info.id,
-          partID: part.id,
-          partType: part.type,
-          index,
-          cause: Cause.pretty(p.cause),
-          part,
-        })
-      })
-
-      yield* sessions.updateMessage(info)
-      for (const part of parts) yield* sessions.updatePart(part)
-      const nextPrompt = parts.reduce(
-        (result, part) => {
-          if (part.type === "text") {
-            if (part.synthetic) result.synthetic.push(part.text)
-            else result.text.push(part.text)
-            const reference = referencePromptMetadata(part.metadata?.reference)
-            if (reference) {
-              result.references.push(
-                new ReferenceAttachment({
-                  name: reference.name,
-                  kind: reference.kind,
-                  uri: reference.path ? pathToFileURL(reference.path).href : undefined,
-                  repository: reference.repository,
-                  branch: reference.branch,
-                  target: reference.target,
-                  targetUri: reference.targetPath ? pathToFileURL(reference.targetPath).href : undefined,
-                  problem: reference.problem,
-                  source: new Source({
-                    start: reference.source.start,
-                    end: reference.source.end,
-                    text: reference.source.value,
-                  }),
-                }),
-              )
-            }
-          }
-          if (part.type === "file") {
-            result.files.push(
-              new FileAttachment({
-                uri: part.url,
-                mime: part.mime,
-                name: part.filename,
-                source: part.source
-                  ? new Source({
-                      start: part.source.text.start,
-                      end: part.source.text.end,
-                      text: part.source.text.value,
-                    })
-                  : undefined,
-              }),
-            )
-          }
-          if (part.type === "agent") {
-            result.agents.push(
-              new AgentAttachment({
-                name: part.name,
-                source: part.source
-                  ? new Source({
-                      start: part.source.start,
-                      end: part.source.end,
-                      text: part.source.value,
-                    })
-                  : undefined,
-              }),
-            )
-          }
-          return result
-        },
-        {
-          text: [] as string[],
-          files: [] as FileAttachment[],
-          agents: [] as AgentAttachment[],
-          references: [] as ReferenceAttachment[],
-          synthetic: [] as string[],
-        },
-      )
-      // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
-      if (flags.experimentalEventSystem) {
-        yield* events.publish(SessionEvent.Prompted, {
-          sessionID: input.sessionID,
-          timestamp: DateTime.makeUnsafe(info.time.created),
-          prompt: {
-            text: nextPrompt.text.join("\n"),
-            files: nextPrompt.files,
-            agents: nextPrompt.agents,
-            references: nextPrompt.references,
-          },
-        })
-      }
-      for (const text of nextPrompt.synthetic) {
-        // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
-        if (flags.experimentalEventSystem) {
-          yield* events.publish(SessionEvent.Synthetic, {
-            sessionID: input.sessionID,
-            timestamp: DateTime.makeUnsafe(info.time.created),
-            text,
-          })
-        }
-      }
-
-      return { info, parts }
+      const message = { info, parts }
+      if (opts?.persist === false) return message
+      yield* persistUserMessage(message)
+      return message
     }, Effect.scoped)
 
     const prompt: (input: PromptInput) => Effect.Effect<MessageV2.WithParts, Image.Error> = Effect.fn(
@@ -1219,8 +1239,6 @@ export const layer = Layer.effect(
     )(function* (input: PromptInput) {
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       yield* revert.cleanup(session)
-      const message = yield* createUserMessage(input)
-      yield* sessions.touch(input.sessionID)
 
       const permissions: Permission.Rule[] = []
       for (const [t, enabled] of Object.entries(input.tools ?? {})) {
@@ -1231,17 +1249,21 @@ export const layer = Layer.effect(
         yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
       }
 
-      if (input.noReply === true) return message
-      if (input.delivery === "deferred") {
-        // A deferred message only joins an in-flight turn; runLoop drains the
-        // deferred queue before exiting and continues the loop to pick it up.
-        // When nothing is running there is no loop to drain it, so fall back to
-        // an immediate turn rather than letting the message sit forever.
-        if (yield* state.hasRunner(input.sessionID)) {
-          yield* state.defer(input.sessionID, message)
-          return message
-        }
+      if (
+        input.delivery === "deferred" &&
+        input.noReply !== true &&
+        (yield* state.hasRunner(input.sessionID))
+      ) {
+        const message = yield* createUserMessage(input, { persist: false })
+        yield* sessions.touch(input.sessionID)
+        yield* state.defer(input.sessionID, message)
+        return message
       }
+
+      const message = yield* createUserMessage(input)
+      yield* sessions.touch(input.sessionID)
+
+      if (input.noReply === true) return message
       return yield* loop({ sessionID: input.sessionID })
     })
 
@@ -1308,6 +1330,18 @@ export const layer = Layer.effect(
 
           const pinOpenUser = needsToolFollowup || openTurnInProgress
 
+          if (
+            !MessageV2.immediateTurnUnsettled(msgs) &&
+            pendingDeferred &&
+            MessageV2.unprocessedDeferredUsers(msgs).length === 0
+          ) {
+            const next = yield* state.popDeferred(sessionID)
+            if (next) {
+              yield* persistUserMessage(rekeyDeferredMessage(next))
+              continue
+            }
+          }
+
           const activeUser = pinOpenUser ? openUser : MessageV2.firstUnprocessedDeferred(msgs) ?? openUser
 
           if (!activeUser) throw new Error("No user message found in stream. This should never happen.")
@@ -1325,10 +1359,10 @@ export const layer = Layer.effect(
             lastUser !== undefined &&
             lastAssistant !== undefined &&
             lastUser.id < lastAssistant.id &&
-            deferredUsers.length === 0
+            deferredUsers.length === 0 &&
+            !(yield* state.hasDeferred(sessionID))
 
           if (turnSettled) {
-            yield* state.drainDeferred(sessionID)
             const orphan = lastAssistantMsg?.parts.find(
               (part): part is MessageV2.ToolPart => part.type === "tool" && isOrphanedInterruptedTool(part),
             )
@@ -1603,14 +1637,11 @@ export const layer = Layer.effect(
               continue
             }
 
-            if (yield* state.hasDeferred(sessionID)) yield* state.popDeferred(sessionID)
-
             const remaining = MessageV2.unprocessedDeferredUsers(
               yield* MessageV2.filterCompactedEffect(sessionID),
             )
             if (remaining.length > 0) continue
 
-            yield* state.drainDeferred(sessionID)
             break
           }
           continue
@@ -1751,6 +1782,28 @@ export const layer = Layer.effect(
       return result
     })
 
+    const updateDeferredQueue = Effect.fn("SessionPrompt.updateDeferredQueue")(function* (
+      sessionID: SessionID,
+      messageID: MessageID,
+      message: MessageV2.WithParts,
+    ) {
+      return yield* state.updateDeferred(sessionID, messageID, message)
+    })
+
+    const sendDeferredNow = Effect.fn("SessionPrompt.sendDeferredNow")(function* (
+      sessionID: SessionID,
+      messageID: MessageID,
+      message?: MessageV2.WithParts,
+    ) {
+      const queued = message ?? (yield* state.takeDeferred(sessionID, messageID))
+      if (!queued || queued.info.role !== "user") {
+        return yield* Effect.die("Queued message not found")
+      }
+      queued.info.delivery = "immediate"
+      yield* persistUserMessage(queued)
+      return yield* loop({ sessionID })
+    })
+
     return Service.of({
       cancel,
       prompt,
@@ -1758,9 +1811,26 @@ export const layer = Layer.effect(
       shell,
       command,
       resolvePromptParts,
+      updateDeferredQueue,
+      sendDeferredNow,
     })
   }),
 )
+
+function rekeyDeferredMessage(message: MessageV2.WithParts) {
+  const info = message.info
+  if (info.role !== "user") return message
+  const id = MessageID.ascending()
+  const created = Date.now()
+  return {
+    info: { ...info, id, time: { ...info.time, created } },
+    parts: message.parts.map((part) => ({
+      ...part,
+      id: PartID.ascending(),
+      messageID: id,
+    })),
+  }
+}
 
 export const defaultLayer = Layer.suspend(() =>
   layer.pipe(
