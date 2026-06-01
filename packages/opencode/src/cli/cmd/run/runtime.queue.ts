@@ -268,7 +268,7 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
     drain()
   }
 
-  // Alt+Enter queues a prompt with delivery="deferred". Unlike a normal submit,
+  // Ctrl+Shift+Enter queues a prompt with delivery="deferred". Unlike a normal submit,
   // it never kicks off draining on its own: if a turn is already running, the
   // in-flight drain loop picks it up after the current turn; if the session is
   // idle, it stays queued until the next normal submit drains it.

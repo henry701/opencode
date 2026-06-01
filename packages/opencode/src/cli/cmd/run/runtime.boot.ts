@@ -26,7 +26,7 @@ const DEFAULT_KEYBINDS: FooterKeybinds = {
   inputClear: [{ key: "ctrl+c" }],
   inputSubmit: [{ key: "return" }],
   inputNewline: [{ key: "shift+return,ctrl+return,ctrl+j" }],
-  inputQueue: [{ key: "alt+return" }],
+  inputQueue: [{ key: "ctrl+shift+return" }],
 }
 
 export type ModelInfo = {

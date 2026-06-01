@@ -42,7 +42,7 @@ const keybinds: FooterKeybinds = {
   inputClear: bindings("ctrl+c"),
   inputSubmit: bindings("return"),
   inputNewline: bindings("shift+return,ctrl+return,ctrl+j"),
-  inputQueue: bindings("alt+return"),
+  inputQueue: bindings("ctrl+shift+return"),
 }
 
 function command(input: { name: string; description: string; source?: "command" | "mcp" | "skill" }) {

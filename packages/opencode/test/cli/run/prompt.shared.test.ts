@@ -31,7 +31,7 @@ const keybinds = {
   inputClear: bindings("ctrl+c"),
   inputSubmit: bindings("return"),
   inputNewline: bindings("shift+return,ctrl+return,ctrl+j"),
-  inputQueue: bindings("alt+return"),
+  inputQueue: bindings("ctrl+shift+return"),
 }
 
 function prompt(text: string, parts: RunPrompt["parts"] = []): RunPrompt {
@@ -145,7 +145,7 @@ describe("run prompt shared", () => {
   test("exposes queue bindings separately from textarea actions", () => {
     const keys = promptKeys(keybinds)
 
-    expect(promptHit(keys.queues, promptInfo({ name: "return", meta: true }))).toBe(true)
+    expect(promptHit(keys.queues, promptInfo({ name: "return", ctrl: true, shift: true }))).toBe(true)
     expect(keys.bindings.every((binding) => binding.action === "submit" || binding.action === "newline")).toBe(true)
   })
 
