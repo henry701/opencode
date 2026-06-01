@@ -60,8 +60,13 @@ function footer() {
     api,
     events,
     commits,
-    submit(text: string, mode?: RunPrompt["mode"]) {
-      const next = mode ? { text, parts: [] as RunPrompt["parts"], mode } : { text, parts: [] as RunPrompt["parts"] }
+    submit(text: string, opts?: { mode?: RunPrompt["mode"]; delivery?: RunPrompt["delivery"] }) {
+      const next: RunPrompt = {
+        text,
+        parts: [] as RunPrompt["parts"],
+        ...(opts?.mode ? { mode: opts.mode } : {}),
+        ...(opts?.delivery ? { delivery: opts.delivery } : {}),
+      }
       for (const fn of [...prompts]) {
         fn(next)
       }
@@ -149,7 +154,7 @@ describe("run runtime queue", () => {
       },
     })
 
-    ui.submit("/exit", "shell")
+    ui.submit("/exit", { mode: "shell" })
     await task
 
     expect(seen).toEqual([{ text: "/exit", parts: [], mode: "shell" }])
@@ -172,7 +177,7 @@ describe("run runtime queue", () => {
       },
     })
 
-    ui.submit("/new", "shell")
+    ui.submit("/new", { mode: "shell" })
     await task
 
     expect(created).toBe(0)
@@ -191,7 +196,7 @@ describe("run runtime queue", () => {
       },
     })
 
-    ui.submit("ls", "shell")
+    ui.submit("ls", { mode: "shell" })
     await task
   })
 
@@ -372,5 +377,60 @@ describe("run runtime queue", () => {
 
     ui.submit("one")
     await expect(task).rejects.toThrow("boom")
+  })
+
+  test("deferred delivery enqueues without starting a drain", async () => {
+    const ui = footer()
+    const seen: string[] = []
+    let wake: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => {
+      wake = resolve
+    })
+
+    const task = runPromptQueue({
+      footer: ui.api,
+      run: async (input) => {
+        seen.push(input.text)
+        if (seen.length === 1) {
+          await gate
+          return
+        }
+
+        ui.api.close()
+      },
+    })
+
+    ui.submit("one")
+    await Promise.resolve()
+    expect(seen).toEqual(["one"])
+
+    ui.submit("queued", { delivery: "deferred" })
+    await Promise.resolve()
+    expect(seen).toEqual(["one"])
+    expect(ui.events.some((event) => event.type === "queue" && event.queue === 1)).toBe(true)
+
+    wake?.()
+    await task
+
+    expect(seen).toEqual(["one", "queued"])
+  })
+
+  test("deferred delivery ignores empty prompts", async () => {
+    const ui = footer()
+    let calls = 0
+
+    const task = runPromptQueue({
+      footer: ui.api,
+      run: async () => {
+        calls += 1
+        ui.api.close()
+      },
+    })
+
+    ui.submit("   ", { delivery: "deferred" })
+    ui.api.close()
+    await task
+
+    expect(calls).toBe(0)
   })
 })

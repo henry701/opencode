@@ -42,6 +42,7 @@ type FollowupSendInput = {
   sync: ReturnType<typeof useSync>
   draft: FollowupDraft
   messageID?: string
+  delivery?: "immediate" | "deferred"
   optimisticBusy?: boolean
   before?: () => Promise<boolean> | boolean
 }
@@ -157,6 +158,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       agent: input.draft.agent,
       model: input.draft.model,
       messageID,
+      delivery: input.delivery,
       parts: requestParts,
       variant: input.draft.variant,
     })
@@ -187,6 +189,8 @@ type PromptSubmitInput = {
   newSessionWorktree?: Accessor<string | undefined>
   onNewSessionWorktreeReset?: () => void
   shouldQueue?: Accessor<boolean>
+  queueMode?: Accessor<boolean>
+  resetQueueMode?: () => void
   onQueue?: (draft: FollowupDraft) => void
   onAbort?: () => void
   onSubmit?: () => void
@@ -293,6 +297,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     const text = currentPrompt.map((part) => ("content" in part ? part.content : "")).join("")
     const images = input.imageAttachments().slice()
     const mode = input.mode()
+    const queueMode = input.queueMode?.() ?? false
 
     if (text.trim().length === 0 && images.length === 0 && input.commentCount() === 0) {
       if (input.working()) void abort()
@@ -424,13 +429,15 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       })
     }
 
-    if (!isNewSession && mode === "normal" && input.shouldQueue?.()) {
+    if (!isNewSession && mode === "normal" && (input.shouldQueue?.() || queueMode)) {
       input.onQueue?.(draft)
+      input.resetQueueMode?.()
       clearContext()
       clearInput()
       return
     }
 
+    input.resetQueueMode?.()
     input.onSubmit?.()
 
     if (mode === "shell") {

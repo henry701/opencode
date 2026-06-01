@@ -91,6 +91,7 @@ export type SessionTurnInput = {
   prompt: RunPrompt
   files: RunFilePart[]
   includeFiles: boolean
+  delivery?: "immediate" | "deferred"
   signal?: AbortSignal
 }
 
@@ -1023,6 +1024,7 @@ function createLayer(input: StreamInput) {
             agent: next.agent,
             model: next.model,
             variant: next.variant,
+            delivery: next.delivery,
             parts: [
               ...(next.includeFiles ? next.files : []),
               { type: "text" as const, text: next.prompt.text },

@@ -51,6 +51,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { SessionEvent } from "@opencode-ai/core/session-event"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
+import { SessionV2 } from "@/v2/session"
 import { AgentAttachment, FileAttachment, ReferenceAttachment, Source } from "@opencode-ai/core/session-prompt"
 import { Reference } from "@/reference/reference"
 import * as DateTime from "effect/DateTime"
@@ -1230,6 +1231,16 @@ export const layer = Layer.effect(
       }
 
       if (input.noReply === true) return message
+      if (input.delivery === "deferred") {
+        // A deferred message only joins an in-flight turn; runLoop drains the
+        // deferred queue before exiting and continues the loop to pick it up.
+        // When nothing is running there is no loop to drain it, so fall back to
+        // an immediate turn rather than letting the message sit forever.
+        if (yield* state.hasRunner(input.sessionID)) {
+          yield* state.defer(input.sessionID, message)
+          return message
+        }
+      }
       return yield* loop({ sessionID: input.sessionID })
     })
 
@@ -1513,7 +1524,17 @@ export const layer = Layer.effect(
             Effect.ensuring(instruction.clear(handle.message.id)),
             Effect.onInterrupt(() => finalizeInterruptedAssistant),
           )
-          if (outcome === "break") break
+          if (outcome === "break") {
+            // Messages queued with delivery="deferred" were persisted while this
+            // turn was running. Drain them and continue so the loop reloads the
+            // history and addresses them (the system-reminder wrapping below at
+            // the "step > 1" branch picks up the newer user messages).
+            if (yield* state.hasDeferred(sessionID)) {
+              yield* state.drainDeferred(sessionID)
+              continue
+            }
+            break
+          }
           continue
         }
 
@@ -1709,6 +1730,7 @@ export const PromptInput = Schema.Struct({
   model: Schema.optional(ModelRef),
   agent: Schema.optional(Schema.String),
   noReply: Schema.optional(Schema.Boolean),
+  delivery: Schema.optional(SessionV2.Delivery),
   tools: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)).annotate({
     description:
       "@deprecated tools and permissions have been merged, you can set permissions on the session itself now",

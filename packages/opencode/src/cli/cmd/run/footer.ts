@@ -280,6 +280,7 @@ export class RunFooter implements FooterApi {
           history: options.history,
           agent: options.agentLabel,
           onSubmit: this.handlePrompt,
+          onQueue: this.handleQueue,
           onPermissionReply: this.handlePermissionReply,
           onQuestionReply: this.handleQuestionReply,
           onQuestionReject: this.handleQuestionReject,
@@ -622,6 +623,25 @@ export class RunFooter implements FooterApi {
     }
 
     return true
+  }
+
+  private handleQueue = (input: RunPrompt): void => {
+    if (this.isClosed) {
+      return
+    }
+
+    if (this.state().first) {
+      this.patch({ first: false })
+    }
+
+    if (this.prompts.size === 0) {
+      this.patch({ status: "input queue unavailable" })
+      return
+    }
+
+    for (const fn of [...this.prompts]) {
+      fn(input)
+    }
   }
 
   private handlePermissionReply = async (input: PermissionReply): Promise<void> => {

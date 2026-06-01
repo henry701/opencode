@@ -30,7 +30,8 @@ const keybinds = {
   historyNext: bindings("down"),
   inputClear: bindings("ctrl+c"),
   inputSubmit: bindings("return"),
-  inputNewline: bindings("shift+return,ctrl+return,alt+return,ctrl+j"),
+  inputNewline: bindings("shift+return,ctrl+return,ctrl+j"),
+  inputQueue: bindings("alt+return"),
 }
 
 function prompt(text: string, parts: RunPrompt["parts"] = []): RunPrompt {
@@ -139,6 +140,13 @@ describe("run prompt shared", () => {
     expect(mentionTriggerIndex("hello@")).toBeUndefined()
     expect(mentionTriggerIndex("foo@bar.com")).toBeUndefined()
     expect(mentionTriggerIndex("中文 @src file")).toBeUndefined()
+  })
+
+  test("exposes queue bindings separately from textarea actions", () => {
+    const keys = promptKeys(keybinds)
+
+    expect(promptHit(keys.queues, promptInfo({ name: "return", meta: true }))).toBe(true)
+    expect(keys.bindings.every((binding) => binding.action === "submit" || binding.action === "newline")).toBe(true)
   })
 
   test("handles direct and leader-based variant cycling", () => {
