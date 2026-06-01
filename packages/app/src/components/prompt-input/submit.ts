@@ -1,11 +1,11 @@
 import type { Message, Session } from "@opencode-ai/sdk/v2/client"
 import { showToast } from "@opencode-ai/ui/toast"
-import { base64Encode } from "@opencode-ai/shared/util/encode"
-import { Binary } from "@opencode-ai/shared/util/binary"
+import { base64Encode } from "@opencode-ai/core/util/encode"
+import { Binary } from "@opencode-ai/core/util/binary"
 import { useNavigate, useParams } from "@solidjs/router"
 import { batch, type Accessor } from "solid-js"
 import type { FileSelection } from "@/context/file"
-import { useGlobalSync } from "@/context/global-sync"
+import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
 import { useLocal } from "@/context/local"
@@ -38,10 +38,11 @@ export type FollowupDraft = {
 
 type FollowupSendInput = {
   client: ReturnType<typeof useSDK>["client"]
-  globalSync: ReturnType<typeof useGlobalSync>
+  serverSync: ReturnType<typeof useServerSync>
   sync: ReturnType<typeof useSync>
   draft: FollowupDraft
   messageID?: string
+  delivery?: "immediate" | "deferred"
   optimisticBusy?: boolean
   before?: () => Promise<boolean> | boolean
 }
@@ -53,7 +54,7 @@ const draftImages = (prompt: Prompt) => prompt.filter((part): part is ImageAttac
 export async function sendFollowupDraft(input: FollowupSendInput) {
   const text = draftText(input.draft.prompt)
   const images = draftImages(input.draft.prompt)
-  const [, setStore] = input.globalSync.child(input.draft.sessionDirectory)
+  const [, setStore] = input.serverSync.child(input.draft.sessionDirectory)
 
   const setBusy = () => {
     if (!input.optimisticBusy) return
@@ -157,6 +158,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       agent: input.draft.agent,
       model: input.draft.model,
       messageID,
+      delivery: input.delivery,
       parts: requestParts,
       variant: input.draft.variant,
     })
@@ -187,6 +189,8 @@ type PromptSubmitInput = {
   newSessionWorktree?: Accessor<string | undefined>
   onNewSessionWorktreeReset?: () => void
   shouldQueue?: Accessor<boolean>
+  queueMode?: Accessor<boolean>
+  resetQueueMode?: () => void
   onQueue?: (draft: FollowupDraft) => void
   onAbort?: () => void
   onSubmit?: () => void
@@ -205,7 +209,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
   const navigate = useNavigate()
   const sdk = useSDK()
   const sync = useSync()
-  const globalSync = useGlobalSync()
+  const serverSync = useServerSync()
   const local = useLocal()
   const permission = usePermission()
   const prompt = usePrompt()
@@ -226,8 +230,8 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     const sessionID = params.id
     if (!sessionID) return Promise.resolve()
 
-    globalSync.todo.set(sessionID, [])
-    const [, setStore] = globalSync.child(sdk.directory)
+    serverSync.todo.set(sessionID, [])
+    const [, setStore] = serverSync.child(sdk.directory)
     setStore("todo", sessionID, [])
 
     input.onAbort?.()
@@ -273,7 +277,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
   }
 
   const seed = (dir: string, info: Session) => {
-    const [, setStore] = globalSync.child(dir)
+    const [, setStore] = serverSync.child(dir)
     setStore("session", (list: Session[]) => {
       const result = Binary.search(list, info.id, (item) => item.id)
       const next = [...list]
@@ -293,6 +297,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     const text = currentPrompt.map((part) => ("content" in part ? part.content : "")).join("")
     const images = input.imageAttachments().slice()
     const mode = input.mode()
+    const queueMode = input.queueMode?.() ?? false
 
     if (text.trim().length === 0 && images.length === 0 && input.commentCount() === 0) {
       if (input.working()) void abort()
@@ -354,7 +359,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
           directory: sessionDirectory,
           throwOnError: true,
         })
-        globalSync.child(sessionDirectory)
+        serverSync.child(sessionDirectory)
       }
 
       input.onNewSessionWorktreeReset?.()
@@ -424,13 +429,15 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       })
     }
 
-    if (!isNewSession && mode === "normal" && input.shouldQueue?.()) {
+    if (!isNewSession && mode === "normal" && (input.shouldQueue?.() || queueMode)) {
       input.onQueue?.(draft)
+      input.resetQueueMode?.()
       clearContext()
       clearInput()
       return
     }
 
+    input.resetQueueMode?.()
     input.onSubmit?.()
 
     if (mode === "shell") {
@@ -557,7 +564,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     void sendFollowupDraft({
       client,
       sync,
-      globalSync,
+      serverSync,
       draft,
       messageID,
       optimisticBusy: sessionDirectory === projectDirectory,

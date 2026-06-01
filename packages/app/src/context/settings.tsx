@@ -32,6 +32,8 @@ export interface Settings {
     shellToolPartsExpanded: boolean
     editToolPartsExpanded: boolean
     showSessionProgressBar: boolean
+    showCustomAgents: boolean
+    newLayoutDesigns?: boolean
   }
   updates: {
     startup: boolean
@@ -53,6 +55,7 @@ export interface Settings {
 export const monoDefault = "System Mono"
 export const sansDefault = "System Sans"
 export const terminalDefault = "JetBrainsMono Nerd Font Mono"
+export const newLayoutDesignsDefault = import.meta.env.VITE_OPENCODE_CHANNEL !== "prod"
 
 const monoFallback =
   'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
@@ -117,6 +120,7 @@ const defaultSettings: Settings = {
     shellToolPartsExpanded: false,
     editToolPartsExpanded: false,
     showSessionProgressBar: true,
+    showCustomAgents: false,
   },
   updates: {
     startup: true,
@@ -162,11 +166,6 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
       root.style.setProperty("--font-family-sans", sansFontFamily(store.appearance?.sans))
     })
 
-    createEffect(() => {
-      if (store.general?.followup !== "queue") return
-      setStore("general", "followup", "steer")
-    })
-
     return {
       ready,
       get current() {
@@ -181,12 +180,9 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         setReleaseNotes(value: boolean) {
           setStore("general", "releaseNotes", value)
         },
-        followup: withFallback(
-          () => (store.general?.followup === "queue" ? "steer" : store.general?.followup),
-          defaultSettings.general.followup,
-        ),
+        followup: withFallback(() => store.general?.followup, defaultSettings.general.followup),
         setFollowup(value: "queue" | "steer") {
-          setStore("general", "followup", value === "queue" ? "steer" : value)
+          setStore("general", "followup", value)
         },
         showFileTree: withFallback(() => store.general?.showFileTree, defaultSettings.general.showFileTree),
         setShowFileTree(value: boolean) {
@@ -235,6 +231,14 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         ),
         setShowSessionProgressBar(value: boolean) {
           setStore("general", "showSessionProgressBar", value)
+        },
+        showCustomAgents: withFallback(() => store.general?.showCustomAgents, defaultSettings.general.showCustomAgents),
+        setShowCustomAgents(value: boolean) {
+          setStore("general", "showCustomAgents", value)
+        },
+        newLayoutDesigns: withFallback(() => store.general?.newLayoutDesigns, newLayoutDesignsDefault),
+        setNewLayoutDesigns(value: boolean) {
+          setStore("general", "newLayoutDesigns", value)
         },
       },
       updates: {
