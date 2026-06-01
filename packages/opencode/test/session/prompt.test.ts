@@ -1222,6 +1222,85 @@ it.instance(
 )
 
 it.instance(
+  "deferred prompt joins the active run instead of starting a separate turn",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const gate = yield* Deferred.make<void>()
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+
+      yield* llm.hold("first", deferredAsPromise(gate))
+      yield* llm.text("second")
+
+      const a = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "first" }],
+        })
+        .pipe(Effect.forkChild)
+
+      yield* llm.wait(1)
+
+      const id = MessageID.ascending()
+      // delivery="deferred" returns the persisted user message immediately
+      // without starting its own turn; the active loop drains it before exiting.
+      const deferred = yield* prompt.prompt({
+        sessionID: chat.id,
+        messageID: id,
+        agent: "build",
+        model: ref,
+        delivery: "deferred",
+        parts: [{ type: "text", text: "second" }],
+      })
+      expect(deferred.info.role).toBe("user")
+      expect(deferred.info.id).toBe(id)
+
+      yield* Deferred.succeed(gate, void 0)
+      const ea = yield* Fiber.await(a)
+      expect(Exit.isSuccess(ea)).toBe(true)
+
+      yield* pollWithTimeout(
+        llm.calls.pipe(Effect.map((n) => (n >= 2 ? true : undefined))),
+        "timed out waiting for deferred message to be processed",
+      )
+      expect(yield* llm.calls).toBe(2)
+
+      const inputs = yield* llm.inputs
+      expect(JSON.stringify(inputs.at(-1)?.messages)).toContain("second")
+    }),
+  3_000,
+)
+
+it.instance(
+  "deferred prompt on an idle session falls back to an immediate turn",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+
+      yield* llm.text("hello")
+
+      const result = yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        delivery: "deferred",
+        parts: [{ type: "text", text: "hi" }],
+      })
+
+      expect(result.info.role).toBe("assistant")
+      expect(yield* llm.hits).toHaveLength(1)
+    }),
+  3_000,
+)
+
+it.instance(
   "assertNotBusy fails with BusyError when loop running",
   () =>
     Effect.gen(function* () {

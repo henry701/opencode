@@ -41,7 +41,8 @@ const keybinds: FooterKeybinds = {
   historyNext: bindings("down"),
   inputClear: bindings("ctrl+c"),
   inputSubmit: bindings("return"),
-  inputNewline: bindings("shift+return,ctrl+return,alt+return,ctrl+j"),
+  inputNewline: bindings("shift+return,ctrl+return,ctrl+j"),
+  inputQueue: bindings("alt+return"),
 }
 
 function command(input: { name: string; description: string; source?: "command" | "mcp" | "skill" }) {
@@ -374,6 +375,7 @@ test("direct footer shows subagent indicator while prompt is running", async () 
           keybinds={keybinds}
           agent="opencode"
           onSubmit={() => true}
+          onQueue={() => {}}
           onPermissionReply={() => {}}
           onQuestionReply={() => {}}
           onQuestionReject={() => {}}

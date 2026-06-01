@@ -1604,6 +1604,52 @@ describe("run stream transport", () => {
     }
   })
 
+  test("forwards delivery to promptAsync requests", async () => {
+    const src = eventFeed()
+    const ui = footer()
+    const seen: unknown[] = []
+
+    const transport = await createSessionTransport({
+      sdk: sdk({
+        stream: src.stream,
+        promptAsync: async (input) => {
+          seen.push(input)
+          queueMicrotask(() => {
+            src.push(busy())
+            src.push(idle())
+          })
+          return ok(undefined)
+        },
+      }),
+      sessionID: "session-1",
+      thinking: true,
+      limits: () => ({}),
+      footer: ui.api,
+    })
+
+    try {
+      await transport.runPromptTurn({
+        agent: undefined,
+        model: undefined,
+        variant: undefined,
+        prompt: { text: "queue me", parts: [], delivery: "deferred" },
+        files: [],
+        includeFiles: false,
+        delivery: "deferred",
+      })
+
+      expect(seen).toEqual([
+        expect.objectContaining({
+          delivery: "deferred",
+          parts: [{ type: "text", text: "queue me" }],
+        }),
+      ])
+    } finally {
+      src.close()
+      await transport.close()
+    }
+  })
+
   test("falls back to session status polling when idle events are missing", async () => {
     const src = eventFeed()
     const ui = footer()

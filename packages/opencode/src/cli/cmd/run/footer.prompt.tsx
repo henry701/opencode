@@ -77,6 +77,7 @@ type PromptInput = {
   theme: Accessor<RunFooterTheme>
   history?: RunPrompt[]
   onSubmit: (input: RunPrompt) => boolean | Promise<boolean>
+  onQueue: (input: RunPrompt) => void
   onCycle: () => void
   onInterrupt: () => boolean
   onInputClear: () => void
@@ -968,6 +969,12 @@ export function createPromptState(input: PromptInput): PromptState {
       }
     }
 
+    if (!shell() && promptHit(keys().queues, key)) {
+      event.preventDefault()
+      onQueue()
+      return
+    }
+
     if (
       key.name === "!" &&
       !shell() &&
@@ -1137,6 +1144,22 @@ export function createPromptState(input: PromptInput): PromptState {
   const onSubmit = () => {
     syncDraft()
     submitPrompt(clonePrompt(draft))
+  }
+
+  const onQueue = () => {
+    // Queueing is a normal-mode only affordance; shell commands always run now.
+    if (shell()) return
+    syncDraft()
+    if (visible()) hide()
+    if (!draft.text.trim()) {
+      input.onStatus("empty prompt ignored")
+      return
+    }
+    const queued = clonePrompt(draft)
+    queued.delivery = "deferred"
+    input.onQueue(queued)
+    push(queued)
+    resetDraft()
   }
 
   const submitText = (text: string) => {

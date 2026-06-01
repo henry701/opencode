@@ -44,6 +44,7 @@ export type PromptKeys = {
   previous: PromptInfo[]
   next: PromptInfo[]
   clear: PromptInfo[]
+  queues: PromptInfo[]
   bindings: KeyBinding[]
 }
 
@@ -157,6 +158,10 @@ export function promptKeys(keybinds: FooterKeybinds): PromptKeys {
     previous: promptBindings(keybinds.historyPrevious, keybinds.leader),
     next: promptBindings(keybinds.historyNext, keybinds.leader),
     clear: promptBindings(keybinds.inputClear, keybinds.leader),
+    // Resolved separately from `bindings`: OpenTUI's <textarea> only honors the
+    // "submit"/"newline" actions, so the queue key is dispatched manually in the
+    // footer's onKeyDown handler (see Gap 17 in PLAN.md).
+    queues: promptBindings(keybinds.inputQueue, keybinds.leader),
     bindings: textareaBindings(keybinds),
   }
 }

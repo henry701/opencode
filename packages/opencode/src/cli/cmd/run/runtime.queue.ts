@@ -268,7 +268,46 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
     drain()
   }
 
+  // Alt+Enter queues a prompt with delivery="deferred". Unlike a normal submit,
+  // it never kicks off draining on its own: if a turn is already running, the
+  // in-flight drain loop picks it up after the current turn; if the session is
+  // idle, it stays queued until the next normal submit drains it.
+  const enqueue = (prompt: RunPrompt) => {
+    if (!prompt.text.trim() || state.closed) {
+      return
+    }
+
+    if (prompt.mode !== "shell" && isExitCommand(prompt.text)) {
+      input.footer.close()
+      return
+    }
+
+    state.queue.push(prompt)
+    emit(
+      {
+        type: "queue",
+        queue: state.queue.length,
+      },
+      {
+        queue: state.queue.length,
+      },
+    )
+    emit(
+      {
+        type: "first",
+        first: false,
+      },
+      {
+        first: false,
+      },
+    )
+  }
+
   const offPrompt = input.footer.onPrompt((prompt) => {
+    if (prompt.delivery === "deferred") {
+      enqueue(prompt)
+      return
+    }
     submit(prompt)
   })
   const offClose = input.footer.onClose(() => {

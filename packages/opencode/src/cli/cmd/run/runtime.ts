@@ -651,6 +651,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput): Promise<void> {
                     prompt,
                     files: input.files,
                     includeFiles,
+                    delivery: prompt.delivery,
                     signal,
                   })
                   includeFiles = false

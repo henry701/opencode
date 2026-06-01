@@ -468,6 +468,8 @@ export type AssistantMessage = {
   structured?: unknown
   variant?: string
   finish?: string
+  tool_defs?: string
+  system_prompt?: string
 }
 
 export type Message = UserMessage | AssistantMessage
@@ -3435,6 +3437,8 @@ export type ConfigV2ExperimentalPolicy = {
   resource: string
 }
 
+export type SessionDelivery = "immediate" | "deferred"
+
 export type SessionInfo = {
   id: string
   parentID?: string
@@ -3464,8 +3468,6 @@ export type SessionInfo = {
   }
   title: string
 }
-
-export type SessionDelivery = "immediate" | "deferred"
 
 export type SessionMessageAgentSwitched = {
   id: string
@@ -5034,6 +5036,7 @@ export type AppSkillsResponses = {
     description?: string
     location: string
     content: string
+    scope?: "global" | "project"
   }>
 }
 
@@ -6407,6 +6410,7 @@ export type SessionPromptData = {
     }
     agent?: string
     noReply?: boolean
+    delivery?: SessionDelivery
     tools?: {
       [key: string]: boolean
     }
@@ -6754,6 +6758,7 @@ export type SessionPromptAsyncData = {
     }
     agent?: string
     noReply?: boolean
+    delivery?: SessionDelivery
     tools?: {
       [key: string]: boolean
     }

@@ -69,6 +69,7 @@ function config(input?: {
     inputClear: string[]
     inputSubmit: string[]
     inputNewline: string[]
+    inputQueue: string[]
   }>
 }): Resolved {
   const bind = input?.bindings
@@ -85,6 +86,7 @@ function config(input?: {
       ...(bind?.inputClear && { input_clear: bind.inputClear }),
       ...(bind?.inputSubmit && { input_submit: bind.inputSubmit }),
       ...(bind?.inputNewline && { input_newline: bind.inputNewline }),
+      ...(bind?.inputQueue && { input_queue: bind.inputQueue }),
     },
   })
 }
@@ -106,7 +108,8 @@ describe("run runtime boot", () => {
           historyNext: ["j"],
           inputClear: ["ctrl+l"],
           inputSubmit: ["ctrl+s"],
-          inputNewline: ["alt+return"],
+          inputNewline: ["shift+return"],
+          inputQueue: ["alt+return"],
         },
       }),
     )
@@ -122,7 +125,8 @@ describe("run runtime boot", () => {
     expect(formatBindings(result.historyNext, result.leader)).toBe("j")
     expect(formatBindings(result.inputClear, result.leader)).toBe("ctrl+l")
     expect(formatBindings(result.inputSubmit, result.leader)).toBe("ctrl+s")
-    expect(formatBindings(result.inputNewline, result.leader)).toBe("alt+return")
+    expect(formatBindings(result.inputNewline, result.leader)).toBe("shift+return")
+    expect(formatBindings(result.inputQueue, result.leader)).toBe("alt+return")
   })
 
   test("falls back to default keybinds when config load fails", async () => {
@@ -139,7 +143,8 @@ describe("run runtime boot", () => {
     expect(formatBindings(result.historyNext, result.leader)).toBe("down")
     expect(formatBindings(result.inputClear, result.leader)).toBe("ctrl+c")
     expect(formatBindings(result.inputSubmit, result.leader)).toBe("return")
-    expect(formatBindings(result.inputNewline, result.leader)).toBe("shift+return, ctrl+return, alt+return, ctrl+j")
+    expect(formatBindings(result.inputNewline, result.leader)).toBe("shift+return, ctrl+return, ctrl+j")
+    expect(formatBindings(result.inputQueue, result.leader)).toBe("alt+return")
   })
 
   test("reads diff style and falls back to auto", async () => {

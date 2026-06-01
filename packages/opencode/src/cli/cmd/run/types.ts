@@ -39,6 +39,7 @@ export type RunPrompt = {
     name: string
     arguments: string
   }
+  delivery?: "immediate" | "deferred"
 }
 
 export type RunAgent = NonNullable<Awaited<ReturnType<OpencodeClient["app"]["agents"]>>["data"]>[number]
@@ -278,6 +279,7 @@ export type FooterKeybinds = {
   inputClear: readonly FooterBinding[]
   inputSubmit: readonly FooterBinding[]
   inputNewline: readonly FooterBinding[]
+  inputQueue: readonly FooterBinding[]
 }
 
 // Lifecycle phase of a scrollback entry. "start" opens the entry, "progress"

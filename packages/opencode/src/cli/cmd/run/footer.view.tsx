@@ -79,6 +79,7 @@ type RunFooterViewProps = {
   history?: RunPrompt[]
   agent: string
   onSubmit: (input: RunPrompt) => boolean
+  onQueue: (input: RunPrompt) => void
   onPermissionReply: (input: PermissionReply) => void | Promise<void>
   onQuestionReply: (input: QuestionReply) => void | Promise<void>
   onQuestionReject: (input: QuestionReject) => void | Promise<void>
@@ -265,6 +266,7 @@ export function RunFooterView(props: RunFooterViewProps) {
     theme,
     history: props.history,
     onSubmit: props.onSubmit,
+    onQueue: props.onQueue,
     onCycle: props.onCycle,
     onInterrupt: props.onInterrupt,
     onInputClear: props.onInputClear,
