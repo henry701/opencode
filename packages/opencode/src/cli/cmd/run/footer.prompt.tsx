@@ -78,6 +78,7 @@ type PromptInput = {
   history?: RunPrompt[]
   onSubmit: (input: RunPrompt) => boolean | Promise<boolean>
   onQueue: (input: RunPrompt) => void
+  onEditQueue: () => void
   onCycle: () => void
   onInterrupt: () => boolean
   onInputClear: () => void
@@ -103,6 +104,7 @@ export type PromptState = {
   onKeyDown: (event: KeyEvent) => void
   onContentChange: () => void
   replaceDraft: (text: string) => void
+  restorePrompt: (prompt: RunPrompt) => void
   bind: (area?: TextareaRenderable) => void
 }
 
@@ -115,6 +117,8 @@ function clonePrompt(prompt: RunPrompt): RunPrompt {
     text: prompt.text,
     parts: structuredClone(prompt.parts),
     ...(prompt.mode ? { mode: prompt.mode } : {}),
+    ...(prompt.delivery ? { delivery: prompt.delivery } : {}),
+    ...(prompt.queueID ? { queueID: prompt.queueID } : {}),
   }
 }
 
@@ -969,6 +973,12 @@ export function createPromptState(input: PromptInput): PromptState {
       }
     }
 
+    if (!shell() && promptHit(keys().editQueues, key)) {
+      event.preventDefault()
+      input.onEditQueue()
+      return
+    }
+
     if (!shell() && promptHit(keys().queues, key)) {
       event.preventDefault()
       onQueue()
@@ -1242,6 +1252,7 @@ export function createPromptState(input: PromptInput): PromptState {
       scheduleRows()
     },
     replaceDraft,
+    restorePrompt: restore,
     bind,
   }
 }

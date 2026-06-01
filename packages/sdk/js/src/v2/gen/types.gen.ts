@@ -16,9 +16,13 @@ export type Event =
   | EventFileWatcherUpdated
   | EventLspClientDiagnostics
   | EventLspUpdated
-  | EventMessagePartDelta
+  | EventMcpToolsChanged
+  | EventMcpBrowserOpenFailed
   | EventPermissionAsked
   | EventPermissionReplied
+  | EventCommandExecuted
+  | EventProjectUpdated
+  | EventMessagePartDelta
   | EventSessionDiff
   | EventSessionError
   | EventQuestionAsked
@@ -27,10 +31,6 @@ export type Event =
   | EventTodoUpdated
   | EventSessionStatus
   | EventSessionIdle
-  | EventMcpToolsChanged
-  | EventMcpBrowserOpenFailed
-  | EventCommandExecuted
-  | EventProjectUpdated
   | EventSessionCompacted
   | EventVcsBranchUpdated
   | EventWorkspaceReady
@@ -188,6 +188,30 @@ export type PermissionRequest = {
     messageID: string
     callID: string
   }
+}
+
+export type Project = {
+  id: string
+  worktree: string
+  vcs?: "git"
+  name?: string
+  icon?: {
+    url?: string
+    override?: string
+    color?: string
+  }
+  commands?: {
+    /**
+     * Startup script to run when creating a new workspace (worktree)
+     */
+    start?: string
+  }
+  time: {
+    created: number
+    updated: number
+    initialized?: number
+  }
+  sandboxes: Array<string>
 }
 
 export type SnapshotFileDiff = {
@@ -353,30 +377,6 @@ export type SessionStatus =
       type: "busy"
     }
 
-export type Project = {
-  id: string
-  worktree: string
-  vcs?: "git"
-  name?: string
-  icon?: {
-    url?: string
-    override?: string
-    color?: string
-  }
-  commands?: {
-    /**
-     * Startup script to run when creating a new workspace (worktree)
-     */
-    start?: string
-  }
-  time: {
-    created: number
-    updated: number
-    initialized?: number
-  }
-  sandboxes: Array<string>
-}
-
 export type Pty = {
   id: string
   title: string
@@ -426,6 +426,7 @@ export type UserMessage = {
   tools?: {
     [key: string]: boolean
   }
+  delivery?: SessionDelivery
 }
 
 export type AssistantMessage = {
@@ -820,9 +821,13 @@ export type GlobalEvent = {
     | EventFileWatcherUpdated
     | EventLspClientDiagnostics
     | EventLspUpdated
-    | EventMessagePartDelta
+    | EventMcpToolsChanged
+    | EventMcpBrowserOpenFailed
     | EventPermissionAsked
     | EventPermissionReplied
+    | EventCommandExecuted
+    | EventProjectUpdated
+    | EventMessagePartDelta
     | EventSessionDiff
     | EventSessionError
     | EventQuestionAsked
@@ -831,10 +836,6 @@ export type GlobalEvent = {
     | EventTodoUpdated
     | EventSessionStatus
     | EventSessionIdle
-    | EventMcpToolsChanged
-    | EventMcpBrowserOpenFailed
-    | EventCommandExecuted
-    | EventProjectUpdated
     | EventSessionCompacted
     | EventVcsBranchUpdated
     | EventWorkspaceReady
@@ -2573,15 +2574,20 @@ export type EventLspUpdated = {
   }
 }
 
-export type EventMessagePartDelta = {
+export type EventMcpToolsChanged = {
   id: string
-  type: "message.part.delta"
+  type: "mcp.tools.changed"
   properties: {
-    sessionID: string
-    messageID: string
-    partID: string
-    field: string
-    delta: string
+    server: string
+  }
+}
+
+export type EventMcpBrowserOpenFailed = {
+  id: string
+  type: "mcp.browser.open.failed"
+  properties: {
+    mcpName: string
+    url: string
   }
 }
 
@@ -2598,6 +2604,35 @@ export type EventPermissionReplied = {
     sessionID: string
     requestID: string
     reply: "once" | "always" | "reject"
+  }
+}
+
+export type EventCommandExecuted = {
+  id: string
+  type: "command.executed"
+  properties: {
+    name: string
+    sessionID: string
+    arguments: string
+    messageID: string
+  }
+}
+
+export type EventProjectUpdated = {
+  id: string
+  type: "project.updated"
+  properties: Project
+}
+
+export type EventMessagePartDelta = {
+  id: string
+  type: "message.part.delta"
+  properties: {
+    sessionID: string
+    messageID: string
+    partID: string
+    field: string
+    delta: string
   }
 }
 
@@ -2668,40 +2703,6 @@ export type EventSessionIdle = {
   properties: {
     sessionID: string
   }
-}
-
-export type EventMcpToolsChanged = {
-  id: string
-  type: "mcp.tools.changed"
-  properties: {
-    server: string
-  }
-}
-
-export type EventMcpBrowserOpenFailed = {
-  id: string
-  type: "mcp.browser.open.failed"
-  properties: {
-    mcpName: string
-    url: string
-  }
-}
-
-export type EventCommandExecuted = {
-  id: string
-  type: "command.executed"
-  properties: {
-    name: string
-    sessionID: string
-    arguments: string
-    messageID: string
-  }
-}
-
-export type EventProjectUpdated = {
-  id: string
-  type: "project.updated"
-  properties: Project
 }
 
 export type EventSessionCompacted = {
@@ -2810,6 +2811,8 @@ export type EventInstallationUpdateAvailable = {
     version: string
   }
 }
+
+export type SessionDelivery = "immediate" | "deferred"
 
 export type EventMessageUpdated = {
   id: string
@@ -3436,8 +3439,6 @@ export type ConfigV2ExperimentalPolicy = {
   effect: PolicyEffect
   resource: string
 }
-
-export type SessionDelivery = "immediate" | "deferred"
 
 export type SessionInfo = {
   id: string

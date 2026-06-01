@@ -30,6 +30,8 @@ import { usePromptHistory, type PromptInfo } from "./history"
 import { computePromptTraits } from "./traits"
 import { assign, expandPastedTextPlaceholders } from "./part"
 import { usePromptStash } from "./stash"
+import { listDeferredQueued, partsToPromptInfo } from "./queue"
+import { PromptQueueDock } from "./queue-dock"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
@@ -87,6 +89,7 @@ export type PromptRef = {
   focus(): void
   submit(): void
   queue(): void
+  editQueue?(): void
 }
 
 const money = new Intl.NumberFormat("en-US", {
@@ -658,6 +661,21 @@ export function Prompt(props: PromptProps) {
     ]),
   }))
 
+  const pendingAssistant = createMemo(() => {
+    if (!props.sessionID) return
+    const messages = sync.data.message[props.sessionID] ?? []
+    return messages.findLast((message) => message.role === "assistant" && !message.time.completed)?.id
+  })
+
+  const queueItems = createMemo(() => {
+    if (!props.sessionID) return []
+    return listDeferredQueued({
+      messages: sync.data.message[props.sessionID] ?? [],
+      parts: sync.data.part,
+      pendingAssistantID: pendingAssistant(),
+    })
+  })
+
   useBindings(() => ({
     target: inputTarget,
     enabled: (() => {
@@ -680,6 +698,36 @@ export function Prompt(props: PromptProps) {
       },
     ],
     bindings: tuiConfig.keybinds.get("input.queue"),
+  }))
+
+  useBindings(() => ({
+    target: inputTarget,
+    enabled: (() => {
+      cursorVersion()
+      return (
+        inputTarget() !== undefined &&
+        !props.disabled &&
+        !auto()?.visible &&
+        input !== undefined &&
+        queueItems().length > 0
+      )
+    })(),
+    commands: [
+      {
+        name: "input.queue.edit",
+        title: "Edit queued prompt",
+        category: "Prompt",
+        hidden: true,
+        run: async () => {
+          if (!input.focused) return
+          const handled = await editQueue()
+          if (!handled) return
+
+          dialog.clear()
+        },
+      },
+    ],
+    bindings: tuiConfig.keybinds.get("input.queue.edit"),
   }))
 
   const ref: PromptRef = {
@@ -715,6 +763,9 @@ export function Prompt(props: PromptProps) {
     },
     queue() {
       void queue()
+    },
+    editQueue() {
+      void editQueue()
     },
   }
 
@@ -1137,6 +1188,31 @@ export function Prompt(props: PromptProps) {
       }, 50)
     }
     input.clear()
+  }
+
+  async function editQueuedMessage(messageID: string, opts?: { submit?: boolean }) {
+    if (!props.sessionID || props.disabled) return false
+    const sessionID = props.sessionID
+    const parts = sync.data.part[messageID] ?? []
+    const promptInfo = partsToPromptInfo(parts)
+    if (!promptInfo.input.trim() && promptInfo.parts.length === 0) return false
+
+    await sdk.client.session.revert({ sessionID, messageID }).catch(() => {})
+    input.setText(promptInfo.input)
+    setStore("prompt", promptInfo)
+    setStore("extmarkToPartIndex", new Map())
+    restoreExtmarksFromParts(promptInfo.parts)
+    input.gotoBufferEnd()
+    input.focus()
+
+    if (!opts?.submit) return true
+    return submitInner()
+  }
+
+  async function editQueue() {
+    const id = queueItems().at(0)?.id
+    if (!id) return false
+    return editQueuedMessage(id)
   }
 
   async function queueInner() {
@@ -1625,6 +1701,16 @@ export function Prompt(props: PromptProps) {
             flexGrow={1}
             width="100%"
           >
+            <PromptQueueDock
+              items={queueItems}
+              disabled={props.disabled}
+              onEdit={(id: string) => {
+                void editQueuedMessage(id)
+              }}
+              onSendNow={(id: string) => {
+                void editQueuedMessage(id, { submit: true })
+              }}
+            />
             <textarea
               width="100%"
               placeholder={placeholderText()}

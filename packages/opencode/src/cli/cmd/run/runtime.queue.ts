@@ -10,8 +10,9 @@
 //
 // Resolves when the footer closes and all in-flight work finishes.
 import * as Locale from "@/util/locale"
+import { runPromptPreview } from "@/queue/preview"
 import { isExitCommand, isNewCommand } from "./prompt.shared"
-import type { FooterApi, FooterEvent, RunPrompt } from "./types"
+import type { FooterApi, FooterEvent, QueueControl, QueuedPromptPreview, RunPrompt } from "./types"
 
 type Trace = {
   write(type: string, data?: unknown): void
@@ -36,6 +37,20 @@ type State = {
   queue: RunPrompt[]
   ctrl?: AbortController
   closed: boolean
+  nextQueueID: number
+}
+
+function withQueueID(prompt: RunPrompt, state: State): RunPrompt {
+  if (prompt.queueID) return prompt
+  state.nextQueueID += 1
+  return { ...prompt, queueID: `queue-${state.nextQueueID}` }
+}
+
+function queueSnapshot(state: State): QueuedPromptPreview[] {
+  return state.queue.map((prompt) => ({
+    id: prompt.queueID ?? prompt.text,
+    text: runPromptPreview(prompt) || prompt.text.trim().slice(0, 80) || "[queued]",
+  }))
 }
 
 function defer<T = void>(): Deferred<T> {
@@ -61,6 +76,7 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
   const state: State = {
     queue: [],
     closed: input.footer.isClosed,
+    nextQueueID: 0,
   }
   let draining: Promise<void> | undefined
 
@@ -68,6 +84,40 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
     input.trace?.write("ui.patch", row)
     input.footer.event(next)
   }
+
+  const emitQueue = () => {
+    const queued = queueSnapshot(state)
+    emit(
+      {
+        type: "queue",
+        queue: state.queue.length,
+        queued,
+      },
+      {
+        queue: state.queue.length,
+        queued,
+      },
+    )
+  }
+
+  const removeQueued = (id: string) => {
+    const index = state.queue.findIndex((prompt) => prompt.queueID === id)
+    if (index === -1) return undefined
+    const [removed] = state.queue.splice(index, 1)
+    emitQueue()
+    return removed
+  }
+
+  const queueControl: QueueControl = {
+    remove: removeQueued,
+    sendNow: (id: string) => {
+      const prompt = removeQueued(id)
+      if (!prompt) return
+      submitPrompt({ ...prompt, delivery: "immediate" })
+    },
+  }
+
+  let submitPrompt = (_prompt: RunPrompt) => {}
 
   const finish = () => {
     if (!state.closed || draining) {
@@ -85,6 +135,8 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
     state.closed = true
     state.queue.length = 0
     state.ctrl?.abort()
+    input.footer.setQueueControl?.(undefined)
+    emitQueue()
     stop.resolve({ type: "closed" })
     finish()
   }
@@ -102,16 +154,9 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
             continue
           }
 
+          emitQueue()
+
           if (prompt.mode !== "shell" && isNewCommand(prompt.text)) {
-            emit(
-              {
-                type: "queue",
-                queue: state.queue.length,
-              },
-              {
-                queue: state.queue.length,
-              },
-            )
             if (!input.onNewSession) {
               emit(
                 {
@@ -231,7 +276,7 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
     })()
   }
 
-  const submit = (prompt: RunPrompt) => {
+  submitPrompt = (prompt: RunPrompt) => {
     if (!prompt.text.trim() || state.closed) {
       return
     }
@@ -241,16 +286,8 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
       return
     }
 
-    state.queue.push(prompt)
-    emit(
-      {
-        type: "queue",
-        queue: state.queue.length,
-      },
-      {
-        queue: state.queue.length,
-      },
-    )
+    state.queue.push(withQueueID(prompt, state))
+    emitQueue()
     if (prompt.mode !== "shell" && isNewCommand(prompt.text)) {
       drain()
       return
@@ -268,6 +305,8 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
     drain()
   }
 
+  input.footer.setQueueControl?.(queueControl)
+
   // Ctrl+Shift+Enter queues a prompt with delivery="deferred". Unlike a normal submit,
   // it never kicks off draining on its own: if a turn is already running, the
   // in-flight drain loop picks it up after the current turn; if the session is
@@ -282,16 +321,8 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
       return
     }
 
-    state.queue.push(prompt)
-    emit(
-      {
-        type: "queue",
-        queue: state.queue.length,
-      },
-      {
-        queue: state.queue.length,
-      },
-    )
+    state.queue.push(withQueueID(prompt, state))
+    emitQueue()
     emit(
       {
         type: "first",
@@ -308,7 +339,7 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
       enqueue(prompt)
       return
     }
-    submit(prompt)
+    submitPrompt(prompt)
   })
   const offClose = input.footer.onClose(() => {
     close()
@@ -319,7 +350,7 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
       return
     }
 
-    submit({
+    submitPrompt({
       text: input.initialInput ?? "",
       parts: [],
     })
@@ -329,6 +360,7 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
     offPrompt()
     offClose()
     close()
+    input.footer.setQueueControl?.(undefined)
     await draining?.catch(() => {})
   }
 }

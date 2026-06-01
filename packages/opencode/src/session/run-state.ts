@@ -12,6 +12,7 @@ export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly hasRunner: (sessionID: SessionID) => Effect.Effect<boolean>
   readonly defer: (sessionID: SessionID, message: MessageV2.WithParts) => Effect.Effect<void>
+  readonly popDeferred: (sessionID: SessionID) => Effect.Effect<MessageV2.WithParts | undefined>
   readonly drainDeferred: (sessionID: SessionID) => Effect.Effect<MessageV2.WithParts[]>
   readonly hasDeferred: (sessionID: SessionID) => Effect.Effect<boolean>
   readonly ensureRunning: (
@@ -91,6 +92,15 @@ export const layer = Layer.effect(
       else data.deferred.set(sessionID, [message])
     })
 
+    const popDeferred = Effect.fn("SessionRunState.popDeferred")(function* (sessionID: SessionID) {
+      const data = yield* InstanceState.get(state)
+      const queue = data.deferred.get(sessionID)
+      if (!queue?.length) return undefined
+      const next = queue.shift()!
+      if (queue.length === 0) data.deferred.delete(sessionID)
+      return next
+    })
+
     const drainDeferred = Effect.fn("SessionRunState.drainDeferred")(function* (sessionID: SessionID) {
       const data = yield* InstanceState.get(state)
       const queue = data.deferred.get(sessionID) ?? []
@@ -139,6 +149,7 @@ export const layer = Layer.effect(
       cancel,
       hasRunner,
       defer,
+      popDeferred,
       drainDeferred,
       hasDeferred,
       ensureRunning,

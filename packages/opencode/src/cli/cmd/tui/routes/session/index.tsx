@@ -24,6 +24,7 @@ import { Spinner } from "@tui/component/spinner"
 import { generateSubtleSyntax, selectedForeground, useTheme } from "@tui/context/theme"
 import { BoxRenderable, ScrollBoxRenderable, addDefaultParsers, TextAttributes, RGBA } from "@opentui/core"
 import { Prompt, type PromptRef } from "@tui/component/prompt"
+import { pendingDeferredMessageIds } from "@tui/component/prompt/queue"
 import type {
   AssistantMessage,
   Part,
@@ -212,6 +213,14 @@ export function Session() {
   const pending = createMemo(() => {
     return messages().findLast((x) => x.role === "assistant" && !x.time.completed)?.id
   })
+
+  const pendingDeferred = createMemo(() =>
+    pendingDeferredMessageIds({
+      messages: messages(),
+      parts: sync.data.part,
+      pendingAssistantID: pending(),
+    }),
+  )
 
   const lastAssistant = createMemo(() => {
     return messages().findLast((x) => x.role === "assistant")
@@ -1220,7 +1229,7 @@ export function Session() {
                       <Match when={revert()?.messageID && message.id >= revert()!.messageID}>
                         <></>
                       </Match>
-                      <Match when={message.role === "user"}>
+                      <Match when={message.role === "user" && !pendingDeferred().has(message.id)}>
                         <UserMessage
                           index={index()}
                           onMouseUp={() => {
@@ -1344,10 +1353,12 @@ function UserMessage(props: {
   const files = createMemo(() => props.parts.flatMap((x) => (x.type === "file" ? [x] : [])))
   const { theme } = useTheme()
   const [hover, setHover] = createSignal(false)
-  const queued = createMemo(() => props.pending && props.message.id > props.pending)
+  const afterAssistant = createMemo(() => props.pending && props.message.id > props.pending)
+  const delivery = createMemo(() => props.message.delivery ?? "immediate")
+  const steer = createMemo(() => afterAssistant() && delivery() === "immediate")
   const color = createMemo(() => local.agent.color(props.message.agent))
-  const queuedFg = createMemo(() => selectedForeground(theme, color()))
-  const metadataVisible = createMemo(() => queued() || ctx.showTimestamps())
+  const badgeFg = createMemo(() => selectedForeground(theme, color()))
+  const metadataVisible = createMemo(() => afterAssistant() || ctx.showTimestamps())
 
   const compaction = createMemo(() => props.parts.find((x) => x.type === "compaction"))
 
@@ -1396,7 +1407,7 @@ function UserMessage(props: {
               </box>
             </Show>
             <Show
-              when={queued()}
+              when={steer()}
               fallback={
                 <Show when={ctx.showTimestamps()}>
                   <text fg={theme.textMuted}>
@@ -1408,7 +1419,7 @@ function UserMessage(props: {
               }
             >
               <text fg={theme.textMuted}>
-                <span style={{ bg: color(), fg: queuedFg(), bold: true }}> QUEUED </span>
+                <span style={{ bg: color(), fg: badgeFg(), bold: true }}> STEER </span>
               </text>
             </Show>
           </box>

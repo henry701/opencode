@@ -27,6 +27,7 @@ const DEFAULT_KEYBINDS: FooterKeybinds = {
   inputSubmit: [{ key: "return" }],
   inputNewline: [{ key: "shift+return,ctrl+return,ctrl+j" }],
   inputQueue: [{ key: "ctrl+shift+return" }],
+  inputEditQueue: [{ key: "alt+up" }],
 }
 
 export type ModelInfo = {
@@ -104,6 +105,7 @@ function footerKeybinds(config: Config | undefined): FooterKeybinds {
     inputSubmit: config.keybinds.get("input.submit"),
     inputNewline: config.keybinds.get("input.newline"),
     inputQueue: config.keybinds.get("input.queue"),
+    inputEditQueue: config.keybinds.get("input.queue.edit"),
   }
 }
 

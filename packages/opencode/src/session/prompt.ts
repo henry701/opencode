@@ -733,6 +733,7 @@ export const layer = Layer.effect(
         },
         system: input.system,
         format: input.format,
+        delivery: input.delivery ?? SessionV2.DefaultDelivery,
       }
 
       if (current?.agent !== info.agent) {
@@ -1266,9 +1267,18 @@ export const layer = Layer.effect(
 
           let msgs = yield* MessageV2.filterCompactedEffect(sessionID)
 
+          const pendingDeferred = yield* state.hasDeferred(sessionID)
           const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
-
-          if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
+          const openUser = MessageV2.latestActiveUser(msgs) ?? lastUser
+          const deferredUsers = MessageV2.unprocessedDeferredUsers(msgs)
+          const needsToolFollowup =
+            openUser !== undefined &&
+            MessageV2.assistantNeedsToolFollowup(
+              msgs,
+              openUser,
+              lastAssistant,
+              msgs.findLast((msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id),
+            )
 
           const lastAssistantMsg = msgs.findLast(
             (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
@@ -1281,12 +1291,44 @@ export const layer = Layer.effect(
               (part) => part.type === "tool" && !part.metadata?.providerExecuted && !isOrphanedInterruptedTool(part),
             ) ?? false
 
-          if (
+          const openTurnComplete =
+            openUser !== undefined &&
+            lastAssistant !== undefined &&
+            lastAssistant.parentID === openUser.id &&
+            lastAssistant.finish &&
+            !["tool-calls"].includes(lastAssistant.finish) &&
+            !hasToolCalls &&
+            !needsToolFollowup &&
+            openUser.id < lastAssistant.id
+
+          const openTurnInProgress =
+            openUser !== undefined &&
+            (!lastAssistant || lastAssistant.parentID === openUser.id) &&
+            !openTurnComplete
+
+          const pinOpenUser = needsToolFollowup || openTurnInProgress
+
+          const activeUser = pinOpenUser ? openUser : MessageV2.firstUnprocessedDeferred(msgs) ?? openUser
+
+          if (!activeUser) throw new Error("No user message found in stream. This should never happen.")
+
+          const excludeDeferredFromModel =
+            pinOpenUser &&
+            openUser !== undefined &&
+            deferredUsers.some((user) => user.id > openUser.id)
+
+          const turnSettled =
             lastAssistant?.finish &&
             !["tool-calls"].includes(lastAssistant.finish) &&
             !hasToolCalls &&
-            lastUser.id < lastAssistant.id
-          ) {
+            !needsToolFollowup &&
+            lastUser !== undefined &&
+            lastAssistant !== undefined &&
+            lastUser.id < lastAssistant.id &&
+            deferredUsers.length === 0
+
+          if (turnSettled) {
+            yield* state.drainDeferred(sessionID)
             const orphan = lastAssistantMsg?.parts.find(
               (part): part is MessageV2.ToolPart => part.type === "tool" && isOrphanedInterruptedTool(part),
             )
@@ -1305,23 +1347,23 @@ export const layer = Layer.effect(
           if (step === 1)
             yield* title({
               session,
-              modelID: lastUser.model.modelID,
-              providerID: lastUser.model.providerID,
+              modelID: activeUser.model.modelID,
+              providerID: activeUser.model.providerID,
               history: msgs,
             }).pipe(Effect.ignore, Effect.forkIn(scope))
 
-          const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
+          const model = yield* getModel(activeUser.model.providerID, activeUser.model.modelID, sessionID)
           const task = tasks.pop()
 
           if (task?.type === "subtask") {
-            yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs })
+            yield* handleSubtask({ task, model, lastUser: activeUser, sessionID, session, msgs })
             continue
           }
 
           if (task?.type === "compaction") {
             const result = yield* compaction.process({
               messages: msgs,
-              parentID: lastUser.id,
+              parentID: activeUser.id,
               sessionID,
               auto: task.auto,
               overflow: task.overflow,
@@ -1335,15 +1377,15 @@ export const layer = Layer.effect(
             lastFinished.summary !== true &&
             (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
           ) {
-            yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
+            yield* compaction.create({ sessionID, agent: activeUser.agent, model: activeUser.model, auto: true })
             continue
           }
 
-          const agent = yield* agents.get(lastUser.agent)
+          const agent = yield* agents.get(activeUser.agent)
           if (!agent) {
             const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
             const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
-            const error = new NamedError.Unknown({ message: `Agent not found: "${lastUser.agent}".${hint}` })
+            const error = new NamedError.Unknown({ message: `Agent not found: "${activeUser.agent}".${hint}` })
             yield* bus.publish(Session.Event.Error, { sessionID, error: error.toObject() })
             throw error
           }
@@ -1357,11 +1399,11 @@ export const layer = Layer.effect(
 
           const msg: MessageV2.Assistant = {
             id: MessageID.ascending(),
-            parentID: lastUser.id,
+            parentID: activeUser.id,
             role: "assistant",
             mode: agent.name,
             agent: agent.name,
-            variant: lastUser.model.variant,
+            variant: activeUser.model.variant,
             path: { cwd: ctx.directory, root: ctx.worktree },
             cost: 0,
             tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -1391,7 +1433,20 @@ export const layer = Layer.effect(
             .pipe(Effect.onInterrupt(() => finalizeInterruptedAssistant))
 
           const outcome: "break" | "continue" = yield* Effect.gen(function* () {
-            const lastUserMsg = msgs.findLast((m) => m.info.role === "user")
+            const history =
+              activeUser.delivery === "deferred"
+                ? msgs.filter(
+                    (m) =>
+                      !(
+                        m.info.role === "user" &&
+                        m.info.delivery === "deferred" &&
+                        m.info.id !== activeUser.id
+                      ),
+                  )
+                : excludeDeferredFromModel
+                  ? MessageV2.withoutDeferredUsers(msgs)
+                  : msgs
+            const lastUserMsg = history.findLast((m) => m.info.role === "user")
             const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
             const promptOps = yield* ops()
 
@@ -1401,7 +1456,7 @@ export const layer = Layer.effect(
               model,
               processor: handle,
               bypassAgentCheck,
-              messages: msgs,
+              messages: history,
               promptOps,
             }).pipe(
               Effect.provideService(Plugin.Service, plugin),
@@ -1411,9 +1466,9 @@ export const layer = Layer.effect(
               Effect.provideService(Truncate.Service, truncate),
             )
 
-            if (lastUser.format?.type === "json_schema") {
+            if (activeUser.format?.type === "json_schema") {
               tools["StructuredOutput"] = createStructuredOutputTool({
-                schema: lastUser.format.schema,
+                schema: activeUser.format.schema,
                 onSuccess(output) {
                   structured = output
                 },
@@ -1421,11 +1476,12 @@ export const layer = Layer.effect(
             }
 
             if (step === 1)
-              yield* summary.summarize({ sessionID, messageID: lastUser.id }).pipe(Effect.ignore, Effect.forkIn(scope))
+              yield* summary.summarize({ sessionID, messageID: activeUser.id }).pipe(Effect.ignore, Effect.forkIn(scope))
 
             if (step > 1 && lastFinished) {
-              for (const m of msgs) {
+              for (const m of history) {
                 if (m.info.role !== "user" || m.info.id <= lastFinished.id) continue
+                if (m.info.delivery === "deferred") continue
                 for (const p of m.parts) {
                   if (p.type !== "text" || p.ignored || p.synthetic) continue
                   if (!p.text.trim()) continue
@@ -1441,19 +1497,19 @@ export const layer = Layer.effect(
               }
             }
 
-            yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
+            yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: history })
 
             const [skills, env, instructions, modelMsgs] = yield* Effect.all([
               sys.skills(agent),
               sys.environment(model),
               instruction.system().pipe(Effect.orDie),
-              MessageV2.toModelMessagesEffect(msgs, model),
+              MessageV2.toModelMessagesEffect(history, model),
             ])
             const system = [...env, ...instructions, ...(skills ? [skills] : [])]
-            const format = lastUser.format ?? { type: "text" as const }
+            const format = activeUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
             const providerPrompt = agent.prompt ? [agent.prompt] : SystemPrompt.provider(model)
-            const fullSystem = [...providerPrompt, ...system, ...(lastUser.system ? [lastUser.system] : [])]
+            const fullSystem = [...providerPrompt, ...system, ...(activeUser.system ? [activeUser.system] : [])]
               .filter(Boolean)
               .join("\n")
             const defs = JSON.stringify(
@@ -1464,7 +1520,7 @@ export const layer = Layer.effect(
               })),
             )
             const result = yield* handle.process({
-              user: lastUser,
+              user: activeUser,
               agent,
               permission: session.permission,
               sessionID,
@@ -1477,8 +1533,8 @@ export const layer = Layer.effect(
             })
 
             const shouldStore = (() => {
-              for (let i = msgs.length - 1; i >= 0; i--) {
-                const msg = msgs[i]
+              for (let i = history.length - 1; i >= 0; i--) {
+                const msg = history[i]
                 if (msg.info.role !== "assistant") continue
                 if (msg.info.tool_defs === defs && msg.info.system_prompt === fullSystem) return false
               }
@@ -1509,12 +1565,23 @@ export const layer = Layer.effect(
               }
             }
 
-            if (result === "stop") return "break" as const
+            if (result === "stop") {
+              const handleParts = MessageV2.parts(handle.message.id)
+              if (
+                MessageV2.assistantNeedsToolFollowup(msgs, activeUser, handle.message, {
+                  info: handle.message,
+                  parts: handleParts,
+                })
+              ) {
+                return "continue" as const
+              }
+              return "break" as const
+            }
             if (result === "compact") {
               yield* compaction.create({
                 sessionID,
-                agent: lastUser.agent,
-                model: lastUser.model,
+                agent: activeUser.agent,
+                model: activeUser.model,
                 auto: true,
                 overflow: !handle.message.finish,
               })
@@ -1525,14 +1592,25 @@ export const layer = Layer.effect(
             Effect.onInterrupt(() => finalizeInterruptedAssistant),
           )
           if (outcome === "break") {
-            // Messages queued with delivery="deferred" were persisted while this
-            // turn was running. Drain them and continue so the loop reloads the
-            // history and addresses them (the system-reminder wrapping below at
-            // the "step > 1" branch picks up the newer user messages).
-            if (yield* state.hasDeferred(sessionID)) {
-              yield* state.drainDeferred(sessionID)
+            const handleParts = MessageV2.parts(handle.message.id)
+            if (
+              openUser !== undefined &&
+              MessageV2.assistantNeedsToolFollowup(msgs, openUser, handle.message, {
+                info: handle.message,
+                parts: handleParts,
+              })
+            ) {
               continue
             }
+
+            if (yield* state.hasDeferred(sessionID)) yield* state.popDeferred(sessionID)
+
+            const remaining = MessageV2.unprocessedDeferredUsers(
+              yield* MessageV2.filterCompactedEffect(sessionID),
+            )
+            if (remaining.length > 0) continue
+
+            yield* state.drainDeferred(sessionID)
             break
           }
           continue

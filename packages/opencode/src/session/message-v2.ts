@@ -346,6 +346,7 @@ export const User = Schema.Struct({
   }),
   system: Schema.optional(Schema.String),
   tools: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
+  delivery: Schema.optional(Schema.Literals(["immediate", "deferred"])),
 }).annotate({ identifier: "UserMessage" })
 export type User = Types.DeepMutable<Schema.Schema.Type<typeof User>>
 
@@ -1093,6 +1094,76 @@ export function latest(msgs: WithParts[]) {
       : m.parts.filter((p): p is CompactionPart | SubtaskPart => p.type === "compaction" || p.type === "subtask"),
   )
   return { user, assistant, finished, tasks }
+}
+
+/** Latest user message, skipping delivery="deferred" (queued for end of turn). */
+export function latestActiveUser(msgs: WithParts[]) {
+  let user: User | undefined
+  for (const msg of msgs) {
+    const info = msg.info
+    if (info.role !== "user" || info.delivery === "deferred") continue
+    if (!user || info.id > user.id) user = info
+  }
+  return user
+}
+
+export function withoutDeferredUsers(msgs: WithParts[]) {
+  return msgs.filter((m) => !(m.info.role === "user" && m.info.delivery === "deferred"))
+}
+
+/** Deferred user messages not yet fully handled by a completed assistant turn. */
+export function unprocessedDeferredUsers(msgs: WithParts[]) {
+  const items: User[] = []
+  for (const msg of msgs) {
+    const info = msg.info
+    if (info.role !== "user" || info.delivery !== "deferred") continue
+    const assistantMsg = msgs.findLast(
+      (entry) => entry.info.role === "assistant" && entry.info.parentID === info.id,
+    )
+    if (!assistantMsg) {
+      items.push(info)
+      continue
+    }
+    if (assistantMsg.info.role !== "assistant") {
+      items.push(info)
+      continue
+    }
+    const assistant = assistantMsg.info
+    if (!assistant.finish || ["tool-calls", "unknown"].includes(assistant.finish)) {
+      items.push(info)
+      continue
+    }
+    if (assistantNeedsToolFollowup(msgs, info, assistant, assistantMsg)) items.push(info)
+  }
+  return items
+}
+
+/** Oldest deferred user message that still needs a completed assistant turn. */
+export function firstUnprocessedDeferred(msgs: WithParts[]) {
+  return unprocessedDeferredUsers(msgs)[0]
+}
+
+/** True while the latest assistant for this user still needs a follow-up step (e.g. after tool results). */
+export function assistantNeedsToolFollowup(
+  msgs: WithParts[],
+  user: User,
+  assistant: Assistant | undefined,
+  assistantMsg: WithParts | undefined,
+) {
+  if (!assistant || assistant.parentID !== user.id) return false
+  if (assistant.finish === "tool-calls") return true
+
+  const tools =
+    assistantMsg?.parts.filter(
+      (part): part is ToolPart => part.type === "tool" && !part.metadata?.providerExecuted,
+    ) ?? []
+  if (tools.length === 0) return false
+
+  const responded = msgs.some(
+    (entry) =>
+      entry.info.role === "assistant" && entry.info.id > assistant.id && entry.info.parentID === user.id,
+  )
+  return !responded
 }
 
 export function fromError(

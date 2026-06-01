@@ -45,6 +45,7 @@ export type PromptKeys = {
   next: PromptInfo[]
   clear: PromptInfo[]
   queues: PromptInfo[]
+  editQueues: PromptInfo[]
   bindings: KeyBinding[]
 }
 
@@ -162,6 +163,7 @@ export function promptKeys(keybinds: FooterKeybinds): PromptKeys {
     // "submit"/"newline" actions, so the queue key is dispatched manually in the
     // footer's onKeyDown handler (see Gap 17 in PLAN.md).
     queues: promptBindings(keybinds.inputQueue, keybinds.leader),
+    editQueues: promptBindings(keybinds.inputEditQueue, keybinds.leader),
     bindings: textareaBindings(keybinds),
   }
 }

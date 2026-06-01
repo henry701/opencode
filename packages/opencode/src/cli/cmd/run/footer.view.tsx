@@ -24,6 +24,8 @@ import {
 import { FOOTER_MENU_ROWS, RunFooterMenu } from "./footer.menu"
 import { RunFooterSubagentBody } from "./footer.subagent"
 import { RunPromptBody, createPromptState, hintFlags } from "./footer.prompt"
+import { RunQueueDock } from "./footer.queue-dock"
+import type { QueueControl } from "./types"
 import { RunPermissionBody } from "./footer.permission"
 import { RunQuestionBody } from "./footer.question"
 import { printableBinding, promptBindings, promptHit, promptInfo } from "./prompt.shared"
@@ -80,6 +82,7 @@ type RunFooterViewProps = {
   agent: string
   onSubmit: (input: RunPrompt) => boolean
   onQueue: (input: RunPrompt) => void
+  queueControl?: () => QueueControl | undefined
   onPermissionReply: (input: PermissionReply) => void | Promise<void>
   onQuestionReply: (input: QuestionReply) => void | Promise<void>
   onQuestionReject: (input: QuestionReject) => void | Promise<void>
@@ -157,7 +160,7 @@ export function RunFooterView(props: RunFooterViewProps) {
   const busy = createMemo(() => props.state().phase === "running")
   const armed = createMemo(() => props.state().interrupt > 0)
   const exiting = createMemo(() => props.state().exit > 0)
-  const queue = createMemo(() => props.state().queue)
+  const queued = createMemo(() => props.state().queued)
   const duration = createMemo(() => props.state().duration)
   const usage = createMemo(() => props.state().usage)
   const interruptKey = createMemo(() => interrupt() || "/exit")
@@ -267,6 +270,14 @@ export function RunFooterView(props: RunFooterViewProps) {
     history: props.history,
     onSubmit: props.onSubmit,
     onQueue: props.onQueue,
+    onEditQueue: () => {
+      const items = queued()
+      const id = items.at(-1)?.id
+      if (!id) return
+      const removed = props.queueControl?.()?.remove(id)
+      if (!removed) return
+      composer.restorePrompt(removed)
+    },
     onCycle: props.onCycle,
     onInterrupt: props.onInterrupt,
     onInputClear: props.onInputClear,
@@ -406,6 +417,17 @@ export function RunFooterView(props: RunFooterViewProps) {
                 <box id="run-direct-footer-body" width="100%" flexGrow={1} flexShrink={1} flexDirection="column">
                   <Switch>
                     <Match when={active().type === "prompt" && route().type === "composer"}>
+                      <RunQueueDock
+                        items={queued}
+                        theme={theme}
+                        disabled={busy()}
+                        onEdit={(id) => {
+                          const removed = props.queueControl?.()?.remove(id)
+                          if (!removed) return
+                          composer.restorePrompt(removed)
+                        }}
+                        onSendNow={(id) => props.queueControl?.()?.sendNow(id)}
+                      />
                       <RunPromptBody
                         theme={theme}
                         placeholder={composer.placeholder}
@@ -663,11 +685,6 @@ export function RunFooterView(props: RunFooterViewProps) {
                         when={shell()}
                         fallback={
                           <>
-                            <Show when={queue() > 0}>
-                              <text id="run-direct-footer-queue" fg={theme().muted} wrapMode="none" truncate>
-                                {queue()} queued
-                              </text>
-                            </Show>
                             <Show when={usage().length > 0}>
                               <text id="run-direct-footer-usage" fg={theme().muted} wrapMode="none" truncate>
                                 {usage()}

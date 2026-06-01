@@ -56,8 +56,15 @@ it.instance("tracks deferred messages per session", () =>
     expect(yield* run.hasDeferred(one)).toBe(true)
     expect(yield* run.hasDeferred(two)).toBe(true)
 
-    expect(yield* run.drainDeferred(one)).toEqual([first, second])
+    const poppedFirst = yield* run.popDeferred(one)
+    expect(poppedFirst?.info.id).toBe(first.info.id)
+    const poppedSecond = yield* run.popDeferred(one)
+    expect(poppedSecond?.info.id).toBe(second.info.id)
     expect(yield* run.hasDeferred(one)).toBe(false)
-    expect(yield* run.drainDeferred(two)).toEqual([other])
+    const poppedOther = yield* run.popDeferred(two)
+    expect(poppedOther?.info.id).toBe(other.info.id)
+
+    expect(yield* run.drainDeferred(one)).toEqual([])
+    expect(yield* run.drainDeferred(two)).toEqual([])
   }),
 )

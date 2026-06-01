@@ -43,6 +43,7 @@ const keybinds: FooterKeybinds = {
   inputSubmit: bindings("return"),
   inputNewline: bindings("shift+return,ctrl+return,ctrl+j"),
   inputQueue: bindings("ctrl+shift+return"),
+  inputEditQueue: bindings("alt+up"),
 }
 
 function command(input: { name: string; description: string; source?: "command" | "mcp" | "skill" }) {
@@ -340,6 +341,7 @@ test("direct footer shows subagent indicator while prompt is running", async () 
     phase: "running",
     status: "",
     queue: 0,
+    queued: [],
     model: "gpt-5",
     duration: "",
     usage: "",

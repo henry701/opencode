@@ -32,6 +32,7 @@ const keybinds = {
   inputSubmit: bindings("return"),
   inputNewline: bindings("shift+return,ctrl+return,ctrl+j"),
   inputQueue: bindings("ctrl+shift+return"),
+  inputEditQueue: bindings("alt+up"),
 }
 
 function prompt(text: string, parts: RunPrompt["parts"] = []): RunPrompt {

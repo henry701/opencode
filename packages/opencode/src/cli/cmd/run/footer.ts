@@ -46,6 +46,7 @@ import type {
   FooterSubagentState,
   FooterView,
   PermissionReply,
+  QueueControl,
   QuestionReject,
   QuestionReply,
   RunAgent,
@@ -113,7 +114,7 @@ function createEmptySubagentState(): FooterSubagentState {
 
 function eventPatch(next: FooterEvent): FooterPatch | undefined {
   if (next.type === "queue") {
-    return { queue: next.queue }
+    return { queue: next.queue, queued: next.queued }
   }
 
   if (next.type === "first") {
@@ -197,6 +198,7 @@ export class RunFooter implements FooterApi {
   private exitTimeout: NodeJS.Timeout | undefined
   private interruptHint: string
   private requestExitHandler: (() => boolean) | undefined
+  private queueControl: QueueControl | undefined
   private scrollback: RunScrollbackStream
 
   constructor(
@@ -207,6 +209,7 @@ export class RunFooter implements FooterApi {
       phase: "idle",
       status: "",
       queue: 0,
+      queued: [],
       model: options.modelLabel,
       duration: "",
       usage: "",
@@ -281,6 +284,7 @@ export class RunFooter implements FooterApi {
           agent: options.agentLabel,
           onSubmit: this.handlePrompt,
           onQueue: this.handleQueue,
+          queueControl: () => this.queueControl,
           onPermissionReply: this.handlePermissionReply,
           onQuestionReply: this.handleQuestionReply,
           onQuestionReject: this.handleQuestionReject,
@@ -330,6 +334,10 @@ export class RunFooter implements FooterApi {
     return () => {
       this.closes.delete(fn)
     }
+  }
+
+  public setQueueControl(control: QueueControl | undefined): void {
+    this.queueControl = control
   }
 
   public event(next: FooterEvent): void {
@@ -396,6 +404,7 @@ export class RunFooter implements FooterApi {
       phase: next.phase ?? prev.phase,
       status: typeof next.status === "string" ? next.status : prev.status,
       queue: typeof next.queue === "number" ? Math.max(0, next.queue) : prev.queue,
+      queued: next.queued ?? prev.queued,
       model: typeof next.model === "string" ? next.model : prev.model,
       duration: typeof next.duration === "string" ? next.duration : prev.duration,
       usage: typeof next.usage === "string" ? next.usage : prev.usage,

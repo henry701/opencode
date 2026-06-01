@@ -30,6 +30,7 @@ function footer() {
         closes.delete(fn)
       }
     },
+    setQueueControl() {},
     event(next) {
       events.push(next)
     },

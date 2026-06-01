@@ -359,6 +359,7 @@ function footer(fn?: (commit: StreamCommit) => void) {
     },
     onPrompt: () => () => {},
     onClose: () => () => {},
+    setQueueControl: () => {},
     event(next) {
       events.push(next)
     },
