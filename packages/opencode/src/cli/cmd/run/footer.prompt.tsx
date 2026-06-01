@@ -78,7 +78,12 @@ type PromptInput = {
   history?: RunPrompt[]
   onSubmit: (input: RunPrompt) => boolean | Promise<boolean>
   onQueue: (input: RunPrompt) => void
-  onEditQueue: () => void
+  editingQueueID?: Accessor<string | undefined>
+  onEditQueue?: () => void
+  onEditQueueNext?: () => void
+  onCancelQueueEdit?: () => boolean
+  onUpdateQueued?: (id: string, prompt: RunPrompt) => void
+  onSendQueuedNow?: (id: string) => void
   onCycle: () => void
   onInterrupt: () => boolean
   onInputClear: () => void
@@ -105,6 +110,7 @@ export type PromptState = {
   onContentChange: () => void
   replaceDraft: (text: string) => void
   restorePrompt: (prompt: RunPrompt) => void
+  currentPrompt: () => RunPrompt
   bind: (area?: TextareaRenderable) => void
 }
 
@@ -973,9 +979,20 @@ export function createPromptState(input: PromptInput): PromptState {
       }
     }
 
+    if (!shell() && input.editingQueueID?.() && promptHit(keys().editQueueCancel, key)) {
+      event.preventDefault()
+      if (input.onCancelQueueEdit?.()) return
+    }
+
+    if (!shell() && input.editingQueueID?.() && promptHit(keys().editQueueNext, key)) {
+      event.preventDefault()
+      input.onEditQueueNext?.()
+      return
+    }
+
     if (!shell() && promptHit(keys().editQueues, key)) {
       event.preventDefault()
-      input.onEditQueue()
+      input.onEditQueue?.()
       return
     }
 
@@ -1153,8 +1170,17 @@ export function createPromptState(input: PromptInput): PromptState {
 
   const onSubmit = () => {
     syncDraft()
+    if (input.editingQueueID?.()) {
+      const id = input.editingQueueID()
+      if (!id) return
+      input.onUpdateQueued?.(id, clonePrompt(draft))
+      input.onSendQueuedNow?.(id)
+      return
+    }
     submitPrompt(clonePrompt(draft))
   }
+
+  const currentPrompt = () => clonePrompt(draft)
 
   const onQueue = () => {
     // Queueing is a normal-mode only affordance; shell commands always run now.
@@ -1167,6 +1193,11 @@ export function createPromptState(input: PromptInput): PromptState {
     }
     const queued = clonePrompt(draft)
     queued.delivery = "deferred"
+    if (input.editingQueueID?.()) {
+      const id = input.editingQueueID()
+      if (id) input.onUpdateQueued?.(id, queued)
+      return
+    }
     input.onQueue(queued)
     push(queued)
     resetDraft()
@@ -1253,6 +1284,7 @@ export function createPromptState(input: PromptInput): PromptState {
     },
     replaceDraft,
     restorePrompt: restore,
+    currentPrompt,
     bind,
   }
 }

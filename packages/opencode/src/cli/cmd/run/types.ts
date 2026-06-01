@@ -49,6 +49,8 @@ export type QueuedPromptPreview = {
 }
 
 export type QueueControl = {
+  get: (id: string) => RunPrompt | undefined
+  update: (id: string, prompt: RunPrompt) => boolean
   remove: (id: string) => RunPrompt | undefined
   sendNow: (id: string) => void
 }
@@ -294,6 +296,8 @@ export type FooterKeybinds = {
   inputNewline: readonly FooterBinding[]
   inputQueue: readonly FooterBinding[]
   inputEditQueue: readonly FooterBinding[]
+  inputEditQueueNext: readonly FooterBinding[]
+  inputEditQueueCancel: readonly FooterBinding[]
 }
 
 // Lifecycle phase of a scrollback entry. "start" opens the entry, "progress"

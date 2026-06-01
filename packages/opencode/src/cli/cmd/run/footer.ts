@@ -193,6 +193,7 @@ export class RunFooter implements FooterApi {
   private setSubagent: (next: FooterSubagentState) => void
   private promptRoute: FooterPromptRoute = { type: "composer" }
   private subagentMenuRows = SUBAGENT_ROWS
+  private queueRows = 0
   private autocomplete = false
   private interruptTimeout: NodeJS.Timeout | undefined
   private exitTimeout: NodeJS.Timeout | undefined
@@ -581,7 +582,10 @@ export class RunFooter implements FooterApi {
                   ? 1 + this.subagentMenuRows
                   : this.promptRoute.type === "subagent"
                     ? this.base + SUBAGENT_INSPECTOR_ROWS
-                    : Math.max(base + TEXTAREA_MIN_ROWS, Math.min(base + PROMPT_MAX_ROWS, base + this.rows))
+                    : Math.max(
+                        base + TEXTAREA_MIN_ROWS + this.queueRows,
+                        Math.min(base + PROMPT_MAX_ROWS + this.queueRows, base + this.rows + this.queueRows),
+                      )
 
     if (height !== this.renderer.footerHeight) {
       this.renderer.footerHeight = height
@@ -604,10 +608,16 @@ export class RunFooter implements FooterApi {
     }
   }
 
-  private syncLayout = (next: { route: FooterPromptRoute; autocomplete: boolean; subagentRows: number }): void => {
+  private syncLayout = (next: {
+    route: FooterPromptRoute
+    autocomplete: boolean
+    subagentRows: number
+    queueRows: number
+  }): void => {
     this.promptRoute = next.route
     this.autocomplete = next.autocomplete
     this.subagentMenuRows = next.subagentRows
+    this.queueRows = next.queueRows
     if (this.view().type === "prompt") {
       this.applyHeight()
     }

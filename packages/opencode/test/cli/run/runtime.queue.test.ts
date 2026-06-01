@@ -158,7 +158,7 @@ describe("run runtime queue", () => {
     ui.submit("/exit", { mode: "shell" })
     await task
 
-    expect(seen).toEqual([{ text: "/exit", parts: [], mode: "shell" }])
+    expect(seen).toEqual([{ text: "/exit", parts: [], mode: "shell", queueID: "queue-1" }])
     expect(ui.commits).toEqual([])
   })
 
@@ -182,7 +182,7 @@ describe("run runtime queue", () => {
     await task
 
     expect(created).toBe(0)
-    expect(seen).toEqual([{ text: "/new", parts: [], mode: "shell" }])
+    expect(seen).toEqual([{ text: "/new", parts: [], mode: "shell", queueID: "queue-1" }])
     expect(ui.commits).toEqual([])
   })
 
@@ -414,6 +414,33 @@ describe("run runtime queue", () => {
     await task
 
     expect(seen).toEqual(["one", "queued"])
+  })
+
+  test("queue control updates queued prompts in place", async () => {
+    const ui = footer()
+    let control: import("@/cli/cmd/run/types").QueueControl | undefined
+
+    const task = runPromptQueue({
+      footer: {
+        ...ui.api,
+        setQueueControl(next) {
+          control = next
+        },
+      },
+      run: async () => {
+        ui.api.close()
+      },
+    })
+
+    ui.submit("one", { delivery: "deferred" })
+    await Promise.resolve()
+    const id = control?.get("queue-1")?.queueID
+    expect(id).toBe("queue-1")
+    expect(control?.update("queue-1", { text: "updated", parts: [] })).toBe(true)
+    expect(control?.get("queue-1")?.text).toBe("updated")
+
+    ui.api.close()
+    await task
   })
 
   test("deferred delivery ignores empty prompts", async () => {

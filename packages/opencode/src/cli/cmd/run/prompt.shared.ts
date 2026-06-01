@@ -46,6 +46,8 @@ export type PromptKeys = {
   clear: PromptInfo[]
   queues: PromptInfo[]
   editQueues: PromptInfo[]
+  editQueueNext: PromptInfo[]
+  editQueueCancel: PromptInfo[]
   bindings: KeyBinding[]
 }
 
@@ -164,6 +166,8 @@ export function promptKeys(keybinds: FooterKeybinds): PromptKeys {
     // footer's onKeyDown handler (see Gap 17 in PLAN.md).
     queues: promptBindings(keybinds.inputQueue, keybinds.leader),
     editQueues: promptBindings(keybinds.inputEditQueue, keybinds.leader),
+    editQueueNext: promptBindings(keybinds.inputEditQueueNext, keybinds.leader),
+    editQueueCancel: promptBindings(keybinds.inputEditQueueCancel, keybinds.leader),
     bindings: textareaBindings(keybinds),
   }
 }

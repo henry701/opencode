@@ -100,6 +100,8 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
     )
   }
 
+  const findQueued = (id: string) => state.queue.find((prompt) => prompt.queueID === id)
+
   const removeQueued = (id: string) => {
     const index = state.queue.findIndex((prompt) => prompt.queueID === id)
     if (index === -1) return undefined
@@ -108,7 +110,17 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
     return removed
   }
 
+  const updateQueued = (id: string, prompt: RunPrompt) => {
+    const index = state.queue.findIndex((entry) => entry.queueID === id)
+    if (index === -1) return false
+    state.queue[index] = { ...withQueueID(prompt, state), queueID: id }
+    emitQueue()
+    return true
+  }
+
   const queueControl: QueueControl = {
+    get: findQueued,
+    update: updateQueued,
     remove: removeQueued,
     sendNow: (id: string) => {
       const prompt = removeQueued(id)

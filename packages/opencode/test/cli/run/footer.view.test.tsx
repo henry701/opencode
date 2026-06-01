@@ -44,6 +44,8 @@ const keybinds: FooterKeybinds = {
   inputNewline: bindings("shift+return,ctrl+return,ctrl+j"),
   inputQueue: bindings("ctrl+shift+return"),
   inputEditQueue: bindings("alt+up"),
+  inputEditQueueNext: bindings("alt+down"),
+  inputEditQueueCancel: bindings("escape"),
 }
 
 function command(input: { name: string; description: string; source?: "command" | "mcp" | "skill" }) {
