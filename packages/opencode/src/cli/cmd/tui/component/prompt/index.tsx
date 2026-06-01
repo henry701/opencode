@@ -86,6 +86,7 @@ export type PromptRef = {
   blur(): void
   focus(): void
   submit(): void
+  queue(): void
 }
 
 const money = new Intl.NumberFormat("en-US", {
@@ -657,6 +658,30 @@ export function Prompt(props: PromptProps) {
     ]),
   }))
 
+  useBindings(() => ({
+    target: inputTarget,
+    enabled: (() => {
+      cursorVersion()
+      return inputTarget() !== undefined && !props.disabled && !auto()?.visible && input !== undefined
+    })(),
+    commands: [
+      {
+        name: "input.queue",
+        title: "Queue prompt",
+        category: "Prompt",
+        hidden: true,
+        run: async () => {
+          if (!input.focused) return
+          const handled = await queue()
+          if (!handled) return
+
+          dialog.clear()
+        },
+      },
+    ],
+    bindings: tuiConfig.keybinds.get("input.queue"),
+  }))
+
   const ref: PromptRef = {
     get focused() {
       return input.focused
@@ -687,6 +712,9 @@ export function Prompt(props: PromptProps) {
     },
     submit() {
       void submit()
+    },
+    queue() {
+      void queue()
     },
   }
 
@@ -1005,7 +1033,7 @@ export function Prompt(props: PromptProps) {
     }
   })
 
-  let submitting = false
+  let promptInFlight = false
   async function submit() {
     // Prevent overlapping invocations (e.g. a double-pressed Enter, or the
     // input's native onSubmit racing another dispatch). Without this guard,
@@ -1013,25 +1041,186 @@ export function Prompt(props: PromptProps) {
     // clears `store.prompt.input`, then awaits its own `session.create` and
     // ultimately reads the now-empty store — sending a phantom empty prompt
     // to a freshly created session.
-    if (submitting) return false
-    submitting = true
+    if (promptInFlight) return false
+    promptInFlight = true
     try {
       return await submitInner()
     } finally {
-      submitting = false
+      promptInFlight = false
     }
+  }
+
+  async function queue() {
+    if (promptInFlight) return false
+    promptInFlight = true
+    try {
+      return await queueInner()
+    } finally {
+      promptInFlight = false
+    }
+  }
+
+  function syncPromptInputFromTextarea() {
+    if (input && !input.isDestroyed && input.plainText !== store.prompt.input) {
+      setStore("prompt", "input", input.plainText)
+      syncExtmarksWithPromptParts()
+    }
+  }
+
+  function expandedInputText() {
+    let inputText = store.prompt.input
+    const allExtmarks = input.extmarks.getAllForTypeId(promptPartTypeId)
+    const sortedExtmarks = allExtmarks.sort((a: { start: number }, b: { start: number }) => b.start - a.start)
+
+    for (const extmark of sortedExtmarks) {
+      const partIndex = store.extmarkToPartIndex.get(extmark.id)
+      if (partIndex !== undefined) {
+        const part = store.prompt.parts[partIndex]
+        if (part?.type === "text" && part.text) {
+          const before = inputText.slice(0, extmark.start)
+          const after = inputText.slice(extmark.end)
+          inputText = before + part.text + after
+        }
+      }
+    }
+
+    return inputText
+  }
+
+  function editorContextParts() {
+    const editorSelection = editorContext()
+    if (!editorSelection || editor.labelState() !== "pending") return []
+
+    return [
+      {
+        id: PartID.ascending(),
+        type: "text" as const,
+        text: formatEditorContext(editorSelection),
+        synthetic: true,
+        metadata: {
+          kind: "editor_context",
+          source: editorSelection.source ?? "editor",
+          filePath: editorSelection.filePath,
+          ranges: editorSelection.ranges,
+        },
+      },
+    ]
+  }
+
+  function isRegisteredSlashCommand(inputText: string) {
+    if (!inputText.startsWith("/")) return false
+    const firstLine = inputText.split("\n")[0]
+    const command = firstLine.split(" ")[0].slice(1)
+    return sync.data.command.some((x) => x.name === command)
+  }
+
+  function resetPromptAfterSend(currentMode: typeof store.mode, sessionID: string, editorParts: ReturnType<typeof editorContextParts>) {
+    history.append({
+      ...store.prompt,
+      mode: currentMode,
+    })
+    input.extmarks.clear()
+    setStore("prompt", {
+      input: "",
+      parts: [],
+    })
+    setStore("extmarkToPartIndex", new Map())
+    props.onSubmit?.()
+
+    if (!props.sessionID) {
+      if (editorParts.length > 0) editor.preserveSelectionFromNewSession()
+      setTimeout(() => {
+        route.navigate({
+          type: "session",
+          sessionID,
+        })
+      }, 50)
+    }
+    input.clear()
+  }
+
+  async function queueInner() {
+    setWarpNotice(undefined)
+    syncPromptInputFromTextarea()
+    if (props.disabled) return false
+    if (workspaceCreating()) return false
+    if (auto()?.visible) return false
+    if (!store.prompt.input.trim()) return false
+    if (store.mode === "shell") return false
+    if (isRegisteredSlashCommand(store.prompt.input)) return false
+    if (!props.sessionID) return submitInner()
+
+    const agent = local.agent.current()
+    if (!agent) return false
+    const trimmed = store.prompt.input.trim()
+    if (trimmed === "exit" || trimmed === "quit" || trimmed === ":q") return false
+    const selectedModel = local.model.current()
+    if (!selectedModel) {
+      void promptModelWarning()
+      return false
+    }
+
+    const workspaceSession = sync.session.get(props.sessionID)
+    const workspaceID = workspaceSession?.workspaceID
+    const workspaceStatus = workspaceID ? (project.workspace.status(workspaceID) ?? "error") : undefined
+    if (workspaceID && workspaceStatus !== "connected") {
+      dialog.replace(() => (
+        <DialogWorkspaceUnavailable
+          onRestore={() => {
+            void openWorkspaceSelect({
+              dialog,
+              sdk,
+              sync,
+              project,
+              toast,
+              onSelect: (selection) => {
+                void warpSession(selection)
+              },
+            })
+            return false
+          }}
+        />
+      ))
+      return false
+    }
+
+    const sessionID = props.sessionID
+    const variant = local.model.variant.current()
+    const messageID = MessageID.ascending()
+    const inputText = expandedInputText()
+    const nonTextParts = store.prompt.parts.filter((part) => part.type !== "text")
+    const currentMode = store.mode
+    const editorParts = editorContextParts()
+
+    void sdk.client.session
+      .prompt({
+        sessionID,
+        ...selectedModel,
+        messageID,
+        agent: agent.name,
+        model: selectedModel,
+        variant,
+        delivery: "deferred",
+        parts: [
+          ...editorParts,
+          {
+            id: PartID.ascending(),
+            type: "text",
+            text: inputText,
+          },
+          ...nonTextParts.map(assign),
+        ],
+      })
+      .catch(() => {})
+    if (editorParts.length > 0) editor.markSelectionSent()
+    resetPromptAfterSend(currentMode, sessionID, editorParts)
+    return true
   }
 
   async function submitInner() {
     setWarpNotice(undefined)
 
-    // IME: double-defer may fire before onContentChange flushes the last
-    // composed character (e.g. Korean hangul) to the store, so read
-    // plainText directly and sync before any downstream reads.
-    if (input && !input.isDestroyed && input.plainText !== store.prompt.input) {
-      setStore("prompt", "input", input.plainText)
-      syncExtmarksWithPromptParts()
-    }
+    syncPromptInputFromTextarea()
     if (props.disabled) return false
     if (workspaceCreating()) return false
     if (auto()?.visible) return false
@@ -1109,47 +1298,10 @@ export function Prompt(props: PromptProps) {
     }
 
     const messageID = MessageID.ascending()
-    let inputText = store.prompt.input
-
-    // Expand pasted text inline before submitting
-    const allExtmarks = input.extmarks.getAllForTypeId(promptPartTypeId)
-    const sortedExtmarks = allExtmarks.sort((a: { start: number }, b: { start: number }) => b.start - a.start)
-
-    for (const extmark of sortedExtmarks) {
-      const partIndex = store.extmarkToPartIndex.get(extmark.id)
-      if (partIndex !== undefined) {
-        const part = store.prompt.parts[partIndex]
-        if (part?.type === "text" && part.text) {
-          const before = inputText.slice(0, extmark.start)
-          const after = inputText.slice(extmark.end)
-          inputText = before + part.text + after
-        }
-      }
-    }
-
-    // Filter out text parts (pasted content) since they're now expanded inline
+    const inputText = expandedInputText()
     const nonTextParts = store.prompt.parts.filter((part) => part.type !== "text")
-
-    // Capture mode before it gets reset
     const currentMode = store.mode
-    const editorSelection = editorContext()
-    const editorParts =
-      editorSelection && editor.labelState() === "pending"
-        ? [
-            {
-              id: PartID.ascending(),
-              type: "text" as const,
-              text: formatEditorContext(editorSelection),
-              synthetic: true,
-              metadata: {
-                kind: "editor_context",
-                source: editorSelection.source ?? "editor",
-                filePath: editorSelection.filePath,
-                ranges: editorSelection.ranges,
-              },
-            },
-          ]
-        : []
+    const editorParts = editorContextParts()
 
     if (store.mode === "shell") {
       void sdk.client.session.shell({
@@ -1162,14 +1314,7 @@ export function Prompt(props: PromptProps) {
         command: inputText,
       })
       setStore("mode", "normal")
-    } else if (
-      inputText.startsWith("/") &&
-      iife(() => {
-        const firstLine = inputText.split("\n")[0]
-        const command = firstLine.split(" ")[0].slice(1)
-        return sync.data.command.some((x) => x.name === command)
-      })
-    ) {
+    } else if (isRegisteredSlashCommand(inputText)) {
       // Parse command from first line, preserve multi-line content in arguments
       const firstLineEnd = inputText.indexOf("\n")
       const firstLine = firstLineEnd === -1 ? inputText : inputText.slice(0, firstLineEnd)
@@ -1214,29 +1359,7 @@ export function Prompt(props: PromptProps) {
         .catch(() => {})
       if (editorParts.length > 0) editor.markSelectionSent()
     }
-    history.append({
-      ...store.prompt,
-      mode: currentMode,
-    })
-    input.extmarks.clear()
-    setStore("prompt", {
-      input: "",
-      parts: [],
-    })
-    setStore("extmarkToPartIndex", new Map())
-    props.onSubmit?.()
-
-    // temporary hack to make sure the message is sent
-    if (!props.sessionID) {
-      if (editorParts.length > 0) editor.preserveSelectionFromNewSession()
-      setTimeout(() => {
-        route.navigate({
-          type: "session",
-          sessionID,
-        })
-      }, 50)
-    }
-    input.clear()
+    resetPromptAfterSend(currentMode, sessionID, editorParts)
     return true
   }
   const exit = useExit()

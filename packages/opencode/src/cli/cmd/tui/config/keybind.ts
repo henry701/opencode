@@ -157,7 +157,7 @@ export const Definitions = {
   input_paste: keybind({ key: "ctrl+v", preventDefault: false }, "Paste from clipboard"),
   input_submit: keybind("return", "Submit input"),
   input_newline: keybind("shift+return,ctrl+return,ctrl+j", "Insert newline in input"),
-  input_queue: keybind("ctrl+shift+return", "Queue prompt for next turn (override via tui keybinds.input_queue)"),
+  input_queue: keybind("ctrl+shift+return", "Queue prompt for next turn in main TUI and run --interactive (keybinds.input_queue)"),
   input_move_left: keybind("left,ctrl+b", "Move cursor left in input"),
   input_move_right: keybind("right,ctrl+f", "Move cursor right in input"),
   input_move_up: keybind("up", "Move cursor up in input"),
