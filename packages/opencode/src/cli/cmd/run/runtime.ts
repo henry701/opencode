@@ -19,6 +19,7 @@ import { Flag } from "@opencode-ai/core/flag/flag"
 import { createRunDemo } from "./demo"
 import { resolveDiffStyle, resolveFooterKeybinds, resolveModelInfo, resolveSessionInfo } from "./runtime.boot"
 import { createRuntimeLifecycle } from "./runtime.lifecycle"
+import { buildQueueSendPayload } from "./runtime.queue-remote"
 import { recordRunSpanError, setRunSpanAttributes, withRunSpan } from "./otel"
 import { trace } from "./trace"
 import { cycleVariant, formatModelLabel, resolveSavedVariant, resolveVariant, saveVariant } from "./variant.shared"
@@ -572,19 +573,12 @@ async function runInteractiveRuntime(input: RunRuntimeInput): Promise<void> {
                 await ctx.sdk.session.queue.send({
                   sessionID: state.sessionID,
                   queueID,
-                  body: prompt
-                    ? {
-                        info: {
-                          id: queueID,
-                          role: "user",
-                          sessionID: state.sessionID,
-                          time: { created: Date.now() },
-                          agent: state.agent ?? "build",
-                          model: state.model ?? { providerID: "openai", modelID: "gpt-4" },
-                        },
-                        parts: [{ type: "text", text: prompt.text }, ...prompt.parts],
-                      }
-                    : undefined,
+                  body: buildQueueSendPayload({
+                    agent: state.agent,
+                    model: state.model,
+                    variant: state.activeVariant,
+                    prompt,
+                  }),
                 })
               },
           pauseQueueDrainRemote: state.demo

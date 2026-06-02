@@ -34,7 +34,7 @@ import { SessionPrompt } from "../../src/session/prompt"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
 import { SessionPromptQueue } from "../../src/session/prompt-queue"
-import { MessageID, PartID, SessionID } from "../../src/session/schema"
+import { MessageID, PartID, QueueItemID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionV2 } from "../../src/v2/session"
 import { Skill } from "../../src/skill"
@@ -1271,6 +1271,50 @@ it.instance(
       expect(persisted).toHaveLength(1)
     }),
   3_000,
+)
+
+noLLMServer.instance("queued prompt tools do not mutate live session permissions before dequeue", () =>
+  Effect.gen(function* () {
+    const prompt = yield* SessionPrompt.Service
+    const promptQueue = yield* SessionPromptQueue.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({
+      title: "Pinned",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+
+    const item = yield* prompt.queueEnqueue({
+      sessionID: chat.id,
+      agent: "build",
+      model: ref,
+      tools: { bash: false },
+      parts: [{ type: "text", text: "queued" }],
+    })
+
+    expect((yield* sessions.get(chat.id)).permission).toEqual([{ permission: "*", pattern: "*", action: "allow" }])
+    expect((yield* promptQueue.list(chat.id))[0]?.data.tools).toEqual({ bash: false })
+    expect(item.data.tools).toEqual({ bash: false })
+  }),
+)
+
+noLLMServer.instance("sending a stale queued prompt fails instead of dying", () =>
+  Effect.gen(function* () {
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+
+    const exit = yield* prompt
+      .queueSend({
+        sessionID: chat.id,
+        queueID: QueueItemID.make("pqu_missing"),
+      })
+      .pipe(Effect.exit)
+
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (!Exit.isFailure(exit)) return
+    expect(exit.cause.reasons.some(Cause.isDieReason)).toBe(false)
+    expect(Cause.pretty(exit.cause)).toContain("Queued message not found")
+  }),
 )
 
 it.instance(

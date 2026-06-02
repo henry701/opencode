@@ -173,6 +173,58 @@ describe("session queue routes", () => {
   )
 
   it.instance(
+    "send returns not found for a stale queue item",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const session = yield* Effect.acquireRelease(SessionNs.use.create({}), (created) =>
+          SessionNs.use.remove(created.id).pipe(Effect.ignore),
+        )
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const enqueue = yield* Effect.promise(() =>
+          Promise.resolve(
+            Server.Default().app.request(`/session/${session.id}/queue`, {
+              method: "POST",
+              headers,
+              body: JSON.stringify({
+                agent: "build",
+                model: { providerID: "openai", modelID: "gpt-4" },
+                parts: [{ type: "text", text: "stale" }],
+              }),
+            }),
+          ),
+        )
+        const item = (yield* Effect.promise(() => enqueue.json())) as { id: string }
+        const remove = yield* Effect.promise(() =>
+          Promise.resolve(
+            Server.Default().app.request(`/session/${session.id}/queue/${item.id}`, {
+              method: "DELETE",
+              headers,
+            }),
+          ),
+        )
+        expect(remove.status).toBe(200)
+
+        const response = yield* Effect.promise(() =>
+          Promise.resolve(
+            Server.Default().app.request(`/session/${session.id}/queue/${item.id}/send`, {
+              method: "POST",
+              headers,
+              body: "null",
+            }),
+          ),
+        )
+
+        const body = (yield* Effect.promise(() => response.json())) as { data?: { message?: string } }
+        expect(response.status, JSON.stringify(body)).toBe(404)
+        expect(body).toMatchObject({
+          data: { message: "Queued message not found" },
+        })
+      }),
+    { git: true },
+  )
+
+  it.instance(
     "allows more than three queued prompts",
     () =>
       Effect.gen(function* () {

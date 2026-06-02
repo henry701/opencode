@@ -46,6 +46,19 @@ const tryParseJson = (text: string) =>
     catch: () => new HttpApiError.BadRequest({}),
   })
 
+const mapQueuePromptError = (error: unknown) =>
+  error &&
+  typeof error === "object" &&
+  "_tag" in error &&
+  error._tag === "SessionPrompt.QueueItemNotFound" &&
+  "message" in error &&
+  typeof error.message === "string"
+    ? ApiError.notFound(error.message)
+    : new HttpApiError.BadRequest({})
+
+const isPromptPayload = (payload: unknown): payload is typeof PromptPayload.Type =>
+  !!payload && typeof payload === "object" && "parts" in payload
+
 export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", (handlers) =>
   Effect.gen(function* () {
     const session = yield* Session.Service
@@ -426,7 +439,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       const message = ctx.payload as MessageV2.WithParts | undefined
       return yield* promptSvc
         .sendDeferredNow(ctx.params.sessionID, ctx.params.queueID, message)
-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+        .pipe(Effect.mapError(mapQueuePromptError))
     })
 
     const listQueue = Effect.fn("SessionHttpApi.listQueue")(function* (ctx: { params: { sessionID: SessionID } }) {
@@ -482,14 +495,14 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: unknown
     }) {
       yield* requireSession(ctx.params.sessionID)
-      const payload = ctx.payload as typeof PromptPayload.Type | undefined
+      const payload = isPromptPayload(ctx.payload) ? ctx.payload : undefined
       return yield* promptSvc
         .queueSend({
           sessionID: ctx.params.sessionID,
           queueID: ctx.params.queueID,
           prompt: payload ? { ...payload, sessionID: ctx.params.sessionID } : undefined,
         })
-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+        .pipe(Effect.mapError(mapQueuePromptError))
     })
 
     const pauseQueueDrain = Effect.fn("SessionHttpApi.pauseQueueDrain")(function* (ctx: {

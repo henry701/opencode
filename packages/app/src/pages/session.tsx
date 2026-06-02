@@ -70,6 +70,7 @@ import { extractPromptFromParts } from "@/utils/prompt"
 import { same } from "@/utils/same"
 import { formatServerError } from "@/utils/server-errors"
 import { useUsageExceededDialogs } from "./session/usage-exceeded-dialogs"
+import { applyQueueSaveSuccess } from "./session.queue-save"
 
 const emptyUserMessages: UserMessage[] = []
 type QueuePreview = { id: string; text: string }
@@ -1482,12 +1483,15 @@ export default function Page() {
 
     void save
       .then(() => {
-        setFollowup("failed", draft.sessionID, undefined)
-        setFollowup("paused", draft.sessionID, undefined)
-        if (draft.queueID) {
-          clearFollowupEdit()
-          stopEditingQueueMessage()
-        }
+        applyQueueSaveSuccess({
+          sessionID: draft.sessionID,
+          queueID: draft.queueID,
+          clearFailed: () => setFollowup("failed", draft.sessionID, undefined),
+          clearPaused: () => setFollowup("paused", draft.sessionID, undefined),
+          clearEdit: clearFollowupEdit,
+          stopEditing: stopEditingQueueMessage,
+          resumeDrain: resumeQueueDrain,
+        })
       })
       .catch(fail)
   }

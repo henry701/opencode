@@ -106,16 +106,23 @@ export interface Interface {
     sessionID: SessionID,
     queueID: QueueItemID,
     message?: MessageV2.WithParts,
-  ) => Effect.Effect<MessageV2.WithParts>
+  ) => Effect.Effect<MessageV2.WithParts, QueueItemNotFoundError>
   readonly queueEnqueue: (input: PromptInput) => Effect.Effect<QueueItem, Image.Error>
   readonly queueUpdate: (input: PromptInput & { queueID: QueueItemID }) => Effect.Effect<boolean, Image.Error>
   readonly queueSend: (input: { sessionID: SessionID; queueID: QueueItemID; prompt?: PromptInput }) => Effect.Effect<
     MessageV2.WithParts,
-    Image.Error
+    Image.Error | QueueItemNotFoundError
   >
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionPrompt") {}
+
+export class QueueItemNotFoundError extends Schema.TaggedErrorClass<QueueItemNotFoundError>()(
+  "SessionPrompt.QueueItemNotFound",
+  {
+    message: Schema.String,
+  },
+) {}
 
 export const layer = Layer.effect(
   Service,
@@ -1270,15 +1277,6 @@ export const layer = Layer.effect(
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       yield* revert.cleanup(session)
 
-      const permissions: Permission.Rule[] = []
-      for (const [t, enabled] of Object.entries(input.tools ?? {})) {
-        permissions.push({ permission: t, action: enabled ? "allow" : "deny", pattern: "*" })
-      }
-      if (permissions.length > 0) {
-        session.permission = permissions
-        yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
-      }
-
       const message = yield* createUserMessage(input, { persist: false })
       yield* sessions.touch(input.sessionID)
       return yield* promptQueue.enqueue(input.sessionID, queueDataFromMessage(message))
@@ -1301,7 +1299,7 @@ export const layer = Layer.effect(
         yield* revert.cleanup(session)
         const message = yield* createUserMessage({ ...input.prompt, sessionID: input.sessionID }, { persist: false })
         const ok = yield* promptQueue.update(input.sessionID, input.queueID, queueDataFromMessage(message))
-        if (!ok) return yield* Effect.die("Queued message not found")
+        if (!ok) return yield* new QueueItemNotFoundError({ message: "Queued message not found" })
       }
       return yield* sendDeferredNow(input.sessionID, input.queueID)
     })
@@ -1838,11 +1836,11 @@ export const layer = Layer.effect(
     ) {
       if (message) {
         const ok = yield* promptQueue.update(sessionID, queueID, queueDataFromMessage(message))
-        if (!ok) return yield* Effect.die("Queued message not found")
+        if (!ok) return yield* new QueueItemNotFoundError({ message: "Queued message not found" })
       }
       const items = yield* promptQueue.list(sessionID)
       const item = items.find((entry) => entry.id === queueID)
-      if (!item) return yield* Effect.die("Queued message not found")
+      if (!item) return yield* new QueueItemNotFoundError({ message: "Queued message not found" })
       yield* promptQueue.remove(sessionID, queueID)
       yield* persistUserMessage(materializeQueuedItem(item))
       return yield* loop({ sessionID })
