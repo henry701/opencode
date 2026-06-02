@@ -408,34 +408,40 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const updateDeferred = Effect.fn("SessionHttpApi.updateDeferred")(function* (ctx: {
-      params: { sessionID: SessionID; messageID: MessageID }
+      params: { sessionID: SessionID; queueID: QueueItemID }
       payload: unknown
     }) {
       yield* requireSession(ctx.params.sessionID)
       const message = ctx.payload as MessageV2.WithParts
-      const ok = yield* promptSvc.updateDeferredQueue(
-        ctx.params.sessionID,
-        QueueItemID.make(ctx.params.messageID),
-        message,
-      )
+      const ok = yield* promptSvc.updateDeferredQueue(ctx.params.sessionID, ctx.params.queueID, message)
       if (!ok) return yield* Effect.fail(ApiError.notFound("Queued message not found"))
       return true
     })
 
     const sendDeferred = Effect.fn("SessionHttpApi.sendDeferred")(function* (ctx: {
-      params: { sessionID: SessionID; messageID: MessageID }
+      params: { sessionID: SessionID; queueID: QueueItemID }
       payload: unknown
     }) {
       yield* requireSession(ctx.params.sessionID)
       const message = ctx.payload as MessageV2.WithParts | undefined
       return yield* promptSvc
-        .sendDeferredNow(ctx.params.sessionID, QueueItemID.make(ctx.params.messageID), message)
+        .sendDeferredNow(ctx.params.sessionID, ctx.params.queueID, message)
         .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
     })
 
     const listQueue = Effect.fn("SessionHttpApi.listQueue")(function* (ctx: { params: { sessionID: SessionID } }) {
       yield* requireSession(ctx.params.sessionID)
       return yield* promptQueueSvc.listPreview(ctx.params.sessionID)
+    })
+
+    const getQueue = Effect.fn("SessionHttpApi.getQueue")(function* (ctx: {
+      params: { sessionID: SessionID; queueID: QueueItemID }
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      const items = yield* promptQueueSvc.list(ctx.params.sessionID)
+      const item = items.find((entry) => entry.id === ctx.params.queueID)
+      if (!item) return yield* Effect.fail(ApiError.notFound("Queued message not found"))
+      return { id: item.id, ...item.data }
     })
 
     const enqueueQueue = Effect.fn("SessionHttpApi.enqueueQueue")(function* (ctx: {
@@ -533,6 +539,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("updateDeferred", updateDeferred)
       .handle("sendDeferred", sendDeferred)
       .handle("listQueue", listQueue)
+      .handle("getQueue", getQueue)
       .handle("enqueueQueue", enqueueQueue)
       .handle("updateQueue", updateQueue)
       .handle("removeQueue", removeQueue)

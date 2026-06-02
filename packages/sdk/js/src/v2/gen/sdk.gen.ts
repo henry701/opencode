@@ -192,8 +192,14 @@ import type {
   SessionPromptAsyncResponses,
   SessionPromptErrors,
   SessionPromptResponses,
+  SessionQueueDrainPauseErrors,
+  SessionQueueDrainPauseResponses,
+  SessionQueueDrainResumeErrors,
+  SessionQueueDrainResumeResponses,
   SessionQueueEnqueueErrors,
   SessionQueueEnqueueResponses,
+  SessionQueueGetErrors,
+  SessionQueueGetResponses,
   SessionQueueListErrors,
   SessionQueueListResponses,
   SessionQueueRemoveErrors,
@@ -3061,7 +3067,7 @@ export class Deferred extends HeyApiClient {
   public update<ThrowOnError extends boolean = false>(
     parameters: {
       sessionID: string
-      messageID: string
+      queueID: string
       directory?: string
       workspace?: string
       body?: unknown
@@ -3074,7 +3080,7 @@ export class Deferred extends HeyApiClient {
         {
           args: [
             { in: "path", key: "sessionID" },
-            { in: "path", key: "messageID" },
+            { in: "path", key: "queueID" },
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
             { key: "body", map: "body" },
@@ -3087,7 +3093,7 @@ export class Deferred extends HeyApiClient {
       SessionDeferredUpdateErrors,
       ThrowOnError
     >({
-      url: "/session/{sessionID}/deferred/{messageID}",
+      url: "/session/{sessionID}/deferred/{queueID}",
       ...options,
       ...params,
       headers: {
@@ -3104,7 +3110,7 @@ export class Deferred extends HeyApiClient {
   public send<ThrowOnError extends boolean = false>(
     parameters: {
       sessionID: string
-      messageID: string
+      queueID: string
       directory?: string
       workspace?: string
       body?: unknown
@@ -3117,7 +3123,7 @@ export class Deferred extends HeyApiClient {
         {
           args: [
             { in: "path", key: "sessionID" },
-            { in: "path", key: "messageID" },
+            { in: "path", key: "queueID" },
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
             { key: "body", map: "body" },
@@ -3127,7 +3133,7 @@ export class Deferred extends HeyApiClient {
     )
     return (options?.client ?? this.client).post<SessionDeferredSendResponses, SessionDeferredSendErrors, ThrowOnError>(
       {
-        url: "/session/{sessionID}/deferred/{messageID}/send",
+        url: "/session/{sessionID}/deferred/{queueID}/send",
         ...options,
         ...params,
         headers: {
@@ -3137,6 +3143,76 @@ export class Deferred extends HeyApiClient {
         },
       },
     )
+  }
+}
+
+export class Drain extends HeyApiClient {
+  /**
+   * Pause automatic FIFO dequeue while editing queued prompts. Explicit send-now and normal submits still run.
+   */
+  public pause<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      SessionQueueDrainPauseResponses,
+      SessionQueueDrainPauseErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/queue/drain-pause",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Resume automatic FIFO dequeue after queue edit is cancelled or abandoned.
+   */
+  public resume<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      SessionQueueDrainResumeResponses,
+      SessionQueueDrainResumeErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/queue/drain-resume",
+      ...options,
+      ...params,
+    })
   }
 }
 
@@ -3172,7 +3248,7 @@ export class Queue extends HeyApiClient {
   }
 
   /**
-   * Enqueue a prompt for the session (max 3, FIFO). Does not appear in the transcript until dequeued.
+   * Enqueue a prompt for the session (FIFO). Does not appear in the transcript until dequeued.
    */
   public enqueue<ThrowOnError extends boolean = false>(
     parameters: {
@@ -3268,6 +3344,38 @@ export class Queue extends HeyApiClient {
   }
 
   /**
+   * Load a queued prompt with full parts for editing.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      queueID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "queueID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<SessionQueueGetResponses, SessionQueueGetErrors, ThrowOnError>({
+      url: "/session/{sessionID}/queue/{queueID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
    * Update a prompt waiting in the session queue.
    */
   public update<ThrowOnError extends boolean = false>(
@@ -3345,64 +3453,9 @@ export class Queue extends HeyApiClient {
     })
   }
 
-  /**
-   * Pause automatic FIFO dequeue while editing queued prompts.
-   */
-  public pauseDrain<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<{ data: boolean }, unknown, ThrowOnError>({
-      url: "/session/{sessionID}/queue/drain-pause",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Resume automatic FIFO dequeue after queue edit is cancelled or abandoned.
-   */
-  public resumeDrain<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<{ data: boolean }, unknown, ThrowOnError>({
-      url: "/session/{sessionID}/queue/drain-resume",
-      ...options,
-      ...params,
-    })
+  private _drain?: Drain
+  get drain(): Drain {
+    return (this._drain ??= new Drain({ client: this.client }))
   }
 }
 

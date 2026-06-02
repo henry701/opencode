@@ -108,6 +108,27 @@ type RunFooterViewProps = {
 
 export { TEXTAREA_MIN_ROWS, TEXTAREA_MAX_ROWS } from "./footer.prompt"
 
+export function queuedSendPlan(items: FooterState["queued"], id: string, editingID: string | undefined) {
+  const index = items.findIndex((item) => item.id === id)
+  const nextID = index < 0 ? undefined : items[index + 1]?.id
+  if (editingID && editingID !== id) {
+    return {
+      saveID: editingID,
+      editID: editingID,
+      clearEditor: false,
+      pauseDrain: true,
+      resumeDrain: false,
+    }
+  }
+  return {
+    saveID: editingID === id ? id : undefined,
+    editID: nextID,
+    clearEditor: true,
+    pauseDrain: !!nextID,
+    resumeDrain: !nextID,
+  }
+}
+
 export function RunFooterView(props: RunFooterViewProps) {
   const term = useTerminalDimensions()
   const active = createMemo<FooterView>(() => props.view?.() ?? { type: "prompt" })
@@ -273,7 +294,7 @@ export function RunFooterView(props: RunFooterViewProps) {
   const cancelQueueEdit = () => {
     const id = editingQueueID()
     if (!id) return false
-    queueControl()?.resumeDrain?.()
+    void Promise.resolve(queueControl()?.resumeDrain?.()).catch(() => {})
     setEditingQueueID(undefined)
     composer.restorePrompt({ text: "", parts: [] })
     setQueueEscapeGuard(true)
@@ -291,10 +312,24 @@ export function RunFooterView(props: RunFooterViewProps) {
     if (current && current !== id) saveEditorToQueue(current)
     const prompt = queueControl()?.get(id) ?? promptFromPreview(id)
     if (!prompt) return
-    queueControl()?.pauseDrain?.()
+    void Promise.resolve(queueControl()?.pauseDrain?.()).catch(() => {})
     setEditingQueueID(id)
     composer.restorePrompt(prompt)
     composer.focus()
+  }
+
+  const sendQueuedAndMaybeEditNext = async (id: string) => {
+    const plan = queuedSendPlan(queued(), id, editingQueueID())
+    if (plan.saveID) saveEditorToQueue(plan.saveID)
+    if (plan.pauseDrain) await queueControl()?.pauseDrain?.()
+    await queueControl()?.sendNow(id)
+    if (plan.resumeDrain) await queueControl()?.resumeDrain?.()
+    if (plan.clearEditor) {
+      setEditingQueueID(undefined)
+      composer.restorePrompt({ text: "", parts: [] })
+    }
+    if (plan.editID) beginEditQueue(plan.editID)
+    else composer.focus()
   }
 
   const cycleEditQueue = (dir: -1 | 1) => {
@@ -331,7 +366,7 @@ export function RunFooterView(props: RunFooterViewProps) {
     theme,
     history: props.history,
     onSubmit: (input) => {
-      if (!input.queued) queueControl()?.resumeDrain?.()
+      if (!input.queued) void Promise.resolve(queueControl()?.resumeDrain?.()).catch(() => {})
       return props.onSubmit(input)
     },
     onQueue: props.onQueue,
@@ -354,16 +389,7 @@ export function RunFooterView(props: RunFooterViewProps) {
     },
     onCancelQueueEdit: cancelQueueEdit,
     onSendQueuedNow: (id) => {
-      const items = queued()
-      const index = items.findIndex((item) => item.id === id)
-      const nextID = index < 0 ? undefined : items[index + 1]?.id
-      saveEditorToQueue(id)
-      queueControl()?.sendNow(id)
-      if (!nextID) queueControl()?.resumeDrain?.()
-      setEditingQueueID(undefined)
-      composer.restorePrompt({ text: "", parts: [] })
-      if (nextID) beginEditQueue(nextID)
-      else composer.focus()
+      void sendQueuedAndMaybeEditNext(id).catch(() => {})
     },
     onCycle: props.onCycle,
     onInterrupt: props.onInterrupt,
@@ -525,20 +551,7 @@ export function RunFooterView(props: RunFooterViewProps) {
                         editingMessageID={editingQueueID}
                         onEdit={beginEditQueue}
                         onSendNow={(id) => {
-                          const items = queued()
-                          const index = items.findIndex((item) => item.id === id)
-                          const nextID = index < 0 ? undefined : items[index + 1]?.id
-                          if (editingQueueID() === id) {
-                            saveEditorToQueue(id)
-                            setEditingQueueID(undefined)
-                            composer.restorePrompt({ text: "", parts: [] })
-                          }
-                          queueControl()?.sendNow(id)
-                          if (nextID) beginEditQueue(nextID)
-                          else {
-                            queueControl()?.resumeDrain?.()
-                            composer.focus()
-                          }
+                          void sendQueuedAndMaybeEditNext(id).catch(() => {})
                         }}
                       />
                       </box>

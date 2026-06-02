@@ -157,4 +157,65 @@ describe("materializeQueuedItem", () => {
     expect(message.parts[0]?.type === "text" ? message.parts[0].text : "").toBe("hello")
     expect(message.info.id).not.toBe(item.id)
   })
+
+  test("preserves system and format metadata", () => {
+    const sessionID = SessionID.make("ses_materialize_meta")
+    const item = new MemoryPromptQueue().enqueue(sessionID, {
+      ...sampleData("hello"),
+      system: "custom system",
+      format: { type: "json_schema", schema: { type: "object" } },
+    })
+    const message = materializeQueuedItem(item)
+    if (message.info.role !== "user") throw new Error("expected user message")
+    expect(message.info.system).toBe("custom system")
+    expect(message.info.format).toEqual({ type: "json_schema", schema: { type: "object" } })
+  })
+})
+
+describe("PromptQueue sqlite update isolation", () => {
+  const sessionA = SessionID.make("ses_queue_update_a")
+  const sessionB = SessionID.make("ses_queue_update_b")
+  const projectID = ProjectID.make("project_queue_update")
+
+  function seedSessions() {
+    const now = Date.now()
+    Database.use((db) => {
+      db.insert(ProjectTable)
+        .values({
+          id: projectID,
+          worktree: "/tmp/project",
+          vcs: "git",
+          name: "project",
+          time_created: now,
+          time_updated: now,
+          sandboxes: [],
+        })
+        .onConflictDoNothing()
+        .run()
+      for (const sessionID of [sessionA, sessionB]) {
+        db.insert(SessionTable)
+          .values({
+            id: sessionID,
+            project_id: projectID,
+            slug: sessionID,
+            directory: "/tmp/project",
+            title: sessionID,
+            version: "1",
+            time_created: now,
+            time_updated: now,
+          })
+          .run()
+      }
+    })
+  }
+
+  test("rejects cross-session updates without mutating the row", () =>
+    Effect.gen(function* () {
+      seedSessions()
+      const foreign = yield* PromptQueue.sqliteEnqueue(sessionB, sampleData("foreign"))
+      const ok = yield* PromptQueue.sqliteUpdate(sessionA, foreign.id, sampleData("hijacked"))
+      expect(ok).toBe(false)
+      const listed = yield* PromptQueue.sqliteList(sessionB)
+      expect(listed[0]?.data.parts[0]?.type === "text" ? listed[0].data.parts[0].text : "").toBe("foreign")
+    }).pipe(Effect.runPromise))
 })

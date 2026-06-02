@@ -506,6 +506,43 @@ describe("run runtime queue", () => {
     await task
   })
 
+  test("remote queue control allows pause to settle before send now", async () => {
+    const ui = footer()
+    let control: import("@/cli/cmd/run/types").QueueControl | undefined
+    const calls: string[] = []
+    const sent: { id: string; text?: string }[] = []
+
+    const task = runPromptQueue({
+      footer: {
+        ...ui.api,
+        setQueueControl(next) {
+          control = next
+        },
+      },
+      pauseQueueDrainRemote: async () => {
+        calls.push("pause")
+      },
+      updateQueueRemote: async () => {},
+      sendQueueRemote: async (id, prompt) => {
+        calls.push("send")
+        sent.push({ id, text: prompt?.text })
+      },
+      run: async () => {
+        ui.api.close()
+      },
+    })
+
+    expect(control?.update("pqu_test", { text: "edited", parts: [], queueID: "pqu_test" })).toBe(true)
+    await control?.pauseDrain?.()
+    await control?.sendNow("pqu_test")
+
+    expect(calls).toEqual(["pause", "send"])
+    expect(sent).toEqual([{ id: "pqu_test", text: "edited" }])
+
+    ui.api.close()
+    await task
+  })
+
   test("demo mode does not enqueue prompts", async () => {
     const ui = footer()
     let status = ""

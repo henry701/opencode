@@ -99,8 +99,9 @@ export const SessionPaths = {
   deleteMessage: `${root}/:sessionID/message/:messageID`,
   deletePart: `${root}/:sessionID/message/:messageID/part/:partID`,
   updatePart: `${root}/:sessionID/message/:messageID/part/:partID`,
-  updateDeferred: `${root}/:sessionID/deferred/:messageID`,
-  sendDeferred: `${root}/:sessionID/deferred/:messageID/send`,
+  updateDeferred: `${root}/:sessionID/deferred/:queueID`,
+  sendDeferred: `${root}/:sessionID/deferred/:queueID/send`,
+  getQueue: `${root}/:sessionID/queue/:queueID`,
   listQueue: `${root}/:sessionID/queue`,
   enqueueQueue: `${root}/:sessionID/queue`,
   updateQueue: `${root}/:sessionID/queue/:queueID`,
@@ -118,6 +119,8 @@ export const QueueEnqueueSuccess = Schema.Struct({
   id: QueueItemID,
   text: Schema.String,
 })
+
+export const QueueItemDetail = PromptQueue.QueueItemDetail
 
 export const SessionApi = HttpApi.make("session")
   .add(
@@ -458,7 +461,7 @@ export const SessionApi = HttpApi.make("session")
           }),
         ),
         HttpApiEndpoint.patch("updateDeferred", SessionPaths.updateDeferred, {
-          params: { sessionID: SessionID, messageID: MessageID },
+          params: { sessionID: SessionID, queueID: QueueItemID },
           query: WorkspaceRoutingQuery,
           payload: Schema.Unknown,
           success: described(Schema.Boolean, "Successfully updated queued prompt"),
@@ -470,7 +473,7 @@ export const SessionApi = HttpApi.make("session")
           }),
         ),
         HttpApiEndpoint.post("sendDeferred", SessionPaths.sendDeferred, {
-          params: { sessionID: SessionID, messageID: MessageID },
+          params: { sessionID: SessionID, queueID: QueueItemID },
           query: WorkspaceRoutingQuery,
           payload: Schema.Unknown,
           success: described(Schema.Unknown, "Assistant response after sending queued prompt now"),
@@ -490,6 +493,17 @@ export const SessionApi = HttpApi.make("session")
           OpenApi.annotations({
             identifier: "session.queue.list",
             description: "List prompts waiting in the session queue.",
+          }),
+        ),
+        HttpApiEndpoint.get("getQueue", SessionPaths.getQueue, {
+          params: { sessionID: SessionID, queueID: QueueItemID },
+          query: WorkspaceRoutingQuery,
+          success: described(QueueItemDetail, "Queued prompt payload"),
+          error: [ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.queue.get",
+            description: "Load a queued prompt with full parts for editing.",
           }),
         ),
         HttpApiEndpoint.post("enqueueQueue", SessionPaths.enqueueQueue, {

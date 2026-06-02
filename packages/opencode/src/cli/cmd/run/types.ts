@@ -53,9 +53,9 @@ export type QueueControl = {
   get: (id: string) => RunPrompt | undefined
   update: (id: string, prompt: RunPrompt) => boolean
   remove: (id: string) => RunPrompt | undefined
-  sendNow: (id: string) => void
-  pauseDrain?: () => void
-  resumeDrain?: () => void
+  sendNow: (id: string) => void | Promise<void>
+  pauseDrain?: () => void | Promise<void>
+  resumeDrain?: () => void | Promise<void>
 }
 
 export type RunAgent = NonNullable<Awaited<ReturnType<OpencodeClient["app"]["agents"]>>["data"]>[number]

@@ -1858,6 +1858,24 @@ export type SessionBusyError = {
   message: string
 }
 
+export type QueueItemDetail = {
+  id: string
+  version: 1
+  agent: string
+  model: {
+    providerID: string
+    modelID: string
+    variant?: string
+  }
+  tools?: {
+    [key: string]: boolean
+  }
+  system?: string
+  format?: OutputFormat
+  parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
+  permissions?: Array<unknown>
+}
+
 export type V2SessionsResponse = {
   items: Array<SessionInfo>
   cursor: {
@@ -7121,13 +7139,13 @@ export type SessionDeferredUpdateData = {
   body?: unknown
   path: {
     sessionID: string
-    messageID: string
+    queueID: string
   }
   query?: {
     directory?: string
     workspace?: string
   }
-  url: "/session/{sessionID}/deferred/{messageID}"
+  url: "/session/{sessionID}/deferred/{queueID}"
 }
 
 export type SessionDeferredUpdateErrors = {
@@ -7156,13 +7174,13 @@ export type SessionDeferredSendData = {
   body?: unknown
   path: {
     sessionID: string
-    messageID: string
+    queueID: string
   }
   query?: {
     directory?: string
     workspace?: string
   }
-  url: "/session/{sessionID}/deferred/{messageID}/send"
+  url: "/session/{sessionID}/deferred/{queueID}/send"
 }
 
 export type SessionDeferredSendErrors = {
@@ -7314,6 +7332,41 @@ export type SessionQueueRemoveResponses = {
 
 export type SessionQueueRemoveResponse = SessionQueueRemoveResponses[keyof SessionQueueRemoveResponses]
 
+export type SessionQueueGetData = {
+  body?: never
+  path: {
+    sessionID: string
+    queueID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/queue/{queueID}"
+}
+
+export type SessionQueueGetErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionQueueGetError = SessionQueueGetErrors[keyof SessionQueueGetErrors]
+
+export type SessionQueueGetResponses = {
+  /**
+   * Queued prompt payload
+   */
+  200: QueueItemDetail
+}
+
+export type SessionQueueGetResponse = SessionQueueGetResponses[keyof SessionQueueGetResponses]
+
 export type SessionQueueUpdateData = {
   body?: unknown
   path: {
@@ -7385,6 +7438,74 @@ export type SessionQueueSendResponses = {
    */
   200: unknown
 }
+
+export type SessionQueueDrainPauseData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/queue/drain-pause"
+}
+
+export type SessionQueueDrainPauseErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionQueueDrainPauseError = SessionQueueDrainPauseErrors[keyof SessionQueueDrainPauseErrors]
+
+export type SessionQueueDrainPauseResponses = {
+  /**
+   * Queue auto-drain paused
+   */
+  200: boolean
+}
+
+export type SessionQueueDrainPauseResponse = SessionQueueDrainPauseResponses[keyof SessionQueueDrainPauseResponses]
+
+export type SessionQueueDrainResumeData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/queue/drain-resume"
+}
+
+export type SessionQueueDrainResumeErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionQueueDrainResumeError = SessionQueueDrainResumeErrors[keyof SessionQueueDrainResumeErrors]
+
+export type SessionQueueDrainResumeResponses = {
+  /**
+   * Queue auto-drain resumed
+   */
+  200: boolean
+}
+
+export type SessionQueueDrainResumeResponse = SessionQueueDrainResumeResponses[keyof SessionQueueDrainResumeResponses]
 
 export type SyncStartData = {
   body?: never

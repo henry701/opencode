@@ -1,5 +1,7 @@
 # Alt+Enter Queueing + Web Queue Button — Implementation Plan
 
+> **Superseded** by [PLAN_UNIFIED_PROMPT_QUEUE.md](./PLAN_UNIFIED_PROMPT_QUEUE.md) (SQLite `prompt_queue`, dormant `delivery: "deferred"` on prompt). This file is kept for historical context only.
+
 Based on thorough analysis of the codebase, existing scaffolding, and relevant PRs.
 
 ## Current State Summary

@@ -56,6 +56,22 @@ describe("session queue routes", () => {
         const items = (yield* Effect.promise(() => list.json())) as { id: string; text: string }[]
         expect(items).toEqual([first])
 
+        const get = yield* Effect.promise(() =>
+          Promise.resolve(
+            Server.Default().app.request(`/session/${session.id}/queue/${first.id}`, {
+              method: "GET",
+              headers: { "x-opencode-directory": test.directory },
+            }),
+          ),
+        )
+        expect(get.status).toBe(200)
+        const detail = (yield* Effect.promise(() => get.json())) as {
+          id: string
+          parts: { type: string; text?: string }[]
+        }
+        expect(detail.id).toBe(first.id)
+        expect(detail.parts[0]?.text).toBe("queued one")
+
         const update = yield* Effect.promise(() =>
           Promise.resolve(
             Server.Default().app.request(`/session/${session.id}/queue/${first.id}`, {

@@ -592,14 +592,14 @@ async function runInteractiveRuntime(input: RunRuntimeInput): Promise<void> {
             : async () => {
                 await ensureStream()
                 if (!state.sessionID) return
-                await ctx.sdk.session.queue.pauseDrain({ sessionID: state.sessionID })
+                await ctx.sdk.session.queue.drain.pause({ sessionID: state.sessionID })
               },
           resumeQueueDrainRemote: state.demo
             ? undefined
             : async () => {
                 await ensureStream()
                 if (!state.sessionID) return
-                await ctx.sdk.session.queue.resumeDrain({ sessionID: state.sessionID })
+                await ctx.sdk.session.queue.drain.resume({ sessionID: state.sessionID })
               },
           onSend: (prompt) => {
             state.shown = true

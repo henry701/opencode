@@ -180,15 +180,15 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
     },
     remove: removeQueued,
     pauseDrain: () => {
-      if (input.pauseQueueDrainRemote) void input.pauseQueueDrainRemote().catch(() => {})
+      if (input.pauseQueueDrainRemote) return input.pauseQueueDrainRemote()
     },
     resumeDrain: () => {
-      if (input.resumeQueueDrainRemote) void input.resumeQueueDrainRemote().catch(() => {})
+      if (input.resumeQueueDrainRemote) return input.resumeQueueDrainRemote()
     },
-    sendNow: (id: string) => {
+    sendNow: async (id: string) => {
       if (input.sendQueueRemote) {
         const prompt = findQueued(id)
-        void input.sendQueueRemote(id, prompt)
+        await input.sendQueueRemote(id, prompt)
         remoteDrafts.delete(id)
         return
       }

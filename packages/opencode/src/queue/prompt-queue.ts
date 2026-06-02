@@ -4,8 +4,7 @@ import { MessageV2 } from "@/session/message-v2"
 import { PromptQueueTable } from "@/session/session.sql"
 import { MessageID, PartID, QueueItemID, SessionID } from "@/session/schema"
 import { ModelID, ProviderID } from "@/provider/schema"
-import { eq } from "drizzle-orm"
-import { asc } from "drizzle-orm"
+import { and, asc, eq } from "drizzle-orm"
 import { Effect, Schema } from "effect"
 import type { Permission } from "@/permission"
 
@@ -17,7 +16,7 @@ export const PromptQueuePart = Schema.Union([
 ]).annotate({ discriminator: "type" })
 export type PromptQueuePart = Schema.Schema.Type<typeof PromptQueuePart>
 
-export const PromptQueueData = Schema.Struct({
+const promptQueueDataFields = {
   version: Schema.Literal(1),
   agent: Schema.String,
   model: Schema.Struct({
@@ -26,9 +25,13 @@ export const PromptQueueData = Schema.Struct({
     variant: Schema.optional(Schema.String),
   }),
   tools: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
+  system: Schema.optional(Schema.String),
+  format: Schema.optional(MessageV2.Format),
   parts: Schema.Array(PromptQueuePart),
   permissions: Schema.optional(Schema.Array(Schema.Any)),
-}).annotate({ identifier: "PromptQueueData" })
+} as const
+
+export const PromptQueueData = Schema.Struct(promptQueueDataFields).annotate({ identifier: "PromptQueueData" })
 export type PromptQueueData = Schema.Schema.Type<typeof PromptQueueData>
 
 export type QueueItem = {
@@ -43,6 +46,12 @@ export type QueueItemPreview = {
   id: QueueItemID
   text: string
 }
+
+export const QueueItemDetail = Schema.Struct({
+  id: QueueItemID,
+  ...promptQueueDataFields,
+}).annotate({ identifier: "QueueItemDetail" })
+export type QueueItemDetail = Schema.Schema.Type<typeof QueueItemDetail>
 
 export function queueItemPreview(item: QueueItem): QueueItemPreview {
   return {
@@ -213,12 +222,12 @@ export const sqliteUpdate = Effect.fn("PromptQueue.sqliteUpdate")(function* (
       db
         .update(PromptQueueTable)
         .set({ data, time_updated: Date.now() })
-        .where(eq(PromptQueueTable.id, id))
-        .returning({ id: PromptQueueTable.id, session_id: PromptQueueTable.session_id })
+        .where(and(eq(PromptQueueTable.id, id), eq(PromptQueueTable.session_id, sessionID)))
+        .returning({ id: PromptQueueTable.id })
         .get(),
     ),
   )
-  return updated?.session_id === sessionID
+  return !!updated
 })
 
 export const sqliteRemove = Effect.fn("PromptQueue.sqliteRemove")(function* (sessionID: SessionID, id: QueueItemID) {
@@ -276,6 +285,8 @@ export function materializeQueuedItem(item: QueueItem): MessageV2.WithParts {
     agent: item.data.agent,
     model: item.data.model,
     tools: item.data.tools,
+    system: item.data.system,
+    format: item.data.format,
     delivery: "immediate",
   }
   const parts = item.data.parts.map((part) => {
@@ -342,6 +353,8 @@ export function queueDataFromMessage(message: MessageV2.WithParts): PromptQueueD
     agent: message.info.agent,
     model: message.info.model,
     tools: message.info.tools,
+    system: message.info.system,
+    format: message.info.format,
     parts,
   }
 }

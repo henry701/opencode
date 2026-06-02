@@ -65,6 +65,7 @@ import { shouldUseV2NewSessionPage } from "@/pages/session/new-session-layout"
 import { Identifier } from "@/utils/id"
 import { diffs as list } from "@/utils/diffs"
 import { Persist, persisted } from "@/utils/persist"
+import { partsFromQueueDetail } from "@/utils/queue-parts"
 import { extractPromptFromParts } from "@/utils/prompt"
 import { same } from "@/utils/same"
 import { formatServerError } from "@/utils/server-errors"
@@ -405,11 +406,11 @@ export default function Page() {
   const stopEditingQueueMessage = () => setEditingQueueMessageID(undefined)
 
   const pauseQueueDrain = (sessionID: string) => {
-    void sdk.client.session.queue.pauseDrain({ sessionID }).catch(() => {})
+    void sdk.client.session.queue.drain.pause({ sessionID }).catch(() => {})
   }
 
   const resumeQueueDrain = (sessionID: string) => {
-    void sdk.client.session.queue.resumeDrain({ sessionID }).catch(() => {})
+    void sdk.client.session.queue.drain.resume({ sessionID }).catch(() => {})
   }
 
   const cancelQueueEdit = () => {
@@ -1503,18 +1504,42 @@ export default function Page() {
     const sessionID = params.id
     if (!sessionID) return
     if (followupBusy(sessionID)) return
+    if (!queuedFollowups().find((entry) => entry.id === id)) return
 
-    const item = queuedFollowups().find((entry) => entry.id === id)
-    if (!item) return
+    const restoreDrain = () => {
+      if (editingQueueMessageID() !== id) return
+      stopEditingQueueMessage()
+      clearFollowupEdit()
+      resumeQueueDrain(sessionID)
+    }
 
     pauseQueueDrain(sessionID)
     setEditingQueueMessageID(id)
     setFollowup("failed", sessionID, (value) => (value === id ? undefined : value))
-    setFollowup("edit", sessionID, {
-      id: item.id,
-      prompt: [{ type: "text", content: item.text, start: 0, end: item.text.length }],
-      context: [],
-    })
+
+    void sdk.client.session.queue
+      .get({ sessionID, queueID: id })
+      .then((result) => {
+        if (editingQueueMessageID() !== id) return
+        if (!result.data || typeof result.data !== "object" || !("parts" in result.data)) {
+          restoreDrain()
+          return
+        }
+        const detail = result.data as { id: string; parts: Parameters<typeof partsFromQueueDetail>[0] }
+        const parts = partsFromQueueDetail(detail.parts, sessionID)
+        setFollowup("edit", sessionID, {
+          id: detail.id,
+          prompt: extractPromptFromParts(parts, {
+            directory: sdk.directory,
+            attachmentName: language.t("common.attachment"),
+          }),
+          context: [],
+        })
+      })
+      .catch((err) => {
+        restoreDrain()
+        fail(err)
+      })
   }
 
   const clearFollowupEdit = () => {

@@ -445,7 +445,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
     input.resetQueueMode?.()
 
-    void client.session.queue.resumeDrain({ sessionID: session.id }).catch(() => {})
+    void client.session.queue?.drain?.resume?.({ sessionID: session.id }).catch(() => {})
 
     input.onSubmit?.()
 
