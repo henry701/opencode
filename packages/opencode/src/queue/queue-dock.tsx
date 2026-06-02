@@ -40,7 +40,7 @@ const IDLE_VISIBLE_ITEMS = 2
 /** Terminal rows reserved above the prompt textarea (run footer height sync). */
 export function queueDockRows(input: { count: number; editing: boolean; collapsed?: boolean }) {
   if (input.count === 0 && !input.editing) return 0
-  if (input.collapsed) return 2
+  if (input.collapsed) return 3
 
   let rows = 1
   if (input.editing) rows += 2
@@ -50,7 +50,7 @@ export function queueDockRows(input: { count: number; editing: boolean; collapse
   rows += itemRows
   if (!input.editing && input.count > IDLE_VISIBLE_ITEMS) rows += 1
   if (!input.editing && input.count > 0) rows += 1
-  if (input.editing && input.count > 0) rows += 1
+  if (input.count > 0) rows += 1
   return rows
 }
 
@@ -210,7 +210,7 @@ export function QueueDock(props: {
             </box>
           </Show>
         </Show>
-        <Show when={props.editing?.() && total() > 0}>
+        <Show when={total() > 0}>
           <box height={1} flexShrink={0} />
         </Show>
       </box>

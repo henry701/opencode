@@ -45,3 +45,8 @@ test("truncateQueueLine keeps one line with ellipsis", () => {
 test("queueDockRows caps idle list height when more than two items", () => {
   expect(queueDockRows({ count: 5, editing: false })).toBeLessThan(queueDockRows({ count: 5, editing: true }))
 })
+
+test("queueDockRows reserves bottom padding in idle mode", () => {
+  expect(queueDockRows({ count: 1, editing: false })).toBe(4)
+  expect(queueDockRows({ count: 1, editing: false, collapsed: true })).toBe(3)
+})

@@ -543,6 +543,49 @@ describe("run runtime queue", () => {
     await task
   })
 
+  test("remote queue control send now does not block on the assistant turn", async () => {
+    const ui = footer()
+    let control: import("@/cli/cmd/run/types").QueueControl | undefined
+    let finishSend!: () => void
+    const sendFinished = new Promise<void>((resolve) => {
+      finishSend = resolve
+    })
+    const sent: string[] = []
+
+    const task = runPromptQueue({
+      footer: {
+        ...ui.api,
+        setQueueControl(next) {
+          control = next
+        },
+      },
+      updateQueueRemote: async () => {},
+      sendQueueRemote: async (id) => {
+        sent.push(id)
+        await sendFinished
+      },
+      run: async () => {
+        ui.api.close()
+      },
+    })
+
+    expect(control?.update("pqu_test", { text: "edited", parts: [], queueID: "pqu_test" })).toBe(true)
+    const sendNow = control?.sendNow("pqu_test")
+    let settled = false
+    void Promise.resolve(sendNow).then(() => {
+      settled = true
+    })
+    await Promise.resolve()
+
+    expect(sent).toEqual(["pqu_test"])
+    expect(settled).toBe(true)
+
+    finishSend()
+    await sendFinished
+    ui.api.close()
+    await task
+  })
+
   test("demo mode does not enqueue prompts", async () => {
     const ui = footer()
     let status = ""
