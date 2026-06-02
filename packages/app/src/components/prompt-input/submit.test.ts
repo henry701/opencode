@@ -385,6 +385,41 @@ describe("prompt submit queue mode", () => {
     expect(promptAsyncCalls).toHaveLength(0)
   })
 
+  test("editingQueueID is forwarded on queue submit", async () => {
+    params = { id: "session-1" }
+
+    const submit = createPromptSubmit({
+      info: () => ({ id: "session-1" }),
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "normal",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      queueMode: () => true,
+      resetQueueMode: () => undefined,
+      editingQueueID: () => "pqu_edit",
+      resetEditingQueueID: () => undefined,
+      onQueue: (draft) => {
+        queuedDrafts.push(draft)
+      },
+      onSubmit: () => undefined,
+    })
+
+    const event = { preventDefault: () => undefined } as unknown as Event
+
+    await submit.handleSubmit(event)
+
+    expect(queuedDrafts).toHaveLength(1)
+    expect(queuedDrafts[0]).toMatchObject({ queueID: "pqu_edit" })
+  })
+
   test("shouldQueue routes existing sessions through onQueue", async () => {
     params = { id: "session-1" }
 

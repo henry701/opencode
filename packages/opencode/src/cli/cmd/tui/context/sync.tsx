@@ -66,7 +66,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       message: {
         [sessionID: string]: Message[]
       }
-      deferred_queue: {
+      prompt_queue: {
         [sessionID: string]: { id: string; text: string }[]
       }
       part: {
@@ -102,7 +102,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       session_diff: {},
       todo: {},
       message: {},
-      deferred_queue: {},
+      prompt_queue: {},
       part: {},
       lsp: [],
       mcp: {},
@@ -135,12 +135,12 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
     }
 
     event.subscribe((event, { workspace }) => {
-      if ((event as { type: string }).type === "session.deferred.updated") {
-        const deferred = event as unknown as {
-          type: "session.deferred.updated"
+      if ((event as { type: string }).type === "session.queue.updated") {
+        const queued = event as unknown as {
+          type: string
           properties: { sessionID: string; items: { id: string; text: string }[] }
         }
-        setStore("deferred_queue", deferred.properties.sessionID, deferred.properties.items)
+        setStore("prompt_queue", queued.properties.sessionID, queued.properties.items)
         return
       }
 

@@ -1,43 +1,15 @@
-import type { Message, Part } from "@opencode-ai/sdk/v2"
+import type { Part } from "@opencode-ai/sdk/v2"
 import type { QueuedItem } from "@/queue/preview"
-import { partsPreview } from "@/queue/preview"
 import type { PromptInfo } from "./history"
 import { strip } from "./part"
 
 export type DeferredQueueInput = {
   pending?: QueuedItem[]
-  messages: Message[]
-  parts: Record<string, Part[] | undefined>
-  pendingAssistantID?: string
 }
 
-/** Pending prompts held in memory until the active turn dequeues them. */
+/** Server-backed queue previews (from `session.queue.updated`). */
 export function listDeferredQueued(input: DeferredQueueInput) {
-  if (input.pending?.length) return input.pending
-  if (!input.pendingAssistantID) return [] as QueuedItem[]
-
-  const pending = input.messages.find((message) => message.id === input.pendingAssistantID)
-  if (!pending || pending.role !== "assistant" || !pending.parentID) return [] as QueuedItem[]
-
-  const openUserID = pending.parentID
-
-  const items: QueuedItem[] = []
-  for (const message of input.messages) {
-    if (message.role !== "user") continue
-    if (message.delivery !== "deferred") continue
-    if (message.id <= openUserID) continue
-    const answer = input.messages.findLast(
-      (entry): entry is Extract<Message, { role: "assistant" }> =>
-        entry.role === "assistant" && entry.parentID === message.id,
-    )
-    if (answer?.finish && !["tool-calls", "unknown"].includes(answer.finish)) continue
-
-    const preview = partsPreview(input.parts[message.id] ?? [])
-    if (!preview) continue
-    items.push({ id: message.id, text: preview })
-  }
-
-  return items
+  return input.pending ?? []
 }
 
 export function pendingDeferredMessageIds(input: DeferredQueueInput) {

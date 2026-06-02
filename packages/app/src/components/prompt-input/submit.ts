@@ -34,6 +34,8 @@ export type FollowupDraft = {
   agent: string
   model: { providerID: string; modelID: string }
   variant?: string
+  /** When set, save replaces this queued item instead of appending. */
+  queueID?: string
 }
 
 type FollowupSendInput = {
@@ -191,6 +193,8 @@ type PromptSubmitInput = {
   shouldQueue?: Accessor<boolean>
   queueMode?: Accessor<boolean>
   resetQueueMode?: () => void
+  editingQueueID?: Accessor<string | undefined>
+  resetEditingQueueID?: () => void
   onQueue?: (draft: FollowupDraft) => void
   onAbort?: () => void
   onSubmit?: () => void
@@ -408,6 +412,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       agent,
       model,
       variant,
+      queueID: input.editingQueueID?.(),
     }
 
     const clearInput = () => {
@@ -432,12 +437,16 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     if (!isNewSession && mode === "normal" && (input.shouldQueue?.() || queueMode)) {
       input.onQueue?.(draft)
       input.resetQueueMode?.()
+      if (draft.queueID) input.resetEditingQueueID?.()
       clearContext()
       clearInput()
       return
     }
 
     input.resetQueueMode?.()
+
+    void client.session.queue.resumeDrain({ sessionID: session.id }).catch(() => {})
+
     input.onSubmit?.()
 
     if (mode === "shell") {

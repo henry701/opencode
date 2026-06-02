@@ -24,11 +24,19 @@ export type PromptHistoryState = {
   draft: string
 }
 
-export function promptInfo(event: { name: string; ctrl?: boolean; meta?: boolean; shift?: boolean; super?: boolean }) {
+export function promptInfo(event: {
+  name: string
+  ctrl?: boolean
+  meta?: boolean
+  option?: boolean
+  shift?: boolean
+  super?: boolean
+}) {
   return {
     name: event.name === " " ? "space" : event.name,
     ctrl: !!event.ctrl,
-    meta: !!event.meta,
+    // Terminals report Alt as meta or option depending on platform/backend.
+    meta: !!(event.meta || event.option),
     shift: !!event.shift,
     super: !!event.super,
     leader: false,

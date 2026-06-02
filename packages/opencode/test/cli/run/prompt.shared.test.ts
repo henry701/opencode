@@ -152,6 +152,14 @@ describe("run prompt shared", () => {
     expect(keys.bindings.every((binding) => binding.action === "submit" || binding.action === "newline")).toBe(true)
   })
 
+  test("treats option as meta for queue edit bindings", () => {
+    const keys = promptKeys(keybinds)
+
+    expect(promptHit(keys.editQueues, promptInfo({ name: "up", meta: true }))).toBe(true)
+    expect(promptHit(keys.editQueues, promptInfo({ name: "up", option: true }))).toBe(true)
+    expect(promptHit(keys.editQueueNext, promptInfo({ name: "down", option: true }))).toBe(true)
+  })
+
   test("handles direct and leader-based variant cycling", () => {
     const keys = promptKeys(keybinds)
 

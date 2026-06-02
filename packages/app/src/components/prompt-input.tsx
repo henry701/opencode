@@ -86,7 +86,10 @@ interface PromptInputProps {
   newSessionWorktree?: string
   onNewSessionWorktreeReset?: () => void
   edit?: { id: string; prompt: Prompt; context: FollowupDraft["context"] }
+  editingQueueID?: string
+  onEditingQueueMessageID?: (id: string | undefined) => void
   onEditLoaded?: () => void
+  onCancelQueueEdit?: () => void
   shouldQueue?: () => boolean
   onQueue?: (draft: FollowupDraft) => void
   onAbort?: () => void
@@ -269,9 +272,15 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     prompt.current().filter((part): part is ImageAttachmentPart => part.type === "image"),
   )
   // Per-message queue override toggled by the composer button or Alt+Enter. It
-  // makes the next submit go to the followup queue (delivery="deferred") even
+  // makes the next submit go to the server prompt queue even
   // when the followup setting is not "queue", and resets after each submit.
   const [queueMode, setQueueMode] = createSignal(false)
+  const [localEditingQueueID, setLocalEditingQueueID] = createSignal<string | undefined>()
+  const editingQueueID = () => props.editingQueueID ?? localEditingQueueID()
+  const setEditingQueueID = (id: string | undefined) => {
+    props.onEditingQueueMessageID?.(id)
+    if (props.onEditingQueueMessageID === undefined) setLocalEditingQueueID(id)
+  }
 
   const [store, setStore] = createStore<{
     popover: "at" | "slash" | null
@@ -1054,6 +1063,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         const edit = props.edit
         if (!id || !edit) return
 
+        setEditingQueueID(edit.id)
+
         for (const item of prompt.context.items()) {
           prompt.context.remove(item.key)
         }
@@ -1157,6 +1168,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     shouldQueue: props.shouldQueue,
     queueMode,
     resetQueueMode: () => setQueueMode(false),
+    editingQueueID: () => editingQueueID(),
+    resetEditingQueueID: () => setEditingQueueID(undefined),
     onQueue: props.onQueue,
     onAbort: props.onAbort,
     onSubmit: props.onSubmit,
@@ -1201,6 +1214,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     if (event.key === "Escape") {
       if (store.popover) {
         closePopover()
+        event.preventDefault()
+        event.stopPropagation()
+        return
+      }
+
+      if (editingQueueID()) {
+        props.onCancelQueueEdit?.()
         event.preventDefault()
         event.stopPropagation()
         return

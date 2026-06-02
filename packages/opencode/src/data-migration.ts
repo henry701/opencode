@@ -3,7 +3,9 @@ import { Database } from "./storage/db"
 import { DataMigrationTable } from "./data-migration.sql"
 import * as Log from "@opencode-ai/core/util/log"
 import { and, asc, eq, gt, inArray, sql } from "drizzle-orm"
-import { MessageTable, SessionTable } from "./session/session.sql"
+import { queueDataFromMessage, PromptQueue } from "./queue/prompt-queue"
+import { MessageV2 } from "./session/message-v2"
+import { MessageTable, PartTable, SessionTable } from "./session/session.sql"
 import type { SessionID } from "./session/schema"
 
 export type Migration<R = never> = {
@@ -116,6 +118,103 @@ export const layer = Layer.effect(
             cursor = next
             yield* Effect.sleep("10 millis")
           }
+        }),
+      },
+      {
+        name: "deferred_user_messages_to_prompt_queue",
+        run: Effect.gen(function* () {
+          const rows = yield* Effect.sync(() =>
+            Database.use((db) =>
+              db
+                .select()
+                .from(MessageTable)
+                .where(
+                  and(
+                    sql`json_extract(${MessageTable.data}, '$.role') = 'user'`,
+                    sql`json_extract(${MessageTable.data}, '$.delivery') = 'deferred'`,
+                  ),
+                )
+                .all(),
+            ),
+          )
+          if (rows.length === 0) return
+
+          const touched = new Set<SessionID>()
+
+          for (const row of rows) {
+            const sessionID = row.session_id
+            const messageID = row.id
+            const info = {
+              ...row.data,
+              id: messageID,
+              sessionID,
+            } as MessageV2.Info
+            if (info.role !== "user" || info.delivery !== "deferred") continue
+
+            const partRows = Database.use((db) =>
+              db.select().from(PartTable).where(eq(PartTable.message_id, messageID)).all(),
+            )
+            const parts = partRows.map(
+              (partRow) =>
+                ({
+                  ...partRow.data,
+                  id: partRow.id,
+                  sessionID: partRow.session_id,
+                  messageID: partRow.message_id,
+                }) as MessageV2.Part,
+            )
+            const message = { info, parts } as MessageV2.WithParts
+
+            const assistant = Database.use((db) =>
+              db
+                .select()
+                .from(MessageTable)
+                .where(
+                  and(
+                    eq(MessageTable.session_id, sessionID),
+                    sql`json_extract(${MessageTable.data}, '$.role') = 'assistant'`,
+                    sql`json_extract(${MessageTable.data}, '$.parentID') = ${messageID}`,
+                  ),
+                )
+                .get(),
+            )
+            const finish =
+              assistant && typeof assistant.data === "object" && assistant.data !== null
+                ? (assistant.data as { finish?: string }).finish
+                : undefined
+            const processed = !!finish && !["tool-calls", "unknown"].includes(finish)
+
+            if (!processed) {
+              const data = queueDataFromMessage(message)
+              yield* PromptQueue.sqliteEnqueue(sessionID, data)
+
+              yield* Effect.sync(() =>
+                Database.transaction((db) => {
+                  db.delete(PartTable).where(eq(PartTable.message_id, messageID)).run()
+                  db.delete(MessageTable).where(eq(MessageTable.id, messageID)).run()
+                }),
+              )
+              touched.add(sessionID)
+              continue
+            }
+
+            const migrated = { ...(row.data as Record<string, unknown>), delivery: "immediate" }
+            yield* Effect.sync(() =>
+              Database.use((db) =>
+                db
+                  .update(MessageTable)
+                  .set({
+                    data: migrated as typeof row.data,
+                    time_updated: sql`${MessageTable.time_updated}`,
+                  })
+                  .where(eq(MessageTable.id, messageID))
+                  .run(),
+              ),
+            )
+          }
+
+          if (touched.size === 0) return
+          log.info("migrated deferred user messages to prompt queue", { sessions: touched.size })
         }),
       },
     ]

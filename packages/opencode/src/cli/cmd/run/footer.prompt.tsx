@@ -82,6 +82,8 @@ type PromptInput = {
   onEditQueue?: () => void
   onEditQueueNext?: () => void
   onCancelQueueEdit?: () => boolean
+  queueEscapeGuard?: Accessor<boolean>
+  clearQueueEscapeGuard?: () => void
   onUpdateQueued?: (id: string, prompt: RunPrompt) => void
   onSendQueuedNow?: (id: string) => void
   onCycle: () => void
@@ -111,6 +113,7 @@ export type PromptState = {
   replaceDraft: (text: string) => void
   restorePrompt: (prompt: RunPrompt) => void
   currentPrompt: () => RunPrompt
+  focus: () => void
   bind: (area?: TextareaRenderable) => void
 }
 
@@ -925,6 +928,11 @@ export function createPromptState(input: PromptInput): PromptState {
 
   const onKeyDown = (event: KeyEvent) => {
     const key = promptInfo(event)
+    if (input.queueEscapeGuard?.()) {
+      event.preventDefault()
+      input.clearQueueEscapeGuard?.()
+      return
+    }
     if (visible()) {
       const name = event.name.toLowerCase()
       const ctrl = event.ctrl && !event.meta && !event.shift
@@ -977,6 +985,20 @@ export function createPromptState(input: PromptInput): PromptState {
         select()
         return
       }
+    }
+
+    if (
+      !shell() &&
+      input.editingQueueID?.() &&
+      key.name === "return" &&
+      !event.shift &&
+      !event.ctrl &&
+      !event.meta &&
+      !event.super
+    ) {
+      event.preventDefault()
+      onSubmit()
+      return
     }
 
     if (!shell() && input.editingQueueID?.() && promptHit(keys().editQueueCancel, key)) {
@@ -1192,7 +1214,7 @@ export function createPromptState(input: PromptInput): PromptState {
       return
     }
     const queued = clonePrompt(draft)
-    queued.delivery = "deferred"
+    queued.queued = true
     if (input.editingQueueID?.()) {
       const id = input.editingQueueID()
       if (id) input.onUpdateQueued?.(id, queued)
@@ -1264,6 +1286,14 @@ export function createPromptState(input: PromptInput): PromptState {
     })
   })
 
+  const focus = () => {
+    if (!area || area.isDestroyed) {
+      return
+    }
+
+    area.focus()
+  }
+
   return {
     placeholder,
     bindings,
@@ -1285,6 +1315,7 @@ export function createPromptState(input: PromptInput): PromptState {
     replaceDraft,
     restorePrompt: restore,
     currentPrompt,
+    focus,
     bind,
   }
 }

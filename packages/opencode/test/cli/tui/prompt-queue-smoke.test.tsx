@@ -1,7 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
 import { afterEach, expect, test } from "bun:test"
-import type { Message } from "@opencode-ai/sdk/v2"
 import { testRender, useRenderer } from "@opentui/solid"
 import type { JSX as SolidJSX } from "solid-js"
 import { onCleanup } from "solid-js"
@@ -67,24 +66,12 @@ test("queue dock lists deferred messages in fifo order with screencap artifact",
   const capDir = path.join(tmp.path, "queue-smoke")
   await mkdir(capDir, { recursive: true })
 
-  const messages = [
-    { id: "u1", role: "user", time: { created: 1 } },
-    { id: "a1", role: "assistant", parentID: "u1", time: { created: 2 } },
-    { id: "u2", role: "user", delivery: "deferred", time: { created: 3 } },
-    { id: "u3", role: "user", delivery: "deferred", time: { created: 4 } },
-    { id: "u4", role: "user", delivery: "deferred", time: { created: 5 } },
-  ] as Message[]
-
-  const parts = {
-    u2: [{ id: "p1", sessionID: "s", messageID: "u2", type: "text" as const, text: "first queued" }],
-    u3: [{ id: "p2", sessionID: "s", messageID: "u3", type: "text" as const, text: "second queued" }],
-    u4: [{ id: "p3", sessionID: "s", messageID: "u4", type: "text" as const, text: "third queued" }],
-  }
-
   const items = listDeferredQueued({
-    messages,
-    parts,
-    pendingAssistantID: "a1",
+    pending: [
+      { id: "pqu_1", text: "first queued" },
+      { id: "pqu_2", text: "second queued" },
+      { id: "pqu_3", text: "third queued" },
+    ],
   })
 
   expect(items.map((item) => item.text)).toEqual(["first queued", "second queued", "third queued"])

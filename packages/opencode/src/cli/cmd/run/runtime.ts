@@ -13,6 +13,8 @@
 //      local sessions,
 //   4. runs the prompt queue until the footer closes.
 import { createOpencodeClient } from "@opencode-ai/sdk/v2"
+import { MemoryPromptQueue } from "@/queue/prompt-queue"
+import { SessionID } from "@/session/schema"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { createRunDemo } from "./demo"
 import { resolveDiffStyle, resolveFooterKeybinds, resolveModelInfo, resolveSessionInfo } from "./runtime.boot"
@@ -525,10 +527,80 @@ async function runInteractiveRuntime(input: RunRuntimeInput): Promise<void> {
 
         const mod = await import("./runtime.queue")
         const createSession = input.createSession
+        const memoryQueue = new MemoryPromptQueue()
         await mod.runPromptQueue({
           footer,
           initialInput: input.initialInput,
           trace: log,
+          demo: !!state.demo,
+          sessionID: state.sessionID ? SessionID.make(state.sessionID) : undefined,
+          agent: state.agent,
+          model: state.model,
+          memoryQueue,
+          enqueueRemote: state.demo
+            ? undefined
+            : async (prompt) => {
+                await ensureStream()
+                if (!state.sessionID) return
+                await ctx.sdk.session.queue.enqueue({
+                  sessionID: state.sessionID,
+                  agent: state.agent,
+                  model: state.model,
+                  parts: [{ type: "text", text: prompt.text }, ...prompt.parts],
+                })
+              },
+          updateQueueRemote: state.demo
+            ? undefined
+            : async (queueID, prompt) => {
+                await ensureStream()
+                if (!state.sessionID) return
+                await ctx.sdk.session.queue.update({
+                  sessionID: state.sessionID,
+                  queueID,
+                  body: {
+                    agent: state.agent,
+                    model: state.model,
+                    parts: [{ type: "text", text: prompt.text }, ...prompt.parts],
+                  },
+                })
+              },
+          sendQueueRemote: state.demo
+            ? undefined
+            : async (queueID, prompt) => {
+                await ensureStream()
+                if (!state.sessionID) return
+                await ctx.sdk.session.queue.send({
+                  sessionID: state.sessionID,
+                  queueID,
+                  body: prompt
+                    ? {
+                        info: {
+                          id: queueID,
+                          role: "user",
+                          sessionID: state.sessionID,
+                          time: { created: Date.now() },
+                          agent: state.agent ?? "build",
+                          model: state.model ?? { providerID: "openai", modelID: "gpt-4" },
+                        },
+                        parts: [{ type: "text", text: prompt.text }, ...prompt.parts],
+                      }
+                    : undefined,
+                })
+              },
+          pauseQueueDrainRemote: state.demo
+            ? undefined
+            : async () => {
+                await ensureStream()
+                if (!state.sessionID) return
+                await ctx.sdk.session.queue.pauseDrain({ sessionID: state.sessionID })
+              },
+          resumeQueueDrainRemote: state.demo
+            ? undefined
+            : async () => {
+                await ensureStream()
+                if (!state.sessionID) return
+                await ctx.sdk.session.queue.resumeDrain({ sessionID: state.sessionID })
+              },
           onSend: (prompt) => {
             state.shown = true
             state.history.push(prompt)

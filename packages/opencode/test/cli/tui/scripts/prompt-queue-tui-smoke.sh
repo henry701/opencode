@@ -39,14 +39,13 @@ session_id() {
   api POST /session -d '{"title":"prompt-queue-tui-smoke"}' | jq -er '.id'
 }
 
-queue_deferred() {
+queue_prompt() {
   local sid=$1
   local text=$2
-  api POST "/session/${sid}/message" -d "$(
+  api POST "/session/${sid}/queue" -d "$(
     jq -nc --arg t "$text" '{
       agent: "build",
       model: { providerID: "test", modelID: "test-model" },
-      delivery: "deferred",
       parts: [{ type: "text", text: $t }]
     }'
   )" >/dev/null
@@ -87,9 +86,9 @@ main() {
     sleep 0.15
   fi
 
-  queue_deferred "$sid" "queue-one"
-  queue_deferred "$sid" "queue-two"
-  queue_deferred "$sid" "queue-three"
+  queue_prompt "$sid" "queue-one"
+  queue_prompt "$sid" "queue-two"
+  queue_prompt "$sid" "queue-three"
   printf 'queued\n' >"${ARTIFACT_DIR}/queued.txt"
 
   attach_capture "$sid"

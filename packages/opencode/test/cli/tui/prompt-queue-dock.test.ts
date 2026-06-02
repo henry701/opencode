@@ -1,86 +1,33 @@
 import { expect, test } from "bun:test"
-import type { Message } from "@opencode-ai/sdk/v2"
 import { listDeferredQueued, pendingDeferredMessageIds } from "../../../src/cli/cmd/tui/component/prompt/queue"
-import { runPromptPreview } from "../../../src/queue/preview"
+import { runPromptPreview, truncateQueueLine } from "../../../src/queue/preview"
+import { queueDockRows } from "../../../src/queue/queue-dock"
 import type { RunPrompt } from "../../../src/cli/cmd/run/types"
 
-test("listDeferredQueued prefers in-memory pending queue", () => {
+test("listDeferredQueued returns server queue previews", () => {
   const items = listDeferredQueued({
     pending: [
-      { id: "u2", text: "queued one" },
-      { id: "u3", text: "queued two" },
+      { id: "pqu_1", text: "queued one" },
+      { id: "pqu_2", text: "queued two" },
     ],
-    messages: [],
-    parts: {},
-    pendingAssistantID: "a1",
   })
 
   expect(items).toEqual([
-    { id: "u2", text: "queued one" },
-    { id: "u3", text: "queued two" },
+    { id: "pqu_1", text: "queued one" },
+    { id: "pqu_2", text: "queued two" },
   ])
 })
 
-test("listDeferredQueued shows in-memory pending without a pending assistant", () => {
-  const items = listDeferredQueued({
-    pending: [{ id: "u2", text: "queued one" }],
-    messages: [],
-    parts: {},
-  })
-
-  expect(items).toEqual([{ id: "u2", text: "queued one" }])
-})
-
-test("listDeferredQueued returns pending deferred user messages", () => {
-  const items = listDeferredQueued({
-    messages: [
-      { id: "u1", role: "user", time: { created: 1 } },
-      { id: "a1", role: "assistant", parentID: "u1", time: { created: 2 } },
-      { id: "u2", role: "user", delivery: "deferred", time: { created: 3 } },
-      { id: "u3", role: "user", delivery: "deferred", time: { created: 4 } },
-      { id: "a2", role: "assistant", parentID: "u3", finish: "stop", time: { created: 5 } },
-    ] as Message[],
-    parts: {
-      u2: [{ id: "p1", sessionID: "s", messageID: "u2", type: "text" as const, text: "queued one" }],
-      u3: [{ id: "p2", sessionID: "s", messageID: "u3", type: "text" as const, text: "queued two" }],
-    },
-    pendingAssistantID: "a1",
-  })
-
-  expect(items).toEqual([{ id: "u2", text: "queued one" }])
-})
-
-test("listDeferredQueued keeps deferred visible when a newer assistant is in flight", () => {
-  const items = listDeferredQueued({
-    messages: [
-      { id: "u1", role: "user", time: { created: 1 } },
-      { id: "a1", role: "assistant", parentID: "u1", time: { created: 2 } },
-      { id: "u2", role: "user", delivery: "deferred", time: { created: 3 } },
-      { id: "a2", role: "assistant", parentID: "u1", time: { created: 4 } },
-    ] as Message[],
-    parts: {
-      u2: [{ id: "p1", sessionID: "s", messageID: "u2", type: "text" as const, text: "still queued" }],
-    },
-    pendingAssistantID: "a2",
-  })
-
-  expect(items).toEqual([{ id: "u2", text: "still queued" }])
+test("listDeferredQueued is empty without pending previews", () => {
+  expect(listDeferredQueued({})).toEqual([])
 })
 
 test("pendingDeferredMessageIds matches listDeferredQueued ids", () => {
   const input = {
-    messages: [
-      { id: "u1", role: "user", time: { created: 1 } },
-      { id: "a1", role: "assistant", parentID: "u1", time: { created: 2 } },
-      { id: "u2", role: "user", delivery: "deferred", time: { created: 3 } },
-    ] as Message[],
-    parts: {
-      u2: [{ id: "p1", sessionID: "s", messageID: "u2", type: "text" as const, text: "queued one" }],
-    },
-    pendingAssistantID: "a1",
+    pending: [{ id: "pqu_1", text: "queued one" }],
   }
 
-  expect(pendingDeferredMessageIds(input)).toEqual(new Set(["u2"]))
+  expect(pendingDeferredMessageIds(input)).toEqual(new Set(["pqu_1"]))
 })
 
 test("runPromptPreview uses the first non-empty line", () => {
@@ -89,4 +36,12 @@ test("runPromptPreview uses the first non-empty line", () => {
     parts: [],
   } satisfies RunPrompt)
   expect(preview).toBe("line one")
+})
+
+test("truncateQueueLine keeps one line with ellipsis", () => {
+  expect(truncateQueueLine("alphabet soup", 8)).toBe("alphabe…")
+})
+
+test("queueDockRows caps idle list height when more than two items", () => {
+  expect(queueDockRows({ count: 5, editing: false })).toBeLessThan(queueDockRows({ count: 5, editing: true }))
 })

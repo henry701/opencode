@@ -143,7 +143,9 @@ function sid(event: Event): string | undefined {
     event.type === "question.replied" ||
     event.type === "question.rejected" ||
     event.type === "session.error" ||
-    event.type === "session.status"
+    event.type === "session.status" ||
+    event.type === "session.queue.updated" ||
+    event.type === "session.deferred.updated"
   ) {
     return event.properties.sessionID
   }
@@ -433,7 +435,8 @@ function createLayer(input: StreamInput) {
         })
 
         const state: State = {
-          data: createSessionData(),
+          // Server-backed queue drains create user messages on the server; show them from events.
+          data: createSessionData({ includeUserText: true }),
           subagent: createSubagentData(),
           tick: 0,
           footerView: { type: "prompt" },
@@ -892,6 +895,17 @@ function createLayer(input: StreamInput) {
 
           syncFooter(next.commits, next.footer?.patch, changed ? currentSubagentState() : undefined)
 
+          if (
+            (event.type === "session.queue.updated" || event.type === "session.deferred.updated") &&
+            event.properties.sessionID === input.sessionID
+          ) {
+            input.footer.event({
+              type: "queue",
+              queue: event.properties.items.length,
+              queued: event.properties.items,
+            })
+          }
+
           touch(event)
           yield* mark(event)
         })
@@ -991,7 +1005,73 @@ function createLayer(input: StreamInput) {
           }
 
           if (state.wait) {
-            yield* Effect.fail(new Error("prompt already running"))
+            const delivery = next.delivery ?? "immediate"
+            if (delivery === "deferred") {
+              yield* Effect.fail(new Error("prompt already running"))
+              return
+            }
+
+            if (next.prompt.mode === "shell" || next.prompt.command) {
+              yield* Effect.fail(new Error("prompt already running"))
+              return
+            }
+
+            const steer = new AbortController()
+            const stop = () => {
+              steer.abort()
+            }
+            next.signal?.addEventListener("abort", stop, { once: true })
+            abort.signal.addEventListener("abort", stop, { once: true })
+
+            const req = {
+              sessionID: input.sessionID,
+              agent: next.agent,
+              model: next.model,
+              variant: next.variant,
+              delivery: "immediate" as const,
+              parts: [
+                ...(next.includeFiles ? next.files : []),
+                { type: "text" as const, text: next.prompt.text },
+                ...next.prompt.parts,
+              ],
+            }
+
+            yield* Effect.sync(() => {
+              input.trace?.write("send.prompt.steer", req)
+            }).pipe(
+              Effect.andThen(
+                Effect.promise(() =>
+                  input.sdk.session.promptAsync(req, {
+                    signal: steer.signal,
+                  }),
+                ),
+              ),
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  input.trace?.write("send.prompt.steer.ok", {
+                    sessionID: input.sessionID,
+                  })
+                }),
+              ),
+              Effect.catch((error) => {
+                const canceled = steer.signal.aborted || next.signal?.aborted === true || input.footer.isClosed || closed
+                if (canceled) {
+                  return Effect.void
+                }
+
+                input.trace?.write("send.prompt.steer.error", {
+                  sessionID: input.sessionID,
+                  error: formatUnknownError(error),
+                })
+                return Effect.fail(error)
+              }),
+              Effect.ensuring(
+                Effect.sync(() => {
+                  next.signal?.removeEventListener("abort", stop)
+                  abort.signal.removeEventListener("abort", stop)
+                }),
+              ),
+            )
             return
           }
 

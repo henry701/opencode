@@ -8,12 +8,14 @@ import { Session } from "@/session/session"
 import { SessionCompaction } from "@/session/compaction"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionPrompt } from "@/session/prompt"
+import { SessionPromptQueue } from "@/session/prompt-queue"
+import { PromptQueue } from "@/queue/prompt-queue"
 import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
-import { MessageID, PartID, SessionID } from "@/session/schema"
+import { MessageID, PartID, QueueItemID, SessionID } from "@/session/schema"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { Cause, Effect, Option, Schema, Scope } from "effect"
 import * as Stream from "effect/Stream"
@@ -49,6 +51,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const session = yield* Session.Service
     const shareSvc = yield* SessionShare.Service
     const promptSvc = yield* SessionPrompt.Service
+    const promptQueueSvc = yield* SessionPromptQueue.Service
     const revertSvc = yield* SessionRevert.Service
     const compactSvc = yield* SessionCompaction.Service
     const runState = yield* SessionRunState.Service
@@ -410,7 +413,11 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     }) {
       yield* requireSession(ctx.params.sessionID)
       const message = ctx.payload as MessageV2.WithParts
-      const ok = yield* promptSvc.updateDeferredQueue(ctx.params.sessionID, ctx.params.messageID, message)
+      const ok = yield* promptSvc.updateDeferredQueue(
+        ctx.params.sessionID,
+        QueueItemID.make(ctx.params.messageID),
+        message,
+      )
       if (!ok) return yield* Effect.fail(ApiError.notFound("Queued message not found"))
       return true
     })
@@ -422,8 +429,77 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       yield* requireSession(ctx.params.sessionID)
       const message = ctx.payload as MessageV2.WithParts | undefined
       return yield* promptSvc
-        .sendDeferredNow(ctx.params.sessionID, ctx.params.messageID, message)
+        .sendDeferredNow(ctx.params.sessionID, QueueItemID.make(ctx.params.messageID), message)
         .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+    })
+
+    const listQueue = Effect.fn("SessionHttpApi.listQueue")(function* (ctx: { params: { sessionID: SessionID } }) {
+      yield* requireSession(ctx.params.sessionID)
+      return yield* promptQueueSvc.listPreview(ctx.params.sessionID)
+    })
+
+    const enqueueQueue = Effect.fn("SessionHttpApi.enqueueQueue")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof PromptPayload.Type
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      const item = yield* promptSvc
+        .queueEnqueue({ ...ctx.payload, sessionID: ctx.params.sessionID })
+        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+      return PromptQueue.queueItemPreview(item)
+    })
+
+    const updateQueue = Effect.fn("SessionHttpApi.updateQueue")(function* (ctx: {
+      params: { sessionID: SessionID; queueID: QueueItemID }
+      payload: unknown
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      const payload = ctx.payload as typeof PromptPayload.Type
+      const ok = yield* promptSvc
+        .queueUpdate({ ...payload, sessionID: ctx.params.sessionID, queueID: ctx.params.queueID })
+        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+      if (!ok) return yield* Effect.fail(ApiError.notFound("Queued message not found"))
+      return true
+    })
+
+    const removeQueue = Effect.fn("SessionHttpApi.removeQueue")(function* (ctx: {
+      params: { sessionID: SessionID; queueID: QueueItemID }
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      const ok = yield* promptQueueSvc.remove(ctx.params.sessionID, ctx.params.queueID)
+      if (!ok) return yield* Effect.fail(ApiError.notFound("Queued message not found"))
+      return true
+    })
+
+    const sendQueue = Effect.fn("SessionHttpApi.sendQueue")(function* (ctx: {
+      params: { sessionID: SessionID; queueID: QueueItemID }
+      payload: unknown
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      const payload = ctx.payload as typeof PromptPayload.Type | undefined
+      return yield* promptSvc
+        .queueSend({
+          sessionID: ctx.params.sessionID,
+          queueID: ctx.params.queueID,
+          prompt: payload ? { ...payload, sessionID: ctx.params.sessionID } : undefined,
+        })
+        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+    })
+
+    const pauseQueueDrain = Effect.fn("SessionHttpApi.pauseQueueDrain")(function* (ctx: {
+      params: { sessionID: SessionID }
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      yield* promptQueueSvc.pauseDrain(ctx.params.sessionID)
+      return true
+    })
+
+    const resumeQueueDrain = Effect.fn("SessionHttpApi.resumeQueueDrain")(function* (ctx: {
+      params: { sessionID: SessionID }
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      yield* promptQueueSvc.resumeDrain(ctx.params.sessionID)
+      return true
     })
 
     return handlers
@@ -456,5 +532,12 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("updatePart", updatePart)
       .handle("updateDeferred", updateDeferred)
       .handle("sendDeferred", sendDeferred)
+      .handle("listQueue", listQueue)
+      .handle("enqueueQueue", enqueueQueue)
+      .handle("updateQueue", updateQueue)
+      .handle("removeQueue", removeQueue)
+      .handle("sendQueue", sendQueue)
+      .handle("pauseQueueDrain", pauseQueueDrain)
+      .handle("resumeQueueDrain", resumeQueueDrain)
   }),
 )

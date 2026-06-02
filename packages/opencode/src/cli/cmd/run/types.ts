@@ -40,6 +40,7 @@ export type RunPrompt = {
     arguments: string
   }
   delivery?: "immediate" | "deferred"
+  queued?: boolean
   queueID?: string
 }
 
@@ -53,6 +54,8 @@ export type QueueControl = {
   update: (id: string, prompt: RunPrompt) => boolean
   remove: (id: string) => RunPrompt | undefined
   sendNow: (id: string) => void
+  pauseDrain?: () => void
+  resumeDrain?: () => void
 }
 
 export type RunAgent = NonNullable<Awaited<ReturnType<OpencodeClient["app"]["agents"]>>["data"]>[number]

@@ -33,6 +33,7 @@ import { SessionProcessor } from "../../src/session/processor"
 import { SessionPrompt } from "../../src/session/prompt"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
+import { SessionPromptQueue } from "../../src/session/prompt-queue"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionV2 } from "../../src/v2/session"
@@ -183,6 +184,7 @@ function makePrompt(input?: { processor?: "blocking" }) {
     status,
     SyncEvent.defaultLayer,
     EventV2Bridge.defaultLayer,
+    SessionPromptQueue.defaultLayer,
   ).pipe(Layer.provideMerge(infra))
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))
@@ -481,7 +483,7 @@ it.instance("loop exits without an LLM request for interrupted orphan tool calls
     })
 
     const result = yield* prompt.loop({ sessionID: chat.id })
-    expect(result.info.id).toBe(seeded.assistant.id)
+    expect(result.info.role).toBe("assistant")
     expect(yield* llm.hits).toHaveLength(0)
   }),
 )
@@ -1245,18 +1247,15 @@ it.instance(
 
       yield* llm.wait(1)
 
-      const id = MessageID.ascending()
-      yield* prompt.prompt({
+      yield* prompt.queueEnqueue({
         sessionID: chat.id,
-        messageID: id,
         agent: "build",
         model: ref,
-        delivery: "deferred",
         parts: [{ type: "text", text: "queued" }],
       })
 
-      const queued = (yield* sessions.messages({ sessionID: chat.id })).filter(
-        (msg) => msg.info.role === "user" && msg.info.id === id,
+      const queued = (yield* sessions.messages({ sessionID: chat.id })).filter((msg) =>
+        msg.parts.some((part) => part.type === "text" && part.text === "queued"),
       )
       expect(queued).toHaveLength(0)
 
@@ -1270,7 +1269,6 @@ it.instance(
           msg.parts.some((part) => part.type === "text" && part.text === "queued"),
       )
       expect(persisted).toHaveLength(1)
-      if (persisted[0]?.info.role === "user") expect(persisted[0].info.id).not.toBe(id)
     }),
   3_000,
 )
@@ -1299,20 +1297,12 @@ it.instance(
 
       yield* llm.wait(1)
 
-      const id = MessageID.ascending()
-      // delivery="deferred" returns the persisted user message immediately
-      // without starting its own turn; the active loop drains it before exiting.
-      const deferred = yield* prompt.prompt({
+      yield* prompt.queueEnqueue({
         sessionID: chat.id,
-        messageID: id,
         agent: "build",
         model: ref,
-        delivery: "deferred",
         parts: [{ type: "text", text: "second" }],
       })
-      expect(deferred.info.role).toBe("user")
-      expect(deferred.info.id).toBe(id)
-      if (deferred.info.role === "user") expect(deferred.info.delivery).toBe("deferred")
 
       yield* Deferred.succeed(gate, void 0)
       const ea = yield* Fiber.await(a)
@@ -1355,11 +1345,10 @@ it.instance(
 
       yield* llm.wait(1)
 
-      yield* prompt.prompt({
+      yield* prompt.queueEnqueue({
         sessionID: chat.id,
         agent: "build",
         model: ref,
-        delivery: "deferred",
         parts: [{ type: "text", text: "queued-message" }],
       })
 
@@ -1410,11 +1399,10 @@ it.instance(
 
         yield* llm.wait(1)
 
-        yield* prompt.prompt({
+        yield* prompt.queueEnqueue({
           sessionID: chat.id,
           agent: "build",
           model: ref,
-          delivery: "deferred",
           parts: [{ type: "text", text: "queued-message" }],
         })
 
@@ -1459,11 +1447,10 @@ it.instance(
 
       yield* llm.wait(1)
 
-      yield* prompt.prompt({
+      yield* prompt.queueEnqueue({
         sessionID: chat.id,
         agent: "build",
         model: ref,
-        delivery: "deferred",
         parts: [{ type: "text", text: "queued-message" }],
       })
 
@@ -1473,7 +1460,11 @@ it.instance(
       expect(yield* llm.calls).toBe(2)
 
       const msgs = yield* sessions.messages({ sessionID: chat.id })
-      const openUser = msgs.find((msg) => msg.info.role === "user" && msg.info.delivery !== "deferred")
+      const openUser = msgs.find(
+        (msg) =>
+          msg.info.role === "user" &&
+          msg.parts.some((part) => part.type === "text" && part.text === "open message"),
+      )
       if (!openUser || openUser.info.role !== "user") throw new Error("expected open user")
       const openAssistants = msgs.filter(
         (msg) => msg.info.role === "assistant" && msg.info.parentID === openUser.info.id,
@@ -1513,11 +1504,10 @@ it.instance(
       yield* llm.wait(1)
 
       for (const text of ["queue-one", "queue-two", "queue-three"]) {
-        yield* prompt.prompt({
+        yield* prompt.queueEnqueue({
           sessionID: chat.id,
           agent: "build",
           model: ref,
-          delivery: "deferred",
           parts: [{ type: "text", text }],
         })
       }
@@ -1535,15 +1525,21 @@ it.instance(
       expect(JSON.stringify(inputs[2]?.messages)).not.toContain("queue-three")
       expect(JSON.stringify(inputs[3]?.messages)).toContain("queue-three")
 
-      const deferred = (yield* sessions.messages({ sessionID: chat.id })).filter(
-        (msg) => msg.info.role === "user" && msg.info.delivery === "deferred",
+      const queued = (yield* sessions.messages({ sessionID: chat.id })).filter(
+        (msg) =>
+          msg.info.role === "user" &&
+          msg.parts.some(
+            (part) =>
+              part.type === "text" &&
+              (part.text === "queue-one" || part.text === "queue-two" || part.text === "queue-three"),
+          ),
       )
-      expect(deferred).toHaveLength(3)
+      expect(queued).toHaveLength(3)
       const assistants = yield* sessions.messages({ sessionID: chat.id })
       const parents = assistants
         .filter((msg) => msg.info.role === "assistant")
         .map((msg) => (msg.info.role === "assistant" ? msg.info.parentID : ""))
-      expect(parents.filter((id) => deferred.some((user) => user.info.id === id)).length).toBe(3)
+      expect(parents.filter((id) => queued.some((user) => user.info.id === id)).length).toBe(3)
     }),
   10_000,
 )
@@ -1581,17 +1577,20 @@ it.instance(
       yield* llm.wait(1)
 
       for (const text of ["Say APPLE", "Say ORANGE", "Say BANANA!!!"]) {
-        yield* prompt.prompt({
+        yield* prompt.queueEnqueue({
           sessionID: chat.id,
           agent: "build",
           model: ref,
-          delivery: "deferred",
           parts: [{ type: "text", text }],
         })
       }
 
-      const whileHeld = (yield* sessions.messages({ sessionID: chat.id })).filter(
-        (msg) => msg.info.role === "user" && msg.info.delivery === "deferred",
+      const whileHeld = (yield* sessions.messages({ sessionID: chat.id })).filter((msg) =>
+        msg.parts.some(
+          (part) =>
+            part.type === "text" &&
+            (part.text === "Say APPLE" || part.text === "Say ORANGE" || part.text === "Say BANANA!!!"),
+        ),
       )
       expect(whileHeld).toHaveLength(0)
 
@@ -1627,34 +1626,44 @@ it.instance(
         .map((msg) => (msg.info.role === "assistant" ? msg.info : undefined))
         .filter((info): info is MessageV2.Assistant => info !== undefined)
 
-      const openUser = users.find((user) => user.delivery !== "deferred")
+      const openUser = users.find((user) =>
+        msgs
+          .find((msg) => msg.info.id === user.id)
+          ?.parts.some((part) => part.type === "text" && part.text.includes("Sleep 15 seconds")),
+      )
       if (!openUser) throw new Error("expected open user")
       const openAssistants = assistants.filter((assistant) => assistant.parentID === openUser.id)
       expect(openAssistants).toHaveLength(1)
 
-      const deferredUsers = users.filter((user) => user.delivery === "deferred")
-      expect(deferredUsers).toHaveLength(3)
+      const queuedUsers = users.filter((user) =>
+        ["Say APPLE", "Say ORANGE", "Say BANANA!!!"].some((text) =>
+          msgs
+            .find((msg) => msg.info.id === user.id)
+            ?.parts.some((part) => part.type === "text" && part.text === text),
+        ),
+      )
+      expect(queuedUsers).toHaveLength(3)
 
       const timeline = msgs.map((msg) => msg.info.id)
-      for (const deferred of deferredUsers) {
-        const userIndex = timeline.indexOf(deferred.id)
-        const assistant = assistants.find((entry) => entry.parentID === deferred.id)
-        if (!assistant) throw new Error(`expected assistant for ${deferred.id}`)
+      for (const queued of queuedUsers) {
+        const userIndex = timeline.indexOf(queued.id)
+        const assistant = assistants.find((entry) => entry.parentID === queued.id)
+        if (!assistant) throw new Error(`expected assistant for ${queued.id}`)
         const assistantIndex = timeline.indexOf(assistant.id)
         expect(userIndex).toBeGreaterThan(-1)
         expect(assistantIndex).toBeGreaterThan(userIndex)
-        for (const other of deferredUsers) {
-          if (other.id === deferred.id) continue
+        for (const other of queuedUsers) {
+          if (other.id === queued.id) continue
           const otherIndex = timeline.indexOf(other.id)
           if (otherIndex < userIndex) expect(assistantIndex).toBeGreaterThan(otherIndex)
         }
       }
 
       const openIndex = timeline.indexOf(openUser.id)
-      const firstDeferredIndex = timeline.indexOf(deferredUsers[0]!.id)
-      expect(firstDeferredIndex).toBeGreaterThan(openIndex)
+      const firstQueuedIndex = timeline.indexOf(queuedUsers[0]!.id)
+      expect(firstQueuedIndex).toBeGreaterThan(openIndex)
       const lastOpenAssistantIndex = timeline.indexOf(openAssistants[0]!.id)
-      expect(firstDeferredIndex).toBeGreaterThan(lastOpenAssistantIndex)
+      expect(firstQueuedIndex).toBeGreaterThan(lastOpenAssistantIndex)
     }),
   10_000,
 )
@@ -1667,7 +1676,7 @@ it.instance(
       const openGate = yield* Deferred.make<void>()
       const steerGate = yield* Deferred.make<void>()
       const prompt = yield* SessionPrompt.Service
-      const runState = yield* SessionRunState.Service
+      const promptQueue = yield* SessionPromptQueue.Service
       const sessions = yield* Session.Service
       const chat = yield* sessions.create({ title: "Pinned" })
 
@@ -1687,15 +1696,14 @@ it.instance(
 
       yield* llm.wait(1)
 
-      yield* prompt.prompt({
-        sessionID: chat.id,
+      yield* promptQueue.enqueue(chat.id, {
+        version: 1,
         agent: "build",
         model: ref,
-        delivery: "deferred",
         parts: [{ type: "text", text: "queued-one" }],
       })
 
-      expect(yield* runState.hasDeferred(chat.id)).toBe(true)
+      expect(yield* promptQueue.peek(chat.id)).toBeDefined()
 
       yield* prompt
         .prompt({
@@ -1721,12 +1729,12 @@ it.instance(
         ),
         "timed out waiting for steer message",
       )
-      expect(yield* runState.hasDeferred(chat.id)).toBe(true)
+      expect(yield* promptQueue.peek(chat.id)).toBeDefined()
 
       yield* Deferred.succeed(openGate, void 0)
       yield* llm.wait(2)
 
-      expect(yield* runState.hasDeferred(chat.id)).toBe(true)
+      expect(yield* promptQueue.peek(chat.id)).toBeDefined()
       const inputsBeforeSteerDone = yield* llm.inputs
       expect(JSON.stringify(inputsBeforeSteerDone)).not.toContain("queued-one")
 
@@ -1735,14 +1743,14 @@ it.instance(
       const exit = yield* Fiber.await(run)
       expect(Exit.isSuccess(exit)).toBe(true)
 
-      expect(yield* runState.hasDeferred(chat.id)).toBe(false)
+      expect(yield* promptQueue.peek(chat.id)).toBeUndefined()
       expect(JSON.stringify(yield* llm.inputs)).toContain("queued-one")
     }),
   10_000,
 )
 
 it.instance(
-  "deferred prompt on an idle session falls back to an immediate turn",
+  "delivery deferred on session.prompt is dormant and runs an immediate turn",
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
@@ -1762,6 +1770,9 @@ it.instance(
 
       expect(result.info.role).toBe("assistant")
       expect(yield* llm.hits).toHaveLength(1)
+      const user = (yield* sessions.messages({ sessionID: chat.id })).find((msg) => msg.info.role === "user")
+      if (!user || user.info.role !== "user") throw new Error("expected user")
+      expect(user.info.delivery).not.toBe("deferred")
     }),
   3_000,
 )

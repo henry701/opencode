@@ -16,21 +16,23 @@ export type Event =
   | EventFileWatcherUpdated
   | EventLspClientDiagnostics
   | EventLspUpdated
-  | EventMcpToolsChanged
-  | EventMcpBrowserOpenFailed
+  | EventMessagePartDelta
   | EventPermissionAsked
   | EventPermissionReplied
-  | EventCommandExecuted
-  | EventProjectUpdated
-  | EventMessagePartDelta
   | EventSessionDiff
   | EventSessionError
+  | EventSessionQueueUpdated
+  | EventSessionDeferredUpdated
   | EventQuestionAsked
   | EventQuestionReplied
   | EventQuestionRejected
   | EventTodoUpdated
   | EventSessionStatus
   | EventSessionIdle
+  | EventMcpToolsChanged
+  | EventMcpBrowserOpenFailed
+  | EventCommandExecuted
+  | EventProjectUpdated
   | EventSessionCompacted
   | EventVcsBranchUpdated
   | EventWorkspaceReady
@@ -188,30 +190,6 @@ export type PermissionRequest = {
     messageID: string
     callID: string
   }
-}
-
-export type Project = {
-  id: string
-  worktree: string
-  vcs?: "git"
-  name?: string
-  icon?: {
-    url?: string
-    override?: string
-    color?: string
-  }
-  commands?: {
-    /**
-     * Startup script to run when creating a new workspace (worktree)
-     */
-    start?: string
-  }
-  time: {
-    created: number
-    updated: number
-    initialized?: number
-  }
-  sandboxes: Array<string>
 }
 
 export type SnapshotFileDiff = {
@@ -377,6 +355,30 @@ export type SessionStatus =
       type: "busy"
     }
 
+export type Project = {
+  id: string
+  worktree: string
+  vcs?: "git"
+  name?: string
+  icon?: {
+    url?: string
+    override?: string
+    color?: string
+  }
+  commands?: {
+    /**
+     * Startup script to run when creating a new workspace (worktree)
+     */
+    start?: string
+  }
+  time: {
+    created: number
+    updated: number
+    initialized?: number
+  }
+  sandboxes: Array<string>
+}
+
 export type Pty = {
   id: string
   title: string
@@ -426,7 +428,7 @@ export type UserMessage = {
   tools?: {
     [key: string]: boolean
   }
-  delivery?: SessionDelivery
+  delivery?: "immediate" | "deferred"
 }
 
 export type AssistantMessage = {
@@ -821,21 +823,23 @@ export type GlobalEvent = {
     | EventFileWatcherUpdated
     | EventLspClientDiagnostics
     | EventLspUpdated
-    | EventMcpToolsChanged
-    | EventMcpBrowserOpenFailed
+    | EventMessagePartDelta
     | EventPermissionAsked
     | EventPermissionReplied
-    | EventCommandExecuted
-    | EventProjectUpdated
-    | EventMessagePartDelta
     | EventSessionDiff
     | EventSessionError
+    | EventSessionQueueUpdated
+    | EventSessionDeferredUpdated
     | EventQuestionAsked
     | EventQuestionReplied
     | EventQuestionRejected
     | EventTodoUpdated
     | EventSessionStatus
     | EventSessionIdle
+    | EventMcpToolsChanged
+    | EventMcpBrowserOpenFailed
+    | EventCommandExecuted
+    | EventProjectUpdated
     | EventSessionCompacted
     | EventVcsBranchUpdated
     | EventWorkspaceReady
@@ -2574,20 +2578,15 @@ export type EventLspUpdated = {
   }
 }
 
-export type EventMcpToolsChanged = {
+export type EventMessagePartDelta = {
   id: string
-  type: "mcp.tools.changed"
+  type: "message.part.delta"
   properties: {
-    server: string
-  }
-}
-
-export type EventMcpBrowserOpenFailed = {
-  id: string
-  type: "mcp.browser.open.failed"
-  properties: {
-    mcpName: string
-    url: string
+    sessionID: string
+    messageID: string
+    partID: string
+    field: string
+    delta: string
   }
 }
 
@@ -2604,35 +2603,6 @@ export type EventPermissionReplied = {
     sessionID: string
     requestID: string
     reply: "once" | "always" | "reject"
-  }
-}
-
-export type EventCommandExecuted = {
-  id: string
-  type: "command.executed"
-  properties: {
-    name: string
-    sessionID: string
-    arguments: string
-    messageID: string
-  }
-}
-
-export type EventProjectUpdated = {
-  id: string
-  type: "project.updated"
-  properties: Project
-}
-
-export type EventMessagePartDelta = {
-  id: string
-  type: "message.part.delta"
-  properties: {
-    sessionID: string
-    messageID: string
-    partID: string
-    field: string
-    delta: string
   }
 }
 
@@ -2658,6 +2628,30 @@ export type EventSessionError = {
       | StructuredOutputError
       | ContextOverflowError
       | ApiError
+  }
+}
+
+export type EventSessionQueueUpdated = {
+  id: string
+  type: "session.queue.updated"
+  properties: {
+    sessionID: string
+    items: Array<{
+      id: string
+      text: string
+    }>
+  }
+}
+
+export type EventSessionDeferredUpdated = {
+  id: string
+  type: "session.deferred.updated"
+  properties: {
+    sessionID: string
+    items: Array<{
+      id: string
+      text: string
+    }>
   }
 }
 
@@ -2703,6 +2697,40 @@ export type EventSessionIdle = {
   properties: {
     sessionID: string
   }
+}
+
+export type EventMcpToolsChanged = {
+  id: string
+  type: "mcp.tools.changed"
+  properties: {
+    server: string
+  }
+}
+
+export type EventMcpBrowserOpenFailed = {
+  id: string
+  type: "mcp.browser.open.failed"
+  properties: {
+    mcpName: string
+    url: string
+  }
+}
+
+export type EventCommandExecuted = {
+  id: string
+  type: "command.executed"
+  properties: {
+    name: string
+    sessionID: string
+    arguments: string
+    messageID: string
+  }
+}
+
+export type EventProjectUpdated = {
+  id: string
+  type: "project.updated"
+  properties: Project
 }
 
 export type EventSessionCompacted = {
@@ -2811,8 +2839,6 @@ export type EventInstallationUpdateAvailable = {
     version: string
   }
 }
-
-export type SessionDelivery = "immediate" | "deferred"
 
 export type EventMessageUpdated = {
   id: string
@@ -3439,6 +3465,8 @@ export type ConfigV2ExperimentalPolicy = {
   effect: PolicyEffect
   resource: string
 }
+
+export type SessionDelivery = "immediate" | "deferred"
 
 export type SessionInfo = {
   id: string
@@ -7088,6 +7116,275 @@ export type PartUpdateResponses = {
 }
 
 export type PartUpdateResponse = PartUpdateResponses[keyof PartUpdateResponses]
+
+export type SessionDeferredUpdateData = {
+  body?: unknown
+  path: {
+    sessionID: string
+    messageID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/deferred/{messageID}"
+}
+
+export type SessionDeferredUpdateErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionDeferredUpdateError = SessionDeferredUpdateErrors[keyof SessionDeferredUpdateErrors]
+
+export type SessionDeferredUpdateResponses = {
+  /**
+   * Successfully updated queued prompt
+   */
+  200: boolean
+}
+
+export type SessionDeferredUpdateResponse = SessionDeferredUpdateResponses[keyof SessionDeferredUpdateResponses]
+
+export type SessionDeferredSendData = {
+  body?: unknown
+  path: {
+    sessionID: string
+    messageID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/deferred/{messageID}/send"
+}
+
+export type SessionDeferredSendErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * SessionBusyError
+   */
+  409: SessionBusyError
+}
+
+export type SessionDeferredSendError = SessionDeferredSendErrors[keyof SessionDeferredSendErrors]
+
+export type SessionDeferredSendResponses = {
+  /**
+   * Assistant response after sending queued prompt now
+   */
+  200: unknown
+}
+
+export type SessionQueueListData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/queue"
+}
+
+export type SessionQueueListErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionQueueListError = SessionQueueListErrors[keyof SessionQueueListErrors]
+
+export type SessionQueueListResponses = {
+  /**
+   * Queued prompt previews
+   */
+  200: Array<{
+    id: string
+    text: string
+  }>
+}
+
+export type SessionQueueListResponse = SessionQueueListResponses[keyof SessionQueueListResponses]
+
+export type SessionQueueEnqueueData = {
+  body?: {
+    messageID?: string
+    model?: {
+      providerID: string
+      modelID: string
+    }
+    agent?: string
+    noReply?: boolean
+    delivery?: SessionDelivery
+    tools?: {
+      [key: string]: boolean
+    }
+    format?: OutputFormat
+    system?: string
+    variant?: string
+    parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/queue"
+}
+
+export type SessionQueueEnqueueErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionQueueEnqueueError = SessionQueueEnqueueErrors[keyof SessionQueueEnqueueErrors]
+
+export type SessionQueueEnqueueResponses = {
+  /**
+   * Queued prompt
+   */
+  200: {
+    id: string
+    text: string
+  }
+}
+
+export type SessionQueueEnqueueResponse = SessionQueueEnqueueResponses[keyof SessionQueueEnqueueResponses]
+
+export type SessionQueueRemoveData = {
+  body?: never
+  path: {
+    sessionID: string
+    queueID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/queue/{queueID}"
+}
+
+export type SessionQueueRemoveErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionQueueRemoveError = SessionQueueRemoveErrors[keyof SessionQueueRemoveErrors]
+
+export type SessionQueueRemoveResponses = {
+  /**
+   * Successfully removed queued prompt
+   */
+  200: boolean
+}
+
+export type SessionQueueRemoveResponse = SessionQueueRemoveResponses[keyof SessionQueueRemoveResponses]
+
+export type SessionQueueUpdateData = {
+  body?: unknown
+  path: {
+    sessionID: string
+    queueID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/queue/{queueID}"
+}
+
+export type SessionQueueUpdateErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionQueueUpdateError = SessionQueueUpdateErrors[keyof SessionQueueUpdateErrors]
+
+export type SessionQueueUpdateResponses = {
+  /**
+   * Successfully updated queued prompt
+   */
+  200: boolean
+}
+
+export type SessionQueueUpdateResponse = SessionQueueUpdateResponses[keyof SessionQueueUpdateResponses]
+
+export type SessionQueueSendData = {
+  body?: unknown
+  path: {
+    sessionID: string
+    queueID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/queue/{queueID}/send"
+}
+
+export type SessionQueueSendErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * SessionBusyError
+   */
+  409: SessionBusyError
+}
+
+export type SessionQueueSendError = SessionQueueSendErrors[keyof SessionQueueSendErrors]
+
+export type SessionQueueSendResponses = {
+  /**
+   * Assistant response after sending queued prompt now
+   */
+  200: unknown
+}
 
 export type SyncStartData = {
   body?: never

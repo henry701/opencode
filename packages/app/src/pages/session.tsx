@@ -10,6 +10,7 @@ import {
   createMemo,
   createEffect,
   createComputed,
+  createSignal,
   on,
   onMount,
   untrack,
@@ -42,7 +43,8 @@ import { useSDK } from "@/context/sdk"
 import { useSettings } from "@/context/settings"
 import { useSync } from "@/context/sync"
 import { useTerminal } from "@/context/terminal"
-import { type FollowupDraft, sendFollowupDraft } from "@/components/prompt-input/submit"
+import { buildRequestParts } from "@/components/prompt-input/build-request-parts"
+import { type FollowupDraft } from "@/components/prompt-input/submit"
 import { createSessionComposerState, SessionComposerRegion } from "@/pages/session/composer"
 import {
   createOpenReviewFile,
@@ -69,9 +71,9 @@ import { formatServerError } from "@/utils/server-errors"
 import { useUsageExceededDialogs } from "./session/usage-exceeded-dialogs"
 
 const emptyUserMessages: UserMessage[] = []
-type FollowupItem = FollowupDraft & { id: string }
-type FollowupEdit = Pick<FollowupItem, "id" | "prompt" | "context">
-const emptyFollowups: FollowupItem[] = []
+type QueuePreview = { id: string; text: string }
+type FollowupEdit = Pick<FollowupDraft, "prompt" | "context"> & { id: string }
+const emptyQueue: QueuePreview[] = []
 
 type ChangeMode = "git" | "branch" | "turn"
 type VcsMode = "git" | "branch"
@@ -386,19 +388,38 @@ export default function Page() {
   })
 
   const [followup, setFollowup] = persisted(
-    Persist.workspace(sdk.directory, "followup", ["followup.v1"]),
+    Persist.workspace(sdk.directory, "followup", ["followup.v2"]),
     createStore<{
-      items: Record<string, FollowupItem[] | undefined>
       failed: Record<string, string | undefined>
       paused: Record<string, boolean | undefined>
       edit: Record<string, FollowupEdit | undefined>
     }>({
-      items: {},
       failed: {},
       paused: {},
       edit: {},
     }),
   )
+
+  const [editingQueueMessageID, setEditingQueueMessageID] = createSignal<string | undefined>()
+
+  const stopEditingQueueMessage = () => setEditingQueueMessageID(undefined)
+
+  const pauseQueueDrain = (sessionID: string) => {
+    void sdk.client.session.queue.pauseDrain({ sessionID }).catch(() => {})
+  }
+
+  const resumeQueueDrain = (sessionID: string) => {
+    void sdk.client.session.queue.resumeDrain({ sessionID }).catch(() => {})
+  }
+
+  const cancelQueueEdit = () => {
+    const sessionID = params.id
+    if (!sessionID) return
+    stopEditingQueueMessage()
+    clearFollowupEdit()
+    prompt.reset()
+    resumeQueueDrain(sessionID)
+  }
 
   createComputed((prev) => {
     const key = sessionKey()
@@ -1365,8 +1386,19 @@ export default function Page() {
 
   const queuedFollowups = createMemo(() => {
     const id = params.id
-    if (!id) return emptyFollowups
-    return followup.items[id] ?? emptyFollowups
+    if (!id) return emptyQueue
+    return sync.data.prompt_queue[id] ?? emptyQueue
+  })
+
+  createEffect(() => {
+    const sessionID = params.id
+    if (!sessionID || isChildSession()) return
+    void sdk.client.session.queue
+      .list({ sessionID })
+      .then((result) => {
+        if (result.data) sync.set("prompt_queue", sessionID, result.data)
+      })
+      .catch(() => {})
   })
 
   const editingFollowup = createMemo(() => {
@@ -1377,27 +1409,22 @@ export default function Page() {
 
   const followupMutation = useMutation(() => ({
     mutationFn: async (input: { sessionID: string; id: string; manual?: boolean }) => {
-      const item = (followup.items[input.sessionID] ?? []).find((entry) => entry.id === input.id)
+      const item = queuedFollowups().find((entry) => entry.id === input.id)
       if (!item) return
 
       if (input.manual) setFollowup("paused", input.sessionID, undefined)
       setFollowup("failed", input.sessionID, undefined)
 
-      const ok = await sendFollowupDraft({
-        client: sdk.client,
-        sync,
-        serverSync,
-        draft: item,
-        delivery: "deferred",
-        optimisticBusy: item.sessionDirectory === sdk.directory,
-      }).catch((err) => {
-        setFollowup("failed", input.sessionID, input.id)
-        fail(err)
-        return false
-      })
-      if (!ok) return
+      await sdk.client.session.queue
+        .send({ sessionID: input.sessionID, queueID: input.id })
+        .catch((err) => {
+          setFollowup("failed", input.sessionID, input.id)
+          fail(err)
+          throw err
+        })
 
-      setFollowup("items", input.sessionID, (items) => (items ?? []).filter((entry) => entry.id !== input.id))
+      resumeQueueDrain(input.sessionID)
+
       if (input.manual) resumeScroll()
     },
   }))
@@ -1418,38 +1445,55 @@ export default function Page() {
     return settings.general.followup() === "queue" && busy(id) && !composer.blocked() && !isChildSession()
   })
 
-  const followupText = (item: FollowupDraft) => {
-    const text = item.prompt
-      .map((part) => {
-        if (part.type === "image") return `[image:${part.filename}]`
-        if (part.type === "file") return `[file:${part.path}]`
-        if (part.type === "agent") return `@${part.name}`
-        return part.content
-      })
-      .join("")
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find((line) => !!line)
-
-    if (text) return text
-    return `[${language.t("common.attachment")}]`
-  }
+  const followupDock = createMemo(() => queuedFollowups())
 
   const queueFollowup = (draft: FollowupDraft) => {
-    setFollowup("items", draft.sessionID, (items) => [
-      ...(items ?? []),
-      { id: Identifier.ascending("message"), ...draft },
-    ])
-    setFollowup("failed", draft.sessionID, undefined)
-    setFollowup("paused", draft.sessionID, undefined)
-  }
+    const text = draft.prompt.map((part) => ("content" in part ? part.content : "")).join("")
+    const images = draft.prompt.filter((part) => part.type === "image")
+    const { requestParts } = buildRequestParts({
+      prompt: draft.prompt,
+      context: draft.context,
+      images,
+      text,
+      sessionID: draft.sessionID,
+      messageID: Identifier.ascending("message"),
+      sessionDirectory: draft.sessionDirectory,
+    })
 
-  const followupDock = createMemo(() => queuedFollowups().map((item) => ({ id: item.id, text: followupText(item) })))
+    const save = draft.queueID
+      ? sdk.client.session.queue.update({
+          sessionID: draft.sessionID,
+          queueID: draft.queueID,
+          body: {
+            agent: draft.agent,
+            model: draft.model,
+            variant: draft.variant,
+            parts: requestParts,
+          },
+        })
+      : sdk.client.session.queue.enqueue({
+          sessionID: draft.sessionID,
+          agent: draft.agent,
+          model: draft.model,
+          variant: draft.variant,
+          parts: requestParts,
+        })
+
+    void save
+      .then(() => {
+        setFollowup("failed", draft.sessionID, undefined)
+        setFollowup("paused", draft.sessionID, undefined)
+        if (draft.queueID) {
+          clearFollowupEdit()
+          stopEditingQueueMessage()
+        }
+      })
+      .catch(fail)
+  }
 
   const sendFollowup = (sessionID: string, id: string, opts?: { manual?: boolean }) => {
     if (sync.session.get(sessionID)?.parentID) return Promise.resolve()
-    const item = (followup.items[sessionID] ?? []).find((entry) => entry.id === id)
-    if (!item) return Promise.resolve()
+    if (!queuedFollowups().find((entry) => entry.id === id)) return Promise.resolve()
     if (followupBusy(sessionID)) return Promise.resolve()
 
     return followupMutation.mutateAsync({ sessionID, id, manual: opts?.manual })
@@ -1463,12 +1507,13 @@ export default function Page() {
     const item = queuedFollowups().find((entry) => entry.id === id)
     if (!item) return
 
-    setFollowup("items", sessionID, (items) => (items ?? []).filter((entry) => entry.id !== id))
+    pauseQueueDrain(sessionID)
+    setEditingQueueMessageID(id)
     setFollowup("failed", sessionID, (value) => (value === id ? undefined : value))
     setFollowup("edit", sessionID, {
       id: item.id,
-      prompt: item.prompt,
-      context: item.context,
+      prompt: [{ type: "text", content: item.text, start: 0, end: item.text.length }],
+      context: [],
     })
   }
 
@@ -1569,22 +1614,6 @@ export default function Page() {
 
   const actions = { revert }
 
-  createEffect(() => {
-    const sessionID = params.id
-    if (!sessionID) return
-
-    const item = queuedFollowups()[0]
-    if (!item) return
-    if (followupBusy(sessionID)) return
-    if (followup.failed[sessionID] === item.id) return
-    if (followup.paused[sessionID]) return
-    if (isChildSession()) return
-    if (composer.blocked()) return
-    if (busy(sessionID)) return
-
-    void sendFollowup(sessionID, item.id)
-  })
-
   createResizeObserver(
     () => promptDock,
     ({ height }) => {
@@ -1676,8 +1705,10 @@ export default function Page() {
               queue: queueEnabled,
               items: followupDock(),
               sending: sendingFollowup(),
+              editingMessageID: editingQueueMessageID(),
               edit: editingFollowup(),
               onQueue: queueFollowup,
+              onEditingQueueMessageID: setEditingQueueMessageID,
               onAbort: () => {
                 const id = params.id
                 if (!id) return
@@ -1688,6 +1719,7 @@ export default function Page() {
               },
               onEdit: editFollowup,
               onEditLoaded: clearFollowupEdit,
+              onCancelQueueEdit: cancelQueueEdit,
             }
           : undefined
       }

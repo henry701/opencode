@@ -31,7 +31,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { Snapshot } from "@/snapshot"
 import { ProjectID } from "../project/schema"
 import { WorkspaceID } from "../control-plane/schema"
-import { SessionID, MessageID, PartID } from "./schema"
+import { SessionID, MessageID, PartID, QueueItemID } from "./schema"
 import { ModelID, ProviderID } from "@/provider/schema"
 
 import type { Provider } from "@/provider/provider"
@@ -366,13 +366,25 @@ export const Event = {
       error: MessageV2.Assistant.fields.error,
     }),
   ),
+  QueueUpdated: BusEvent.define(
+    "session.queue.updated",
+    Schema.Struct({
+      sessionID: SessionID,
+      items: Schema.Array(
+        Schema.Struct({
+          id: QueueItemID,
+          text: Schema.String,
+        }),
+      ),
+    }),
+  ),
   DeferredUpdated: BusEvent.define(
     "session.deferred.updated",
     Schema.Struct({
       sessionID: SessionID,
       items: Schema.Array(
         Schema.Struct({
-          id: MessageID,
+          id: QueueItemID,
           text: Schema.String,
         }),
       ),

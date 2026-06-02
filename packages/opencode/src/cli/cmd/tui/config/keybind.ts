@@ -160,7 +160,7 @@ export const Definitions = {
   input_queue: keybind("ctrl+shift+return", "Queue prompt for next turn in main TUI and run --interactive (keybinds.input_queue)"),
   input_edit_queue: keybind("alt+up", "Edit the oldest queued prompt (Codex-style; keybinds.input_edit_queue)"),
   input_queue_edit_next: keybind("alt+down", "Switch to the next queued prompt while editing (keybinds.input_queue_edit_next)"),
-  input_queue_edit_cancel: keybind("escape", "Cancel editing a queued prompt (keybinds.input_queue_edit_cancel)"),
+  input_queue_edit_cancel: keybind("escape", "Go back from editing a queued prompt (keybinds.input_queue_edit_cancel)"),
   input_move_left: keybind("left,ctrl+b", "Move cursor left in input"),
   input_move_right: keybind("right,ctrl+f", "Move cursor right in input"),
   input_move_up: keybind("up", "Move cursor up in input"),

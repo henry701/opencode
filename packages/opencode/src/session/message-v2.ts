@@ -1179,6 +1179,10 @@ export function immediateTurnUnsettled(msgs: WithParts[]) {
 }
 
 /** True while the latest assistant for this user still needs a follow-up step (e.g. after tool results). */
+function orphanedInterruptedTool(part: ToolPart) {
+  return part.state.status === "error" && part.state.metadata?.interrupted === true
+}
+
 export function assistantNeedsToolFollowup(
   msgs: WithParts[],
   user: User,
@@ -1190,7 +1194,8 @@ export function assistantNeedsToolFollowup(
 
   const tools =
     assistantMsg?.parts.filter(
-      (part): part is ToolPart => part.type === "tool" && !part.metadata?.providerExecuted,
+      (part): part is ToolPart =>
+        part.type === "tool" && !part.metadata?.providerExecuted && !orphanedInterruptedTool(part),
     ) ?? []
   if (tools.length === 0) return false
 

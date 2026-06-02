@@ -15,6 +15,14 @@ export function firstQueuedLine(text: string) {
   return ""
 }
 
+/** Single-line preview for compact queue rows (ellipsis when truncated). */
+export function truncateQueueLine(text: string, maxLength = 72) {
+  const line = firstQueuedLine(text)
+  if (line.length <= maxLength) return line
+  if (maxLength <= 1) return "…"
+  return `${line.slice(0, maxLength - 1)}…`
+}
+
 export function partsPreview(parts: Part[]) {
   const text = parts
     .filter((part): part is Extract<Part, { type: "text" }> => part.type === "text" && !part.synthetic)

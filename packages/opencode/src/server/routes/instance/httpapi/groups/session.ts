@@ -8,7 +8,8 @@ import { SessionRevert } from "@/session/revert"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
-import { MessageID, PartID, SessionID } from "@/session/schema"
+import { QueueItemID, MessageID, PartID, SessionID } from "@/session/schema"
+import { PromptQueue } from "@/queue/prompt-queue"
 import { Snapshot } from "@/snapshot"
 import { Schema, Struct } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
@@ -100,7 +101,23 @@ export const SessionPaths = {
   updatePart: `${root}/:sessionID/message/:messageID/part/:partID`,
   updateDeferred: `${root}/:sessionID/deferred/:messageID`,
   sendDeferred: `${root}/:sessionID/deferred/:messageID/send`,
+  listQueue: `${root}/:sessionID/queue`,
+  enqueueQueue: `${root}/:sessionID/queue`,
+  updateQueue: `${root}/:sessionID/queue/:queueID`,
+  removeQueue: `${root}/:sessionID/queue/:queueID`,
+  sendQueue: `${root}/:sessionID/queue/:queueID/send`,
+  pauseQueueDrain: `${root}/:sessionID/queue/drain-pause`,
+  resumeQueueDrain: `${root}/:sessionID/queue/drain-resume`,
 } as const
+
+export const QueueItemPreview = Schema.Struct({
+  id: QueueItemID,
+  text: Schema.String,
+})
+export const QueueEnqueueSuccess = Schema.Struct({
+  id: QueueItemID,
+  text: Schema.String,
+})
 
 export const SessionApi = HttpApi.make("session")
   .add(
@@ -462,6 +479,87 @@ export const SessionApi = HttpApi.make("session")
           OpenApi.annotations({
             identifier: "session.deferred.send",
             description: "Persist and run a queued prompt immediately.",
+          }),
+        ),
+        HttpApiEndpoint.get("listQueue", SessionPaths.listQueue, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: described(Schema.Array(QueueItemPreview), "Queued prompt previews"),
+          error: [ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.queue.list",
+            description: "List prompts waiting in the session queue.",
+          }),
+        ),
+        HttpApiEndpoint.post("enqueueQueue", SessionPaths.enqueueQueue, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: PromptPayload,
+          success: described(QueueEnqueueSuccess, "Queued prompt"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.queue.enqueue",
+            description: "Enqueue a prompt for the session (FIFO). Does not appear in the transcript until dequeued.",
+          }),
+        ),
+        HttpApiEndpoint.patch("updateQueue", SessionPaths.updateQueue, {
+          params: { sessionID: SessionID, queueID: QueueItemID },
+          query: WorkspaceRoutingQuery,
+          payload: Schema.Unknown,
+          success: described(Schema.Boolean, "Successfully updated queued prompt"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.queue.update",
+            description: "Update a prompt waiting in the session queue.",
+          }),
+        ),
+        HttpApiEndpoint.delete("removeQueue", SessionPaths.removeQueue, {
+          params: { sessionID: SessionID, queueID: QueueItemID },
+          query: WorkspaceRoutingQuery,
+          success: described(Schema.Boolean, "Successfully removed queued prompt"),
+          error: [ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.queue.remove",
+            description: "Remove a prompt from the session queue.",
+          }),
+        ),
+        HttpApiEndpoint.post("sendQueue", SessionPaths.sendQueue, {
+          params: { sessionID: SessionID, queueID: QueueItemID },
+          query: WorkspaceRoutingQuery,
+          payload: Schema.Unknown,
+          success: described(Schema.Unknown, "Assistant response after sending queued prompt now"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionBusyError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.queue.send",
+            description: "Persist and run a queued prompt immediately.",
+          }),
+        ),
+        HttpApiEndpoint.post("pauseQueueDrain", SessionPaths.pauseQueueDrain, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: described(Schema.Boolean, "Queue auto-drain paused"),
+          error: [ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.queue.drain.pause",
+            description:
+              "Pause automatic FIFO dequeue while editing queued prompts. Explicit send-now and normal submits still run.",
+          }),
+        ),
+        HttpApiEndpoint.post("resumeQueueDrain", SessionPaths.resumeQueueDrain, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: described(Schema.Boolean, "Queue auto-drain resumed"),
+          error: [ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.queue.drain.resume",
+            description: "Resume automatic FIFO dequeue after queue edit is cancelled or abandoned.",
           }),
         ),
       )

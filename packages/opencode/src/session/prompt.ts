@@ -1,6 +1,6 @@
 import path from "path"
 import os from "os"
-import { SessionID, MessageID, PartID } from "./schema"
+import { SessionID, MessageID, PartID, QueueItemID } from "./schema"
 import { MessageV2 } from "./message-v2"
 import * as Log from "@opencode-ai/core/util/log"
 import { SessionRevert } from "./revert"
@@ -46,6 +46,8 @@ import * as EffectLogger from "@opencode-ai/core/effect/logger"
 import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
+import { SessionPromptQueue } from "./prompt-queue"
+import { materializeQueuedItem, queueDataFromMessage, type QueueItem, PromptQueue } from "@/queue/prompt-queue"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { SessionEvent } from "@opencode-ai/core/session-event"
@@ -97,14 +99,20 @@ export interface Interface {
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
   readonly updateDeferredQueue: (
     sessionID: SessionID,
-    messageID: MessageID,
+    queueID: QueueItemID,
     message: MessageV2.WithParts,
   ) => Effect.Effect<boolean>
   readonly sendDeferredNow: (
     sessionID: SessionID,
-    messageID: MessageID,
+    queueID: QueueItemID,
     message?: MessageV2.WithParts,
   ) => Effect.Effect<MessageV2.WithParts>
+  readonly queueEnqueue: (input: PromptInput) => Effect.Effect<QueueItem, Image.Error>
+  readonly queueUpdate: (input: PromptInput & { queueID: QueueItemID }) => Effect.Effect<boolean, Image.Error>
+  readonly queueSend: (input: { sessionID: SessionID; queueID: QueueItemID; prompt?: PromptInput }) => Effect.Effect<
+    MessageV2.WithParts,
+    Image.Error
+  >
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionPrompt") {}
@@ -133,6 +141,7 @@ export const layer = Layer.effect(
     const scope = yield* Scope.Scope
     const instruction = yield* Instruction.Service
     const state = yield* SessionRunState.Service
+    const promptQueue = yield* SessionPromptQueue.Service
     const revert = yield* SessionRevert.Service
     const summary = yield* SessionSummary.Service
     const sys = yield* SystemPrompt.Service
@@ -866,7 +875,8 @@ export const layer = Layer.effect(
         },
         system: input.system,
         format: input.format,
-        delivery: input.delivery ?? SessionV2.DefaultDelivery,
+        delivery:
+          input.delivery === "deferred" ? SessionV2.DefaultDelivery : (input.delivery ?? SessionV2.DefaultDelivery),
       }
 
       if (current?.agent !== info.agent) {
@@ -1249,22 +1259,51 @@ export const layer = Layer.effect(
         yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
       }
 
-      if (
-        input.delivery === "deferred" &&
-        input.noReply !== true &&
-        (yield* state.hasRunner(input.sessionID))
-      ) {
-        const message = yield* createUserMessage(input, { persist: false })
-        yield* sessions.touch(input.sessionID)
-        yield* state.defer(input.sessionID, message)
-        return message
-      }
-
       const message = yield* createUserMessage(input)
       yield* sessions.touch(input.sessionID)
 
       if (input.noReply === true) return message
       return yield* loop({ sessionID: input.sessionID })
+    })
+
+    const queueEnqueue = Effect.fn("SessionPrompt.queueEnqueue")(function* (input: PromptInput) {
+      const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+      yield* revert.cleanup(session)
+
+      const permissions: Permission.Rule[] = []
+      for (const [t, enabled] of Object.entries(input.tools ?? {})) {
+        permissions.push({ permission: t, action: enabled ? "allow" : "deny", pattern: "*" })
+      }
+      if (permissions.length > 0) {
+        session.permission = permissions
+        yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
+      }
+
+      const message = yield* createUserMessage(input, { persist: false })
+      yield* sessions.touch(input.sessionID)
+      return yield* promptQueue.enqueue(input.sessionID, queueDataFromMessage(message))
+    })
+
+    const queueUpdate = Effect.fn("SessionPrompt.queueUpdate")(function* (input: PromptInput & { queueID: QueueItemID }) {
+      const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+      yield* revert.cleanup(session)
+      const message = yield* createUserMessage(input, { persist: false })
+      return yield* promptQueue.update(input.sessionID, input.queueID, queueDataFromMessage(message))
+    })
+
+    const queueSend = Effect.fn("SessionPrompt.queueSend")(function* (input: {
+      sessionID: SessionID
+      queueID: QueueItemID
+      prompt?: PromptInput
+    }) {
+      if (input.prompt) {
+        const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+        yield* revert.cleanup(session)
+        const message = yield* createUserMessage({ ...input.prompt, sessionID: input.sessionID }, { persist: false })
+        const ok = yield* promptQueue.update(input.sessionID, input.queueID, queueDataFromMessage(message))
+        if (!ok) return yield* Effect.die("Queued message not found")
+      }
+      return yield* sendDeferredNow(input.sessionID, input.queueID)
     })
 
     const lastAssistant = Effect.fnUntraced(function* (sessionID: SessionID) {
@@ -1289,7 +1328,8 @@ export const layer = Layer.effect(
 
           let msgs = yield* MessageV2.filterCompactedEffect(sessionID)
 
-          const pendingDeferred = yield* state.hasDeferred(sessionID)
+          const pendingQueued = !!(yield* promptQueue.peek(sessionID))
+          const queueDrainPaused = yield* promptQueue.drainPaused(sessionID)
           const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
           const openUser = MessageV2.latestActiveUser(msgs) ?? lastUser
           const deferredUsers = MessageV2.unprocessedDeferredUsers(msgs)
@@ -1331,13 +1371,14 @@ export const layer = Layer.effect(
           const pinOpenUser = needsToolFollowup || openTurnInProgress
 
           if (
+            !queueDrainPaused &&
             !MessageV2.immediateTurnUnsettled(msgs) &&
-            pendingDeferred &&
+            pendingQueued &&
             MessageV2.unprocessedDeferredUsers(msgs).length === 0
           ) {
-            const next = yield* state.popDeferred(sessionID)
+            const next = yield* promptQueue.dequeue(sessionID)
             if (next) {
-              yield* persistUserMessage(rekeyDeferredMessage(next))
+              yield* persistUserMessage(materializeQueuedItem(next))
               continue
             }
           }
@@ -1360,7 +1401,7 @@ export const layer = Layer.effect(
             lastAssistant !== undefined &&
             lastUser.id < lastAssistant.id &&
             deferredUsers.length === 0 &&
-            !(yield* state.hasDeferred(sessionID))
+            (!pendingQueued || queueDrainPaused)
 
           if (turnSettled) {
             const orphan = lastAssistantMsg?.parts.find(
@@ -1784,23 +1825,26 @@ export const layer = Layer.effect(
 
     const updateDeferredQueue = Effect.fn("SessionPrompt.updateDeferredQueue")(function* (
       sessionID: SessionID,
-      messageID: MessageID,
+      queueID: QueueItemID,
       message: MessageV2.WithParts,
     ) {
-      return yield* state.updateDeferred(sessionID, messageID, message)
+      return yield* promptQueue.update(sessionID, queueID, queueDataFromMessage(message))
     })
 
     const sendDeferredNow = Effect.fn("SessionPrompt.sendDeferredNow")(function* (
       sessionID: SessionID,
-      messageID: MessageID,
+      queueID: QueueItemID,
       message?: MessageV2.WithParts,
     ) {
-      const queued = message ?? (yield* state.takeDeferred(sessionID, messageID))
-      if (!queued || queued.info.role !== "user") {
-        return yield* Effect.die("Queued message not found")
+      if (message) {
+        const ok = yield* promptQueue.update(sessionID, queueID, queueDataFromMessage(message))
+        if (!ok) return yield* Effect.die("Queued message not found")
       }
-      queued.info.delivery = "immediate"
-      yield* persistUserMessage(queued)
+      const items = yield* promptQueue.list(sessionID)
+      const item = items.find((entry) => entry.id === queueID)
+      if (!item) return yield* Effect.die("Queued message not found")
+      yield* promptQueue.remove(sessionID, queueID)
+      yield* persistUserMessage(materializeQueuedItem(item))
       return yield* loop({ sessionID })
     })
 
@@ -1813,28 +1857,16 @@ export const layer = Layer.effect(
       resolvePromptParts,
       updateDeferredQueue,
       sendDeferredNow,
+      queueEnqueue,
+      queueUpdate,
+      queueSend,
     })
   }),
 )
 
-function rekeyDeferredMessage(message: MessageV2.WithParts) {
-  const info = message.info
-  if (info.role !== "user") return message
-  const id = MessageID.ascending()
-  const created = Date.now()
-  return {
-    info: { ...info, id, time: { ...info.time, created } },
-    parts: message.parts.map((part) => ({
-      ...part,
-      id: PartID.ascending(),
-      messageID: id,
-    })),
-  }
-}
-
 export const defaultLayer = Layer.suspend(() =>
   layer.pipe(
-    Layer.provide(SessionRunState.defaultLayer),
+    Layer.provide(Layer.mergeAll(SessionPromptQueue.defaultLayer, SessionRunState.defaultLayer)),
     Layer.provide(SessionStatus.defaultLayer),
     Layer.provide(SessionCompaction.defaultLayer),
     Layer.provide(SessionProcessor.defaultLayer),

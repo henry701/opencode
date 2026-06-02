@@ -10,7 +10,10 @@
 //
 // Resolves when the footer closes and all in-flight work finishes.
 import * as Locale from "@/util/locale"
+import { MemoryPromptQueue, PromptQueue, type PromptQueueData } from "@/queue/prompt-queue"
 import { runPromptPreview } from "@/queue/preview"
+import { ModelID, ProviderID } from "@/provider/schema"
+import type { SessionID } from "@/session/schema"
 import { isExitCommand, isNewCommand } from "./prompt.shared"
 import type { FooterApi, FooterEvent, QueueControl, QueuedPromptPreview, RunPrompt } from "./types"
 
@@ -28,9 +31,37 @@ export type QueueInput = {
   footer: FooterApi
   initialInput?: string
   trace?: Trace
+  demo?: boolean
+  sessionID?: SessionID
+  agent?: string
+  model?: { providerID: string; modelID: string; variant?: string }
+  memoryQueue?: MemoryPromptQueue
+  enqueueRemote?: (prompt: RunPrompt) => Promise<void>
+  pauseQueueDrainRemote?: () => Promise<void>
+  resumeQueueDrainRemote?: () => Promise<void>
+  updateQueueRemote?: (queueID: string, prompt: RunPrompt) => Promise<void>
+  sendQueueRemote?: (queueID: string, prompt?: RunPrompt) => Promise<void>
   onSend?: (prompt: RunPrompt) => void
   onNewSession?: () => void | Promise<void>
   run: (prompt: RunPrompt, signal: AbortSignal) => Promise<void>
+}
+
+const isQueuedPrompt = (prompt: RunPrompt) => prompt.queued === true || prompt.delivery === "deferred"
+
+function queueDataFromRunPrompt(
+  prompt: RunPrompt,
+  ctx: { agent: string; model: { providerID: string; modelID: string; variant?: string } },
+): PromptQueueData {
+  return {
+    version: 1,
+    agent: ctx.agent,
+    model: {
+      providerID: ProviderID.make(ctx.model.providerID),
+      modelID: ModelID.make(ctx.model.modelID),
+      variant: ctx.model.variant,
+    },
+    parts: [{ type: "text", text: prompt.text }, ...(prompt.parts as PromptQueueData["parts"])],
+  }
 }
 
 type State = {
@@ -86,7 +117,15 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
   }
 
   const emitQueue = () => {
-    const queued = queueSnapshot(state)
+    // Remote queue state is driven by session.queue.updated; memoryQueue is unused for display.
+    if (input.enqueueRemote) {
+      return
+    }
+
+    const queued =
+      input.memoryQueue && input.sessionID
+        ? input.memoryQueue.list(input.sessionID).map(PromptQueue.queueItemPreview)
+        : queueSnapshot(state)
     emit(
       {
         type: "queue",
@@ -100,7 +139,13 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
     )
   }
 
-  const findQueued = (id: string) => state.queue.find((prompt) => prompt.queueID === id)
+  const remoteDrafts = new Map<string, RunPrompt>()
+
+  const findQueued = (id: string) => {
+    const local = state.queue.find((prompt) => prompt.queueID === id)
+    if (local) return local
+    return remoteDrafts.get(id)
+  }
 
   const removeQueued = (id: string) => {
     const index = state.queue.findIndex((prompt) => prompt.queueID === id)
@@ -118,18 +163,86 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
     return true
   }
 
+  const updateRemote = (id: string, prompt: RunPrompt) => {
+    remoteDrafts.set(id, { ...withQueueID(prompt, state), queueID: id })
+    if (!input.updateQueueRemote) return true
+    void input.updateQueueRemote(id, prompt).catch((error) => {
+      done.reject(error)
+    })
+    return true
+  }
+
   const queueControl: QueueControl = {
     get: findQueued,
-    update: updateQueued,
+    update: (id, prompt) => {
+      if (input.updateQueueRemote) return updateRemote(id, prompt)
+      return updateQueued(id, prompt)
+    },
     remove: removeQueued,
+    pauseDrain: () => {
+      if (input.pauseQueueDrainRemote) void input.pauseQueueDrainRemote().catch(() => {})
+    },
+    resumeDrain: () => {
+      if (input.resumeQueueDrainRemote) void input.resumeQueueDrainRemote().catch(() => {})
+    },
     sendNow: (id: string) => {
+      if (input.sendQueueRemote) {
+        const prompt = findQueued(id)
+        void input.sendQueueRemote(id, prompt)
+        remoteDrafts.delete(id)
+        return
+      }
       const prompt = removeQueued(id)
       if (!prompt) return
-      submitPrompt({ ...prompt, delivery: "immediate" })
+      const next = { ...prompt, delivery: "immediate" as const }
+      if (busy()) {
+        steer(next)
+        return
+      }
+      submitPrompt(next)
     },
   }
 
   let submitPrompt = (_prompt: RunPrompt) => {}
+
+  const busy = () => state.ctrl !== undefined
+
+  const steer = (prompt: RunPrompt) => {
+    if (!prompt.text.trim() || state.closed) {
+      return
+    }
+
+    if (prompt.mode !== "shell" && isExitCommand(prompt.text)) {
+      input.footer.close()
+      return
+    }
+
+    emit(
+      {
+        type: "first",
+        first: false,
+      },
+      {
+        first: false,
+      },
+    )
+
+    if (prompt.mode !== "shell" && !input.enqueueRemote) {
+      const commit = { kind: "user", text: prompt.text, phase: "start", source: "system" } as const
+      input.trace?.write("ui.commit", commit)
+      input.footer.append(commit)
+    }
+    input.onSend?.({ ...prompt, delivery: "immediate" })
+
+    const ctrl = new AbortController()
+    void input.run({ ...prompt, delivery: "immediate" }, ctrl.signal).catch((error) => {
+      if (ctrl.signal.aborted || state.closed) {
+        return
+      }
+
+      done.reject(error)
+    })
+  }
 
   const finish = () => {
     if (!state.closed || draining) {
@@ -224,7 +337,7 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
               break
             }
 
-            if (prompt.mode !== "shell") {
+            if (prompt.mode !== "shell" && !input.enqueueRemote) {
               const commit = { kind: "user", text: prompt.text, phase: "start", source: "system" } as const
               input.trace?.write("ui.commit", commit)
               input.footer.append(commit)
@@ -293,6 +406,11 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
       return
     }
 
+    if (busy() && !isQueuedPrompt(prompt)) {
+      steer({ ...prompt, delivery: prompt.delivery ?? "immediate" })
+      return
+    }
+
     if (prompt.mode !== "shell" && isExitCommand(prompt.text)) {
       input.footer.close()
       return
@@ -328,26 +446,54 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
       return
     }
 
+    if (input.demo) {
+      emit(
+        { type: "stream.patch", patch: { status: "queue unavailable in demo" } },
+        { status: "queue unavailable in demo" },
+      )
+      return
+    }
+
     if (prompt.mode !== "shell" && isExitCommand(prompt.text)) {
       input.footer.close()
       return
     }
 
-    state.queue.push(withQueueID(prompt, state))
+    if (input.enqueueRemote) {
+      void input.enqueueRemote(prompt).catch((error) => {
+        done.reject(error)
+      })
+      emit(
+        { type: "first", first: false },
+        { first: false },
+      )
+      return
+    }
+
+    if (!input.memoryQueue) {
+      state.queue.push(withQueueID(prompt, state))
+      emitQueue()
+      emit(
+        { type: "first", first: false },
+        { first: false },
+      )
+      return
+    }
+
+    if (!input.sessionID || !input.agent || !input.model) return
+    input.memoryQueue.enqueue(
+      input.sessionID,
+      queueDataFromRunPrompt(prompt, { agent: input.agent, model: input.model }),
+    )
     emitQueue()
     emit(
-      {
-        type: "first",
-        first: false,
-      },
-      {
-        first: false,
-      },
+      { type: "first", first: false },
+      { first: false },
     )
   }
 
   const offPrompt = input.footer.onPrompt((prompt) => {
-    if (prompt.delivery === "deferred") {
+    if (isQueuedPrompt(prompt)) {
       enqueue(prompt)
       return
     }
