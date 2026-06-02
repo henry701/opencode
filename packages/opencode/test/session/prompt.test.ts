@@ -1317,6 +1317,61 @@ noLLMServer.instance("sending a stale queued prompt fails instead of dying", () 
   }),
 )
 
+raceNoLLMServer.instance("sending a queued prompt while busy fails before mutating the queue", () =>
+  Effect.gen(function* () {
+    processorCreateStarted.length = 0
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        processorCreateStarted.length = 0
+      }),
+    )
+
+    const prompt = yield* SessionPrompt.Service
+    const promptQueue = yield* SessionPromptQueue.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Busy queue send" })
+
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "open" }],
+    })
+
+    const firstCreate = defer<void>()
+    processorCreateStarted.push(firstCreate.resolve)
+    const running = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+    yield* Effect.promise(() => firstCreate.promise)
+
+    const item = yield* prompt.queueEnqueue({
+      sessionID: chat.id,
+      agent: "build",
+      model: ref,
+      parts: [{ type: "text", text: "queued" }],
+    })
+
+    const exit = yield* prompt
+      .queueSend({
+        sessionID: chat.id,
+        queueID: item.id,
+      })
+      .pipe(
+        Effect.timeoutOrElse({
+          duration: "200 millis",
+          orElse: () => Effect.fail(new Error("queueSend did not reject while busy")),
+        }),
+        Effect.exit,
+      )
+
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("SessionBusyError")
+    expect((yield* promptQueue.list(chat.id)).map((entry) => entry.id)).toContain(item.id)
+
+    yield* prompt.cancel(chat.id)
+    yield* Fiber.await(running)
+  }),
+)
+
 it.instance(
   "deferred prompt joins the active run instead of starting a separate turn",
   () =>

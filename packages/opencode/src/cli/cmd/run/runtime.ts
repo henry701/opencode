@@ -19,7 +19,7 @@ import { Flag } from "@opencode-ai/core/flag/flag"
 import { createRunDemo } from "./demo"
 import { resolveDiffStyle, resolveFooterKeybinds, resolveModelInfo, resolveSessionInfo } from "./runtime.boot"
 import { createRuntimeLifecycle } from "./runtime.lifecycle"
-import { buildQueueSendPayload } from "./runtime.queue-remote"
+import { buildQueuePromptPayload, buildQueueSendPayload } from "./runtime.queue-remote"
 import { recordRunSpanError, setRunSpanAttributes, withRunSpan } from "./otel"
 import { trace } from "./trace"
 import { cycleVariant, formatModelLabel, resolveSavedVariant, resolveVariant, saveVariant } from "./variant.shared"
@@ -545,9 +545,12 @@ async function runInteractiveRuntime(input: RunRuntimeInput): Promise<void> {
                 if (!state.sessionID) return
                 await ctx.sdk.session.queue.enqueue({
                   sessionID: state.sessionID,
-                  agent: state.agent,
-                  model: state.model,
-                  parts: [{ type: "text", text: prompt.text }, ...prompt.parts],
+                  ...buildQueuePromptPayload({
+                    agent: state.agent,
+                    model: state.model,
+                    variant: state.activeVariant,
+                    prompt,
+                  }),
                 })
               },
           updateQueueRemote: state.demo
@@ -558,11 +561,12 @@ async function runInteractiveRuntime(input: RunRuntimeInput): Promise<void> {
                 await ctx.sdk.session.queue.update({
                   sessionID: state.sessionID,
                   queueID,
-                  body: {
+                  body: buildQueuePromptPayload({
                     agent: state.agent,
                     model: state.model,
-                    parts: [{ type: "text", text: prompt.text }, ...prompt.parts],
-                  },
+                    variant: state.activeVariant,
+                    prompt,
+                  }),
                 })
               },
           sendQueueRemote: state.demo

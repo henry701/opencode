@@ -29,6 +29,7 @@ import { createStore, produce, unwrap } from "solid-js/store"
 import { usePromptHistory, type PromptInfo } from "./history"
 import { computePromptTraits } from "./traits"
 import { assign, expandPastedTextPlaceholders } from "./part"
+import { queueMutationError } from "./queue-actions"
 import { usePromptStash } from "./stash"
 import { partsToPromptInfo } from "./queue"
 import { PromptQueueDock } from "./queue-dock"
@@ -1318,13 +1319,21 @@ export function Prompt(props: PromptProps) {
     if (!body) return false
     if (!body.parts.some((part) => part.type === "text" && part.text.trim())) return false
 
-    await sdk.client.session.queue
+    const result = await sdk.client.session.queue
       .update({
         sessionID: props.sessionID,
         queueID: messageID,
         body,
       })
-      .catch(() => {})
+      .catch((error: unknown) => ({ error }))
+    const error = queueMutationError({ result, fallback: "no response" })
+    if (error) {
+      toast.show({
+        message: `Saving queued prompt failed: ${errorMessage(error)}`,
+        variant: "error",
+      })
+      return false
+    }
     await sdk.client.session.queue.drain.pause({ sessionID: props.sessionID }).catch(() => {})
     return true
   }
@@ -1437,7 +1446,7 @@ export function Prompt(props: PromptProps) {
       return editQueuedMessage(next.id)
     }
 
-    await saveQueuedEdit(current)
+    if (!(await saveQueuedEdit(current))) return false
     const index = items.findIndex((item) => item.id === current)
     if (index < 0) {
       const fallback = items[0]
@@ -1455,7 +1464,7 @@ export function Prompt(props: PromptProps) {
     const sessionID = props.sessionID
     await sdk.client.session.queue.drain.pause({ sessionID }).catch(() => {})
     const current = editingQueuedMessageID()
-    if (current && current !== messageID) await saveQueuedEdit(current)
+    if (current && current !== messageID && !(await saveQueuedEdit(current))) return false
 
     const parts = sync.data.part[messageID] ?? []
     const promptInfo =
@@ -1567,7 +1576,7 @@ export function Prompt(props: PromptProps) {
     const currentMode = store.mode
     const editorParts = editorContextParts()
 
-    void sdk.client.session.queue
+    const result = await sdk.client.session.queue
       .enqueue({
         sessionID,
         ...selectedModel,
@@ -1584,7 +1593,15 @@ export function Prompt(props: PromptProps) {
           ...nonTextParts.map(assign),
         ],
       })
-      .catch(() => {})
+      .catch((error: unknown) => ({ error }))
+    const error = queueMutationError({ result, fallback: "no response" })
+    if (error) {
+      toast.show({
+        message: `Queueing prompt failed: ${errorMessage(error)}`,
+        variant: "error",
+      })
+      return false
+    }
     if (editorParts.length > 0) editor.markSelectionSent()
     resetPromptAfterSend(currentMode, sessionID, editorParts)
     return true

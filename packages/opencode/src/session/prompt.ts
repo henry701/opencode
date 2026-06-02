@@ -106,12 +106,12 @@ export interface Interface {
     sessionID: SessionID,
     queueID: QueueItemID,
     message?: MessageV2.WithParts,
-  ) => Effect.Effect<MessageV2.WithParts, QueueItemNotFoundError>
+  ) => Effect.Effect<MessageV2.WithParts, QueueItemNotFoundError | Session.BusyError>
   readonly queueEnqueue: (input: PromptInput) => Effect.Effect<QueueItem, Image.Error>
   readonly queueUpdate: (input: PromptInput & { queueID: QueueItemID }) => Effect.Effect<boolean, Image.Error>
   readonly queueSend: (input: { sessionID: SessionID; queueID: QueueItemID; prompt?: PromptInput }) => Effect.Effect<
     MessageV2.WithParts,
-    Image.Error | QueueItemNotFoundError
+    Image.Error | QueueItemNotFoundError | Session.BusyError
   >
 }
 
@@ -1834,6 +1834,7 @@ export const layer = Layer.effect(
       queueID: QueueItemID,
       message?: MessageV2.WithParts,
     ) {
+      yield* state.assertNotBusy(sessionID)
       if (message) {
         const ok = yield* promptQueue.update(sessionID, queueID, queueDataFromMessage(message))
         if (!ok) return yield* new QueueItemNotFoundError({ message: "Queued message not found" })

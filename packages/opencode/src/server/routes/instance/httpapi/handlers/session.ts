@@ -46,15 +46,24 @@ const tryParseJson = (text: string) =>
     catch: () => new HttpApiError.BadRequest({}),
   })
 
-const mapQueuePromptError = (error: unknown) =>
-  error &&
-  typeof error === "object" &&
-  "_tag" in error &&
-  error._tag === "SessionPrompt.QueueItemNotFound" &&
-  "message" in error &&
-  typeof error.message === "string"
-    ? ApiError.notFound(error.message)
-    : new HttpApiError.BadRequest({})
+const tagged = (error: unknown, tag: string): error is { _tag: string } & Record<string, unknown> =>
+  !!error && typeof error === "object" && "_tag" in error && error._tag === tag
+
+function mapQueuePromptError(error: unknown) {
+  if (tagged(error, "SessionPrompt.QueueItemNotFound")) {
+    return ApiError.notFound(
+      "message" in error && typeof error.message === "string" ? error.message : "Queued message not found",
+    )
+  }
+  if (tagged(error, "SessionBusyError")) {
+    const sessionID = "sessionID" in error ? SessionID.make(String(error.sessionID)) : SessionID.make("")
+    return new ApiError.SessionBusyError({
+      sessionID,
+      message: sessionID ? `Session is busy: ${sessionID}` : "Session is busy",
+    })
+  }
+  return new HttpApiError.BadRequest({})
+}
 
 const isPromptPayload = (payload: unknown): payload is typeof PromptPayload.Type =>
   !!payload && typeof payload === "object" && "parts" in payload
