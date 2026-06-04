@@ -206,6 +206,8 @@ export type TuiPromptRef = {
   blur(): void
   focus(): void
   submit(): void
+  queue(): void
+  editQueue?(): void
 }
 
 export type TuiPromptProps = {

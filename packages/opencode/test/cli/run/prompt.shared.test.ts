@@ -32,6 +32,9 @@ const keybinds = {
   inputSubmit: bindings("return"),
   inputNewline: bindings("shift+return,ctrl+return,ctrl+j"),
   inputQueue: bindings("ctrl+shift+return"),
+  inputEditQueue: bindings("alt+up"),
+  inputEditQueueNext: bindings("alt+down"),
+  inputEditQueueCancel: bindings("escape"),
 }
 
 function prompt(text: string, parts: RunPrompt["parts"] = []): RunPrompt {
@@ -147,6 +150,14 @@ describe("run prompt shared", () => {
 
     expect(promptHit(keys.queues, promptInfo({ name: "return", ctrl: true, shift: true }))).toBe(true)
     expect(keys.bindings.every((binding) => binding.action === "submit" || binding.action === "newline")).toBe(true)
+  })
+
+  test("treats option as meta for queue edit bindings", () => {
+    const keys = promptKeys(keybinds)
+
+    expect(promptHit(keys.editQueues, promptInfo({ name: "up", meta: true }))).toBe(true)
+    expect(promptHit(keys.editQueues, promptInfo({ name: "up", option: true }))).toBe(true)
+    expect(promptHit(keys.editQueueNext, promptInfo({ name: "down", option: true }))).toBe(true)
   })
 
   test("handles direct and leader-based variant cycling", () => {

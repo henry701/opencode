@@ -359,6 +359,7 @@ function footer(fn?: (commit: StreamCommit) => void) {
     },
     onPrompt: () => () => {},
     onClose: () => () => {},
+    setQueueControl: () => {},
     event(next) {
       events.push(next)
     },
@@ -1899,7 +1900,7 @@ describe("run stream transport", () => {
     }
   })
 
-  test("rejects concurrent turns", async () => {
+  test("rejects concurrent deferred turns", async () => {
     const src = eventFeed()
     const ui = footer()
     const transport = await createSessionTransport({
@@ -1930,13 +1931,83 @@ describe("run stream transport", () => {
           agent: undefined,
           model: undefined,
           variant: undefined,
-          prompt: { text: "two", parts: [] },
+          prompt: { text: "two", parts: [], delivery: "deferred" },
           files: [],
           includeFiles: false,
+          delivery: "deferred",
         }),
       ).rejects.toThrow("prompt already running")
 
       ctrl.abort()
+      await task
+    } finally {
+      src.close()
+      await transport.close()
+    }
+  })
+
+  test("steers an immediate prompt while a turn is active", async () => {
+    const src = eventFeed()
+    const ui = footer()
+    const seen: unknown[] = []
+
+    const transport = await createSessionTransport({
+      sdk: sdk({
+        stream: src.stream,
+        promptAsync: async (input) => {
+          seen.push(input)
+          if (seen.length === 1) {
+            queueMicrotask(() => {
+              src.push(busy())
+            })
+            return ok(undefined)
+          }
+
+          queueMicrotask(() => {
+            src.push(idle())
+          })
+          return ok(undefined)
+        },
+      }),
+      sessionID: "session-1",
+      thinking: true,
+      limits: () => ({}),
+      footer: ui.api,
+    })
+
+    const ctrl = new AbortController()
+
+    try {
+      const task = transport.runPromptTurn({
+        agent: undefined,
+        model: undefined,
+        variant: undefined,
+        prompt: { text: "one", parts: [] },
+        files: [],
+        includeFiles: false,
+        signal: ctrl.signal,
+      })
+
+      await Promise.resolve()
+      await transport.runPromptTurn({
+        agent: undefined,
+        model: undefined,
+        variant: undefined,
+        prompt: { text: "steer me", parts: [] },
+        files: [],
+        includeFiles: false,
+        delivery: "immediate",
+      })
+
+      expect(seen).toEqual([
+        expect.objectContaining({ parts: [{ type: "text", text: "one" }] }),
+        expect.objectContaining({
+          delivery: "immediate",
+          parts: [{ type: "text", text: "steer me" }],
+        }),
+      ])
+
+      src.push(idle())
       await task
     } finally {
       src.close()

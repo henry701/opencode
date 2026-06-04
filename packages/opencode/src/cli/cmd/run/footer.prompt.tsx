@@ -78,6 +78,14 @@ type PromptInput = {
   history?: RunPrompt[]
   onSubmit: (input: RunPrompt) => boolean | Promise<boolean>
   onQueue: (input: RunPrompt) => void
+  editingQueueID?: Accessor<string | undefined>
+  onEditQueue?: () => void
+  onEditQueueNext?: () => void
+  onCancelQueueEdit?: () => boolean
+  queueEscapeGuard?: Accessor<boolean>
+  clearQueueEscapeGuard?: () => void
+  onUpdateQueued?: (id: string, prompt: RunPrompt) => void
+  onSendQueuedNow?: (id: string) => void
   onCycle: () => void
   onInterrupt: () => boolean
   onInputClear: () => void
@@ -103,6 +111,9 @@ export type PromptState = {
   onKeyDown: (event: KeyEvent) => void
   onContentChange: () => void
   replaceDraft: (text: string) => void
+  restorePrompt: (prompt: RunPrompt) => void
+  currentPrompt: () => RunPrompt
+  focus: () => void
   bind: (area?: TextareaRenderable) => void
 }
 
@@ -115,6 +126,8 @@ function clonePrompt(prompt: RunPrompt): RunPrompt {
     text: prompt.text,
     parts: structuredClone(prompt.parts),
     ...(prompt.mode ? { mode: prompt.mode } : {}),
+    ...(prompt.delivery ? { delivery: prompt.delivery } : {}),
+    ...(prompt.queueID ? { queueID: prompt.queueID } : {}),
   }
 }
 
@@ -915,6 +928,11 @@ export function createPromptState(input: PromptInput): PromptState {
 
   const onKeyDown = (event: KeyEvent) => {
     const key = promptInfo(event)
+    if (input.queueEscapeGuard?.()) {
+      event.preventDefault()
+      input.clearQueueEscapeGuard?.()
+      return
+    }
     if (visible()) {
       const name = event.name.toLowerCase()
       const ctrl = event.ctrl && !event.meta && !event.shift
@@ -967,6 +985,37 @@ export function createPromptState(input: PromptInput): PromptState {
         select()
         return
       }
+    }
+
+    if (
+      !shell() &&
+      input.editingQueueID?.() &&
+      key.name === "return" &&
+      !event.shift &&
+      !event.ctrl &&
+      !event.meta &&
+      !event.super
+    ) {
+      event.preventDefault()
+      onSubmit()
+      return
+    }
+
+    if (!shell() && input.editingQueueID?.() && promptHit(keys().editQueueCancel, key)) {
+      event.preventDefault()
+      if (input.onCancelQueueEdit?.()) return
+    }
+
+    if (!shell() && input.editingQueueID?.() && promptHit(keys().editQueueNext, key)) {
+      event.preventDefault()
+      input.onEditQueueNext?.()
+      return
+    }
+
+    if (!shell() && promptHit(keys().editQueues, key)) {
+      event.preventDefault()
+      input.onEditQueue?.()
+      return
     }
 
     if (!shell() && promptHit(keys().queues, key)) {
@@ -1143,20 +1192,33 @@ export function createPromptState(input: PromptInput): PromptState {
 
   const onSubmit = () => {
     syncDraft()
+    if (input.editingQueueID?.()) {
+      const id = input.editingQueueID()
+      if (!id) return
+      input.onSendQueuedNow?.(id)
+      return
+    }
     submitPrompt(clonePrompt(draft))
   }
+
+  const currentPrompt = () => clonePrompt(draft)
 
   const onQueue = () => {
     // Queueing is a normal-mode only affordance; shell commands always run now.
     if (shell()) return
     syncDraft()
     if (visible()) hide()
+    const queued = clonePrompt(draft)
+    queued.queued = true
+    if (input.editingQueueID?.()) {
+      const id = input.editingQueueID()
+      if (id) input.onUpdateQueued?.(id, queued)
+      return
+    }
     if (!draft.text.trim()) {
       input.onStatus("empty prompt ignored")
       return
     }
-    const queued = clonePrompt(draft)
-    queued.delivery = "deferred"
     input.onQueue(queued)
     push(queued)
     resetDraft()
@@ -1223,6 +1285,14 @@ export function createPromptState(input: PromptInput): PromptState {
     })
   })
 
+  const focus = () => {
+    if (!area || area.isDestroyed) {
+      return
+    }
+
+    area.focus()
+  }
+
   return {
     placeholder,
     bindings,
@@ -1242,6 +1312,9 @@ export function createPromptState(input: PromptInput): PromptState {
       scheduleRows()
     },
     replaceDraft,
+    restorePrompt: restore,
+    currentPrompt,
+    focus,
     bind,
   }
 }

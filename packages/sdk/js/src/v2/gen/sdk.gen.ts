@@ -165,6 +165,10 @@ import type {
   SessionCommandResponses,
   SessionCreateErrors,
   SessionCreateResponses,
+  SessionDeferredSendErrors,
+  SessionDeferredSendResponses,
+  SessionDeferredUpdateErrors,
+  SessionDeferredUpdateResponses,
   SessionDeleteErrors,
   SessionDeleteMessageErrors,
   SessionDeleteMessageResponses,
@@ -188,6 +192,22 @@ import type {
   SessionPromptAsyncResponses,
   SessionPromptErrors,
   SessionPromptResponses,
+  SessionQueueDrainPauseErrors,
+  SessionQueueDrainPauseResponses,
+  SessionQueueDrainResumeErrors,
+  SessionQueueDrainResumeResponses,
+  SessionQueueEnqueueErrors,
+  SessionQueueEnqueueResponses,
+  SessionQueueGetErrors,
+  SessionQueueGetResponses,
+  SessionQueueListErrors,
+  SessionQueueListResponses,
+  SessionQueueRemoveErrors,
+  SessionQueueRemoveResponses,
+  SessionQueueSendErrors,
+  SessionQueueSendResponses,
+  SessionQueueUpdateErrors,
+  SessionQueueUpdateResponses,
   SessionRevertErrors,
   SessionRevertResponses,
   SessionShareErrors,
@@ -3040,6 +3060,405 @@ export class Provider extends HeyApiClient {
   }
 }
 
+export class Deferred extends HeyApiClient {
+  /**
+   * Update a prompt waiting in the in-memory deferred queue.
+   */
+  public update<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      queueID: string
+      directory?: string
+      workspace?: string
+      body?: unknown
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "queueID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "body", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<
+      SessionDeferredUpdateResponses,
+      SessionDeferredUpdateErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/deferred/{queueID}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Persist and run a queued prompt immediately.
+   */
+  public send<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      queueID: string
+      directory?: string
+      workspace?: string
+      body?: unknown
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "queueID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "body", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SessionDeferredSendResponses, SessionDeferredSendErrors, ThrowOnError>(
+      {
+        url: "/session/{sessionID}/deferred/{queueID}/send",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+}
+
+export class Drain extends HeyApiClient {
+  /**
+   * Pause automatic FIFO dequeue while editing queued prompts. Explicit send-now and normal submits still run.
+   */
+  public pause<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      SessionQueueDrainPauseResponses,
+      SessionQueueDrainPauseErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/queue/drain-pause",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Resume automatic FIFO dequeue after queue edit is cancelled or abandoned.
+   */
+  public resume<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      SessionQueueDrainResumeResponses,
+      SessionQueueDrainResumeErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/queue/drain-resume",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class Queue extends HeyApiClient {
+  /**
+   * List prompts waiting in the session queue.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<SessionQueueListResponses, SessionQueueListErrors, ThrowOnError>({
+      url: "/session/{sessionID}/queue",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Enqueue a prompt for the session (FIFO). Does not appear in the transcript until dequeued.
+   */
+  public enqueue<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      messageID?: string
+      model?: {
+        providerID: string
+        modelID: string
+      }
+      agent?: string
+      noReply?: boolean
+      delivery?: SessionDelivery
+      tools?: {
+        [key: string]: boolean
+      }
+      format?: OutputFormat
+      system?: string
+      variant?: string
+      parts?: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "messageID" },
+            { in: "body", key: "model" },
+            { in: "body", key: "agent" },
+            { in: "body", key: "noReply" },
+            { in: "body", key: "delivery" },
+            { in: "body", key: "tools" },
+            { in: "body", key: "format" },
+            { in: "body", key: "system" },
+            { in: "body", key: "variant" },
+            { in: "body", key: "parts" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SessionQueueEnqueueResponses, SessionQueueEnqueueErrors, ThrowOnError>(
+      {
+        url: "/session/{sessionID}/queue",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+
+  /**
+   * Remove a prompt from the session queue.
+   */
+  public remove<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      queueID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "queueID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<SessionQueueRemoveResponses, SessionQueueRemoveErrors, ThrowOnError>(
+      {
+        url: "/session/{sessionID}/queue/{queueID}",
+        ...options,
+        ...params,
+      },
+    )
+  }
+
+  /**
+   * Load a queued prompt with full parts for editing.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      queueID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "queueID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<SessionQueueGetResponses, SessionQueueGetErrors, ThrowOnError>({
+      url: "/session/{sessionID}/queue/{queueID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Update a prompt waiting in the session queue.
+   */
+  public update<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      queueID: string
+      directory?: string
+      workspace?: string
+      body?: unknown
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "queueID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "body", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<SessionQueueUpdateResponses, SessionQueueUpdateErrors, ThrowOnError>({
+      url: "/session/{sessionID}/queue/{queueID}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Persist and run a queued prompt immediately.
+   */
+  public send<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      queueID: string
+      directory?: string
+      workspace?: string
+      body?: unknown
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "queueID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "body", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SessionQueueSendResponses, SessionQueueSendErrors, ThrowOnError>({
+      url: "/session/{sessionID}/queue/{queueID}/send",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  private _drain?: Drain
+  get drain(): Drain {
+    return (this._drain ??= new Drain({ client: this.client }))
+  }
+}
+
 export class Session2 extends HeyApiClient {
   /**
    * List sessions
@@ -4001,6 +4420,16 @@ export class Session2 extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  private _deferred?: Deferred
+  get deferred(): Deferred {
+    return (this._deferred ??= new Deferred({ client: this.client }))
+  }
+
+  private _queue?: Queue
+  get queue(): Queue {
+    return (this._queue ??= new Queue({ client: this.client }))
   }
 }
 

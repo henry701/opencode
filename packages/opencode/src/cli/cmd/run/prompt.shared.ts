@@ -24,11 +24,19 @@ export type PromptHistoryState = {
   draft: string
 }
 
-export function promptInfo(event: { name: string; ctrl?: boolean; meta?: boolean; shift?: boolean; super?: boolean }) {
+export function promptInfo(event: {
+  name: string
+  ctrl?: boolean
+  meta?: boolean
+  option?: boolean
+  shift?: boolean
+  super?: boolean
+}) {
   return {
     name: event.name === " " ? "space" : event.name,
     ctrl: !!event.ctrl,
-    meta: !!event.meta,
+    // Terminals report Alt as meta or option depending on platform/backend.
+    meta: !!(event.meta || event.option),
     shift: !!event.shift,
     super: !!event.super,
     leader: false,
@@ -45,6 +53,9 @@ export type PromptKeys = {
   next: PromptInfo[]
   clear: PromptInfo[]
   queues: PromptInfo[]
+  editQueues: PromptInfo[]
+  editQueueNext: PromptInfo[]
+  editQueueCancel: PromptInfo[]
   bindings: KeyBinding[]
 }
 
@@ -162,6 +173,9 @@ export function promptKeys(keybinds: FooterKeybinds): PromptKeys {
     // "submit"/"newline" actions, so the queue key is dispatched manually in the
     // footer's onKeyDown handler (see Gap 17 in PLAN.md).
     queues: promptBindings(keybinds.inputQueue, keybinds.leader),
+    editQueues: promptBindings(keybinds.inputEditQueue, keybinds.leader),
+    editQueueNext: promptBindings(keybinds.inputEditQueueNext, keybinds.leader),
+    editQueueCancel: promptBindings(keybinds.inputEditQueueCancel, keybinds.leader),
     bindings: textareaBindings(keybinds),
   }
 }

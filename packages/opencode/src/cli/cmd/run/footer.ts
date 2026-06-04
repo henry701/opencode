@@ -46,6 +46,7 @@ import type {
   FooterSubagentState,
   FooterView,
   PermissionReply,
+  QueueControl,
   QuestionReject,
   QuestionReply,
   RunAgent,
@@ -113,7 +114,7 @@ function createEmptySubagentState(): FooterSubagentState {
 
 function eventPatch(next: FooterEvent): FooterPatch | undefined {
   if (next.type === "queue") {
-    return { queue: next.queue }
+    return { queue: next.queue, queued: next.queued }
   }
 
   if (next.type === "first") {
@@ -192,11 +193,13 @@ export class RunFooter implements FooterApi {
   private setSubagent: (next: FooterSubagentState) => void
   private promptRoute: FooterPromptRoute = { type: "composer" }
   private subagentMenuRows = SUBAGENT_ROWS
+  private queueRows = 0
   private autocomplete = false
   private interruptTimeout: NodeJS.Timeout | undefined
   private exitTimeout: NodeJS.Timeout | undefined
   private interruptHint: string
   private requestExitHandler: (() => boolean) | undefined
+  private queueControl: QueueControl | undefined
   private scrollback: RunScrollbackStream
 
   constructor(
@@ -207,6 +210,7 @@ export class RunFooter implements FooterApi {
       phase: "idle",
       status: "",
       queue: 0,
+      queued: [],
       model: options.modelLabel,
       duration: "",
       usage: "",
@@ -281,6 +285,7 @@ export class RunFooter implements FooterApi {
           agent: options.agentLabel,
           onSubmit: this.handlePrompt,
           onQueue: this.handleQueue,
+          queueControl: () => this.queueControl,
           onPermissionReply: this.handlePermissionReply,
           onQuestionReply: this.handleQuestionReply,
           onQuestionReject: this.handleQuestionReject,
@@ -330,6 +335,10 @@ export class RunFooter implements FooterApi {
     return () => {
       this.closes.delete(fn)
     }
+  }
+
+  public setQueueControl(control: QueueControl | undefined): void {
+    this.queueControl = control
   }
 
   public event(next: FooterEvent): void {
@@ -396,6 +405,7 @@ export class RunFooter implements FooterApi {
       phase: next.phase ?? prev.phase,
       status: typeof next.status === "string" ? next.status : prev.status,
       queue: typeof next.queue === "number" ? Math.max(0, next.queue) : prev.queue,
+      queued: next.queued ?? prev.queued,
       model: typeof next.model === "string" ? next.model : prev.model,
       duration: typeof next.duration === "string" ? next.duration : prev.duration,
       usage: typeof next.usage === "string" ? next.usage : prev.usage,
@@ -572,7 +582,10 @@ export class RunFooter implements FooterApi {
                   ? 1 + this.subagentMenuRows
                   : this.promptRoute.type === "subagent"
                     ? this.base + SUBAGENT_INSPECTOR_ROWS
-                    : Math.max(base + TEXTAREA_MIN_ROWS, Math.min(base + PROMPT_MAX_ROWS, base + this.rows))
+                    : Math.max(
+                        base + TEXTAREA_MIN_ROWS + this.queueRows,
+                        Math.min(base + PROMPT_MAX_ROWS + this.queueRows, base + this.rows + this.queueRows),
+                      )
 
     if (height !== this.renderer.footerHeight) {
       this.renderer.footerHeight = height
@@ -595,10 +608,16 @@ export class RunFooter implements FooterApi {
     }
   }
 
-  private syncLayout = (next: { route: FooterPromptRoute; autocomplete: boolean; subagentRows: number }): void => {
+  private syncLayout = (next: {
+    route: FooterPromptRoute
+    autocomplete: boolean
+    subagentRows: number
+    queueRows: number
+  }): void => {
     this.promptRoute = next.route
     this.autocomplete = next.autocomplete
     this.subagentMenuRows = next.subagentRows
+    this.queueRows = next.queueRows
     if (this.view().type === "prompt") {
       this.applyHeight()
     }

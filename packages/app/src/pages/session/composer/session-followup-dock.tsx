@@ -1,4 +1,4 @@
-import { For, Show, createMemo } from "solid-js"
+import { For, Show, createEffect, createMemo } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Button } from "@opencode-ai/ui/button"
 import { DockTray } from "@opencode-ai/ui/dock-surface"
@@ -8,12 +8,20 @@ import { useLanguage } from "@/context/language"
 export function SessionFollowupDock(props: {
   items: { id: string; text: string }[]
   sending?: string
+  editingMessageID?: string
   onSend: (id: string) => void
   onEdit: (id: string) => void
 }) {
   const language = useLanguage()
   const [store, setStore] = createStore({
     collapsed: false,
+  })
+
+  const editing = () => props.editingMessageID
+
+  createEffect(() => {
+    if (!editing()) return
+    setStore("collapsed", false)
   })
 
   const toggle = () => setStore("collapsed", (value) => !value)
@@ -28,6 +36,10 @@ export function SessionFollowupDock(props: {
   return (
     <DockTray
       data-component="session-followup-dock"
+      data-editing={editing() ? "true" : "false"}
+      classList={{
+        "shadow-[0_0_0_1px_var(--v2-border-border-focus)]": !!editing(),
+      }}
       style={{
         "margin-bottom": "-0.875rem",
         "border-bottom-left-radius": 0,
@@ -46,6 +58,11 @@ export function SessionFollowupDock(props: {
         }}
       >
         <span class="shrink-0 text-13-medium text-text-strong cursor-default">{label()}</span>
+        <Show when={editing()}>
+          <span class="shrink-0 text-12-regular text-icon-info-active cursor-default">
+            {language.t("session.followupDock.editing")}
+          </span>
+        </Show>
         <Show when={store.collapsed && preview()}>
           <span class="min-w-0 flex-1 truncate text-13-regular text-text-base cursor-default">{preview()}</span>
         </Show>
@@ -78,29 +95,56 @@ export function SessionFollowupDock(props: {
       <Show when={!store.collapsed}>
         <div class="px-3 pb-7 flex flex-col gap-1.5 max-h-42 overflow-y-auto no-scrollbar">
           <For each={props.items}>
-            {(item) => (
-              <div class="flex items-center gap-2 min-w-0 py-1">
-                <span class="min-w-0 flex-1 truncate text-13-regular text-text-strong">{item.text}</span>
-                <Button
-                  size="small"
-                  variant="secondary"
-                  class="shrink-0"
-                  disabled={!!props.sending}
-                  onClick={() => props.onSend(item.id)}
+            {(item) => {
+              const active = () => editing() === item.id
+              return (
+                <div
+                  classList={{
+                    "flex items-center gap-2 min-w-0 py-1 px-1 -mx-1 rounded-md": true,
+                    "bg-v2-background-bg-raised ring-1 ring-inset ring-[var(--v2-border-border-focus)]": active(),
+                  }}
                 >
-                  {language.t("session.followupDock.sendNow")}
-                </Button>
-                <Button
-                  size="small"
-                  variant="ghost"
-                  class="shrink-0"
-                  disabled={!!props.sending}
-                  onClick={() => props.onEdit(item.id)}
-                >
-                  {language.t("session.followupDock.edit")}
-                </Button>
-              </div>
-            )}
+                  <span
+                    classList={{
+                      "min-w-0 flex-1 text-13-regular": true,
+                      "text-icon-info-active whitespace-pre-wrap break-words": active(),
+                      "truncate text-text-strong": !active(),
+                    }}
+                  >
+                    {item.text}
+                  </span>
+                  <Show
+                    when={active()}
+                    fallback={
+                      <>
+                        <Button
+                          size="small"
+                          variant="secondary"
+                          class="shrink-0"
+                          disabled={!!props.sending}
+                          onClick={() => props.onSend(item.id)}
+                        >
+                          {language.t("session.followupDock.sendNow")}
+                        </Button>
+                        <Button
+                          size="small"
+                          variant="ghost"
+                          class="shrink-0"
+                          disabled={!!props.sending || !!editing()}
+                          onClick={() => props.onEdit(item.id)}
+                        >
+                          {language.t("session.followupDock.edit")}
+                        </Button>
+                      </>
+                    }
+                  >
+                    <span class="shrink-0 text-12-medium text-icon-info-active">
+                      {language.t("session.followupDock.editing")}
+                    </span>
+                  </Show>
+                </div>
+              )
+            }}
           </For>
         </div>
       </Show>

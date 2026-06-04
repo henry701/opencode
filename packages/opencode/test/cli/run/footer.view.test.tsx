@@ -11,7 +11,7 @@ import {
   RunSubagentSelectBody,
   RunVariantSelectBody,
 } from "@/cli/cmd/run/footer.command"
-import { RunFooterView } from "@/cli/cmd/run/footer.view"
+import { RunFooterView, queuedSendPlan } from "@/cli/cmd/run/footer.view"
 import { RunEntryContent } from "@/cli/cmd/run/scrollback.writer"
 import { RUN_THEME_FALLBACK } from "@/cli/cmd/run/theme"
 import type {
@@ -43,6 +43,9 @@ const keybinds: FooterKeybinds = {
   inputSubmit: bindings("return"),
   inputNewline: bindings("shift+return,ctrl+return,ctrl+j"),
   inputQueue: bindings("ctrl+shift+return"),
+  inputEditQueue: bindings("alt+up"),
+  inputEditQueueNext: bindings("alt+down"),
+  inputEditQueueCancel: bindings("escape"),
 }
 
 function command(input: { name: string; description: string; source?: "command" | "mcp" | "skill" }) {
@@ -143,6 +146,44 @@ function subagent(input: {
     lastUpdatedAt: 1,
   } satisfies FooterSubagentTab
 }
+
+test("run queue send plan preserves the current edit when sending another row", () => {
+  expect(
+    queuedSendPlan(
+      [
+        { id: "pqu_a", text: "editing draft" },
+        { id: "pqu_b", text: "send this row" },
+      ],
+      "pqu_b",
+      "pqu_a",
+    ),
+  ).toEqual({
+    saveID: "pqu_a",
+    editID: "pqu_a",
+    clearEditor: false,
+    pauseDrain: true,
+    resumeDrain: false,
+  })
+})
+
+test("run queue send plan advances after sending the active edit", () => {
+  expect(
+    queuedSendPlan(
+      [
+        { id: "pqu_a", text: "send this row" },
+        { id: "pqu_b", text: "next draft" },
+      ],
+      "pqu_a",
+      "pqu_a",
+    ),
+  ).toEqual({
+    saveID: "pqu_a",
+    editID: "pqu_b",
+    clearEditor: true,
+    pauseDrain: true,
+    resumeDrain: false,
+  })
+})
 
 test("run entry content updates when live commit text changes", async () => {
   const [commit, setCommit] = createSignal<StreamCommit>({
@@ -340,6 +381,7 @@ test("direct footer shows subagent indicator while prompt is running", async () 
     phase: "running",
     status: "",
     queue: 0,
+    queued: [],
     model: "gpt-5",
     duration: "",
     usage: "",

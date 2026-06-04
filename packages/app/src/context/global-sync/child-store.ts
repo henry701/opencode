@@ -237,6 +237,7 @@ export function createChildStoreManager(input: {
             vcs: vcsStore.value,
             limit: 5,
             message: {},
+            prompt_queue: {},
             part: {},
             part_text_accum_delta: {},
           })

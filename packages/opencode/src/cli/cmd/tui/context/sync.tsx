@@ -66,6 +66,9 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       message: {
         [sessionID: string]: Message[]
       }
+      prompt_queue: {
+        [sessionID: string]: { id: string; text: string }[]
+      }
       part: {
         [messageID: string]: Part[]
       }
@@ -99,6 +102,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       session_diff: {},
       todo: {},
       message: {},
+      prompt_queue: {},
       part: {},
       lsp: [],
       mcp: {},
@@ -131,6 +135,15 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
     }
 
     event.subscribe((event, { workspace }) => {
+      if ((event as { type: string }).type === "session.queue.updated") {
+        const queued = event as unknown as {
+          type: string
+          properties: { sessionID: string; items: { id: string; text: string }[] }
+        }
+        setStore("prompt_queue", queued.properties.sessionID, queued.properties.items)
+        return
+      }
+
       switch (event.type) {
         case "server.instance.disposed":
           void bootstrap()

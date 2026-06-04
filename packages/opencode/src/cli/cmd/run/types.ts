@@ -40,6 +40,23 @@ export type RunPrompt = {
     arguments: string
   }
   delivery?: "immediate" | "deferred"
+  queued?: boolean
+  queueID?: string
+}
+
+export type QueuedPromptPreview = {
+  id: string
+  text: string
+}
+
+export type QueueControl = {
+  get: (id: string) => RunPrompt | undefined
+  load?: (id: string) => Promise<RunPrompt | undefined>
+  update: (id: string, prompt: RunPrompt) => boolean
+  remove: (id: string) => RunPrompt | undefined | Promise<RunPrompt | undefined>
+  sendNow: (id: string) => void | Promise<void>
+  pauseDrain?: () => void | Promise<void>
+  resumeDrain?: () => void | Promise<void>
 }
 
 export type RunAgent = NonNullable<Awaited<ReturnType<OpencodeClient["app"]["agents"]>>["data"]>[number]
@@ -77,6 +94,7 @@ export type FooterState = {
   phase: FooterPhase
   status: string
   queue: number
+  queued: QueuedPromptPreview[]
   model: string
   duration: string
   usage: string
@@ -223,6 +241,7 @@ export type FooterEvent =
   | {
       type: "queue"
       queue: number
+      queued: QueuedPromptPreview[]
     }
   | {
       type: "first"
@@ -280,6 +299,9 @@ export type FooterKeybinds = {
   inputSubmit: readonly FooterBinding[]
   inputNewline: readonly FooterBinding[]
   inputQueue: readonly FooterBinding[]
+  inputEditQueue: readonly FooterBinding[]
+  inputEditQueueNext: readonly FooterBinding[]
+  inputEditQueueCancel: readonly FooterBinding[]
 }
 
 // Lifecycle phase of a scrollback entry. "start" opens the entry, "progress"
@@ -319,6 +341,7 @@ export type FooterApi = {
   readonly isClosed: boolean
   onPrompt(fn: (input: RunPrompt) => void): () => void
   onClose(fn: () => void): () => void
+  setQueueControl?(control: QueueControl | undefined): void
   event(next: FooterEvent): void
   append(commit: StreamCommit): void
   idle(): Promise<void>

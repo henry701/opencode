@@ -10,6 +10,7 @@ function footer() {
     isClosed: false,
     onPrompt: () => () => {},
     onClose: () => () => {},
+    setQueueControl: () => {},
     event: (next) => {
       events.push(next)
     },

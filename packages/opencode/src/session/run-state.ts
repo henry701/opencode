@@ -1,3 +1,4 @@
+import { Bus } from "@/bus"
 import { InstanceState } from "@/effect/instance-state"
 import { Runner } from "@/effect/runner"
 import { BackgroundJob } from "@/background/job"
@@ -11,9 +12,6 @@ export interface Interface {
   readonly assertNotBusy: (sessionID: SessionID) => Effect.Effect<void, Session.BusyError>
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly hasRunner: (sessionID: SessionID) => Effect.Effect<boolean>
-  readonly defer: (sessionID: SessionID, message: MessageV2.WithParts) => Effect.Effect<void>
-  readonly drainDeferred: (sessionID: SessionID) => Effect.Effect<MessageV2.WithParts[]>
-  readonly hasDeferred: (sessionID: SessionID) => Effect.Effect<boolean>
   readonly ensureRunning: (
     sessionID: SessionID,
     onInterrupt: Effect.Effect<MessageV2.WithParts>,
@@ -39,7 +37,6 @@ export const layer = Layer.effect(
       Effect.fn("SessionRunState.state")(function* () {
         const scope = yield* Scope.Scope
         const runners = new Map<SessionID, Runner.Runner<MessageV2.WithParts>>()
-        const deferred = new Map<SessionID, MessageV2.WithParts[]>()
         yield* Effect.addFinalizer(
           Effect.fnUntraced(function* () {
             yield* Effect.forEach(runners.values(), (runner) => runner.cancel, {
@@ -47,10 +44,9 @@ export const layer = Layer.effect(
               discard: true,
             })
             runners.clear()
-            deferred.clear()
           }),
         )
-        return { runners, deferred, scope }
+        return { runners, scope }
       }),
     )
 
@@ -84,29 +80,9 @@ export const layer = Layer.effect(
       return data.runners.get(sessionID)?.busy ?? false
     })
 
-    const defer = Effect.fn("SessionRunState.defer")(function* (sessionID: SessionID, message: MessageV2.WithParts) {
-      const data = yield* InstanceState.get(state)
-      const queue = data.deferred.get(sessionID)
-      if (queue) queue.push(message)
-      else data.deferred.set(sessionID, [message])
-    })
-
-    const drainDeferred = Effect.fn("SessionRunState.drainDeferred")(function* (sessionID: SessionID) {
-      const data = yield* InstanceState.get(state)
-      const queue = data.deferred.get(sessionID) ?? []
-      data.deferred.delete(sessionID)
-      return queue
-    })
-
-    const hasDeferred = Effect.fn("SessionRunState.hasDeferred")(function* (sessionID: SessionID) {
-      const data = yield* InstanceState.get(state)
-      return (data.deferred.get(sessionID)?.length ?? 0) > 0
-    })
-
     const cancel = Effect.fn("SessionRunState.cancel")(function* (sessionID: SessionID) {
       yield* cancelBackgroundJobs(background, sessionID)
       const data = yield* InstanceState.get(state)
-      data.deferred.delete(sessionID)
       const existing = data.runners.get(sessionID)
       if (!existing || !existing.busy) {
         yield* status.set(sessionID, { type: "idle" })
@@ -138,9 +114,6 @@ export const layer = Layer.effect(
       assertNotBusy,
       cancel,
       hasRunner,
-      defer,
-      drainDeferred,
-      hasDeferred,
       ensureRunning,
       startShell,
     })

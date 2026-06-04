@@ -38,6 +38,7 @@ import { Question } from "@/question"
 import { Session } from "@/session/session"
 import { SessionCompaction } from "@/session/compaction"
 import { SessionPrompt } from "@/session/prompt"
+import { SessionPromptQueue } from "@/session/prompt-queue"
 import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
@@ -218,6 +219,7 @@ export function createRoutes(
       Session.defaultLayer,
       SessionCompaction.defaultLayer,
       SessionPrompt.defaultLayer,
+      SessionPromptQueue.defaultLayer,
       SessionRevert.defaultLayer,
       SessionShare.defaultLayer,
       SessionRunState.defaultLayer,

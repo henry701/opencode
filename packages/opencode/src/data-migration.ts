@@ -2,8 +2,10 @@ import { Context, Effect, Layer } from "effect"
 import { Database } from "./storage/db"
 import { DataMigrationTable } from "./data-migration.sql"
 import * as Log from "@opencode-ai/core/util/log"
-import { and, asc, eq, gt, inArray, sql } from "drizzle-orm"
-import { MessageTable, SessionTable } from "./session/session.sql"
+import { and, asc, desc, eq, gt, inArray, sql } from "drizzle-orm"
+import { queueDataFromMessage, PromptQueue } from "./queue/prompt-queue"
+import { MessageV2 } from "./session/message-v2"
+import { MessageTable, PartTable, SessionTable } from "./session/session.sql"
 import type { SessionID } from "./session/schema"
 
 export type Migration<R = never> = {
@@ -16,6 +18,141 @@ const log = Log.create({ service: "data-migration" })
 export interface Interface {}
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/DataMigration") {}
+
+export const deferredUserMessagesToPromptQueue = Effect.gen(function* () {
+  const rows = yield* Effect.sync(() =>
+    Database.use((db) =>
+      db
+        .select()
+        .from(MessageTable)
+        .where(
+          and(
+            sql`json_extract(${MessageTable.data}, '$.role') = 'user'`,
+            sql`json_extract(${MessageTable.data}, '$.delivery') = 'deferred'`,
+          ),
+        )
+        .orderBy(asc(MessageTable.session_id), asc(MessageTable.time_created), asc(MessageTable.id))
+        .all(),
+    ),
+  )
+  if (rows.length === 0) return
+
+  const touched = new Set<SessionID>()
+
+  for (const row of rows) {
+    const sessionID = row.session_id
+    const messageID = row.id
+    const info = {
+      ...row.data,
+      id: messageID,
+      sessionID,
+    } as MessageV2.Info
+    if (info.role !== "user" || info.delivery !== "deferred") continue
+
+    const partRows = Database.use((db) =>
+      db.select().from(PartTable).where(eq(PartTable.message_id, messageID)).all(),
+    )
+    const parts = partRows.map(
+      (partRow) =>
+        ({
+          ...partRow.data,
+          id: partRow.id,
+          sessionID: partRow.session_id,
+          messageID: partRow.message_id,
+        }) as MessageV2.Part,
+    )
+    const message = { info, parts } as MessageV2.WithParts
+
+    const assistant = Database.use((db) =>
+      db
+        .select()
+        .from(MessageTable)
+        .where(
+          and(
+            eq(MessageTable.session_id, sessionID),
+            sql`json_extract(${MessageTable.data}, '$.role') = 'assistant'`,
+            sql`json_extract(${MessageTable.data}, '$.parentID') = ${messageID}`,
+          ),
+        )
+        .orderBy(desc(MessageTable.time_created), desc(MessageTable.id))
+        .get(),
+    )
+    const assistantMsg =
+      assistant && typeof assistant.data === "object" && assistant.data !== null
+        ? ({
+            info: { ...assistant.data, id: assistant.id, sessionID: assistant.session_id },
+            parts: Database.use((db) =>
+              db
+                .select()
+                .from(PartTable)
+                .where(eq(PartTable.message_id, assistant.id))
+                .all()
+                .map(
+                  (partRow) =>
+                    ({
+                      ...partRow.data,
+                      id: partRow.id,
+                      sessionID: partRow.session_id,
+                      messageID: partRow.message_id,
+                    }) as MessageV2.Part,
+                ),
+            ),
+          } as MessageV2.WithParts)
+        : undefined
+    const processed =
+      assistantMsg?.info.role === "assistant" &&
+      !!assistantMsg.info.finish &&
+      !["tool-calls", "unknown"].includes(assistantMsg.info.finish) &&
+      !MessageV2.assistantNeedsToolFollowup([message, assistantMsg], info, assistantMsg.info, assistantMsg)
+
+    if (assistantMsg && !processed) {
+      const migrated = { ...(row.data as Record<string, unknown>), delivery: "immediate" }
+      yield* Effect.sync(() =>
+        Database.use((db) =>
+          db
+            .update(MessageTable)
+            .set({
+              data: migrated as typeof row.data,
+              time_updated: sql`${MessageTable.time_updated}`,
+            })
+            .where(eq(MessageTable.id, messageID))
+            .run(),
+        ),
+      )
+      continue
+    }
+
+    if (!processed) {
+      const data = queueDataFromMessage(message)
+      yield* Effect.sync(() =>
+        Database.transaction((db) => {
+          PromptQueue.sqliteEnqueueWithDb(db, sessionID, data)
+          db.delete(PartTable).where(eq(PartTable.message_id, messageID)).run()
+          db.delete(MessageTable).where(eq(MessageTable.id, messageID)).run()
+        }),
+      )
+      touched.add(sessionID)
+      continue
+    }
+
+    const migrated = { ...(row.data as Record<string, unknown>), delivery: "immediate" }
+    yield* Effect.sync(() =>
+      Database.use((db) =>
+        db
+          .update(MessageTable)
+          .set({
+            data: migrated as typeof row.data,
+            time_updated: sql`${MessageTable.time_updated}`,
+          })
+          .where(eq(MessageTable.id, messageID))
+          .run(),
+      ),
+    )
+  }
+
+  if (touched.size === 0) return
+  log.info("migrated deferred user messages to prompt queue", { sessions: touched.size })
+})
 
 export const layer = Layer.effect(
   Service,
@@ -118,13 +255,15 @@ export const layer = Layer.effect(
           }
         }),
       },
+      {
+        name: "deferred_user_messages_to_prompt_queue",
+        run: deferredUserMessagesToPromptQueue,
+      },
     ]
 
     yield* Effect.gen(function* () {
       if (migrations.length === 0) return
 
-      // Migrations run in a background fiber, so they must be resumable until
-      // their completion row is written.
       for (const migration of migrations) {
         const completed = Database.use((db) =>
           db
@@ -150,7 +289,6 @@ export const layer = Layer.effect(
         Effect.logError("failed to run data migrations").pipe(Effect.annotateLogs("cause", cause)),
       ),
       Effect.ignore,
-      Effect.forkScoped,
     )
     return Service.of({})
   }),

@@ -24,6 +24,10 @@ import {
 import { FOOTER_MENU_ROWS, RunFooterMenu } from "./footer.menu"
 import { RunFooterSubagentBody } from "./footer.subagent"
 import { RunPromptBody, createPromptState, hintFlags } from "./footer.prompt"
+import { queueDockRows } from "@/queue/queue-dock"
+import { queueEditCommitPlan, queueEditSwitchPlan } from "@/queue/edit"
+import { RunQueueDock } from "./footer.queue-dock"
+import type { QueueControl } from "./types"
 import { RunPermissionBody } from "./footer.permission"
 import { RunQuestionBody } from "./footer.question"
 import { printableBinding, promptBindings, promptHit, promptInfo } from "./prompt.shared"
@@ -80,6 +84,7 @@ type RunFooterViewProps = {
   agent: string
   onSubmit: (input: RunPrompt) => boolean
   onQueue: (input: RunPrompt) => void
+  queueControl?: () => QueueControl | undefined
   onPermissionReply: (input: PermissionReply) => void | Promise<void>
   onQuestionReply: (input: QuestionReply) => void | Promise<void>
   onQuestionReject: (input: QuestionReject) => void | Promise<void>
@@ -92,12 +97,38 @@ type RunFooterViewProps = {
   onModelSelect: (model: NonNullable<RunInput["model"]>) => void
   onVariantSelect: (variant: string | undefined) => void
   onRows: (rows: number) => void
-  onLayout: (input: { route: FooterPromptRoute; autocomplete: boolean; subagentRows: number }) => void
+  onLayout: (input: {
+    route: FooterPromptRoute
+    autocomplete: boolean
+    subagentRows: number
+    queueRows: number
+  }) => void
   onStatus: (text: string) => void
   onSubagentSelect?: (sessionID: string | undefined) => void
 }
 
 export { TEXTAREA_MIN_ROWS, TEXTAREA_MAX_ROWS } from "./footer.prompt"
+
+export function queuedSendPlan(items: FooterState["queued"], id: string, editingID: string | undefined) {
+  const index = items.findIndex((item) => item.id === id)
+  const nextID = index < 0 ? undefined : items[index + 1]?.id
+  if (editingID && editingID !== id) {
+    return {
+      saveID: editingID,
+      editID: editingID,
+      clearEditor: false,
+      pauseDrain: true,
+      resumeDrain: false,
+    }
+  }
+  return {
+    saveID: editingID === id ? id : undefined,
+    editID: nextID,
+    clearEditor: true,
+    pauseDrain: !!nextID,
+    resumeDrain: !nextID,
+  }
+}
 
 export function RunFooterView(props: RunFooterViewProps) {
   const term = useTerminalDimensions()
@@ -157,7 +188,10 @@ export function RunFooterView(props: RunFooterViewProps) {
   const busy = createMemo(() => props.state().phase === "running")
   const armed = createMemo(() => props.state().interrupt > 0)
   const exiting = createMemo(() => props.state().exit > 0)
-  const queue = createMemo(() => props.state().queue)
+  const queued = createMemo(() => props.state().queued)
+  const [editingQueueID, setEditingQueueID] = createSignal<string | undefined>()
+  const [queueEscapeGuard, setQueueEscapeGuard] = createSignal(false)
+  const queueControl = () => props.queueControl?.()
   const duration = createMemo(() => props.state().duration)
   const usage = createMemo(() => props.state().usage)
   const interruptKey = createMemo(() => interrupt() || "/exit")
@@ -251,7 +285,87 @@ export function RunFooterView(props: RunFooterViewProps) {
 
     openTab(next.sessionID)
   }
-  const composer = createPromptState({
+
+  let composer!: ReturnType<typeof createPromptState>
+
+  const saveEditorToQueue = async (id: string) => {
+    const prompt = composer.currentPrompt()
+    if (queueEditCommitPlan({ text: prompt.text }).type === "remove") {
+      await queueControl()?.remove(id)
+      if (editingQueueID() === id) {
+        setEditingQueueID(undefined)
+        composer.restorePrompt({ text: "", parts: [] })
+      }
+      return "removed" as const
+    }
+    return queueControl()?.update(id, prompt) ? ("saved" as const) : false
+  }
+
+  const cancelQueueEdit = () => {
+    const id = editingQueueID()
+    if (!id) return false
+    void Promise.resolve(queueControl()?.resumeDrain?.()).catch(() => {})
+    setEditingQueueID(undefined)
+    composer.restorePrompt({ text: "", parts: [] })
+    setQueueEscapeGuard(true)
+    return true
+  }
+
+  const promptFromPreview = (id: string) => {
+    const item = queued().find((entry) => entry.id === id)
+    if (!item) return
+    return { text: item.text, parts: [], queueID: id, queued: true } satisfies RunPrompt
+  }
+
+  const beginEditQueue = async (id: string) => {
+    const control = queueControl()
+    const prompt = control?.get(id) ?? (control?.load ? await control.load(id) : promptFromPreview(id))
+    if (!prompt) return
+    await control?.pauseDrain?.()
+    setEditingQueueID(id)
+    composer.restorePrompt(prompt)
+    composer.focus()
+  }
+
+  const sendQueuedAndMaybeEditNext = async (id: string) => {
+    const plan = queuedSendPlan(queued(), id, editingQueueID())
+    const saveResult = plan.saveID ? await saveEditorToQueue(plan.saveID) : undefined
+    if (saveResult === "removed") {
+      if (plan.resumeDrain) await queueControl()?.resumeDrain?.()
+      if (plan.editID) await beginEditQueue(plan.editID)
+      else composer.focus()
+      return
+    }
+    if (plan.pauseDrain) await queueControl()?.pauseDrain?.()
+    await queueControl()?.sendNow(id)
+    if (plan.resumeDrain) await queueControl()?.resumeDrain?.()
+    if (plan.clearEditor) {
+      setEditingQueueID(undefined)
+      composer.restorePrompt({ text: "", parts: [] })
+    }
+    if (plan.editID) await beginEditQueue(plan.editID)
+    else composer.focus()
+  }
+
+  const cycleEditQueue = async (dir: -1 | 1) => {
+    const items = queued()
+    if (!items.length) return
+    const current = editingQueueID()
+    if (!current) {
+      const index = dir === 1 ? 0 : items.length - 1
+      await beginEditQueue(items[index]!.id)
+      return
+    }
+    const index = items.findIndex((item) => item.id === current)
+    if (index < 0) {
+      await beginEditQueue(items[0]!.id)
+      return
+    }
+    const next = items[(index + dir + items.length) % items.length]
+    if (next) await beginEditQueue(queueEditSwitchPlan({ currentID: current, targetID: next.id }).editID)
+  }
+
+  composer = createPromptState({
     directory: props.directory,
     findFiles: props.findFiles,
     agents: props.agents,
@@ -265,8 +379,41 @@ export function RunFooterView(props: RunFooterViewProps) {
     width: () => term().width,
     theme,
     history: props.history,
-    onSubmit: props.onSubmit,
+    onSubmit: (input) => {
+      if (!input.queued) void Promise.resolve(queueControl()?.resumeDrain?.()).catch(() => {})
+      return props.onSubmit(input)
+    },
     onQueue: props.onQueue,
+    editingQueueID,
+    queueEscapeGuard,
+    clearQueueEscapeGuard: () => setQueueEscapeGuard(false),
+    onUpdateQueued: (id, prompt) => {
+      if (queueEditCommitPlan({ text: prompt.text }).type === "remove") {
+        void Promise.resolve(queueControl()?.remove(id)).then(() => {
+          if (editingQueueID() === id) {
+            setEditingQueueID(undefined)
+            composer.restorePrompt({ text: "", parts: [] })
+          }
+        })
+        return
+      }
+      queueControl()?.update(id, prompt)
+    },
+    onEditQueue: () => {
+      if (editingQueueID()) void cycleEditQueue(-1).catch(() => {})
+      else {
+        const id = queued()[0]?.id
+        if (id) void beginEditQueue(id).catch(() => {})
+      }
+    },
+    onEditQueueNext: () => {
+      if (!editingQueueID()) return
+      void cycleEditQueue(1).catch(() => {})
+    },
+    onCancelQueueEdit: cancelQueueEdit,
+    onSendQueuedNow: (id) => {
+      void sendQueuedAndMaybeEditNext(id).catch(() => {})
+    },
     onCycle: props.onCycle,
     onInterrupt: props.onInterrupt,
     onInputClear: props.onInputClear,
@@ -360,6 +507,10 @@ export function RunFooterView(props: RunFooterViewProps) {
       route: route(),
       autocomplete: menu(),
       subagentRows: subagentMenuRows(),
+      queueRows: queueDockRows({
+        count: queued().length,
+        editing: !!editingQueueID(),
+      }),
     })
   })
 
@@ -403,9 +554,33 @@ export function RunFooterView(props: RunFooterViewProps) {
                 backgroundColor={panel() ? "transparent" : theme().surface}
                 gap={0}
               >
-                <box id="run-direct-footer-body" width="100%" flexGrow={1} flexShrink={1} flexDirection="column">
+                <box
+                  id="run-direct-footer-body"
+                  width="100%"
+                  flexGrow={1}
+                  flexShrink={1}
+                  minHeight={0}
+                  flexDirection="column"
+                >
                   <Switch>
                     <Match when={active().type === "prompt" && route().type === "composer"}>
+                      <box id="run-direct-footer-queue-slot" width="100%" flexShrink={0} flexDirection="column">
+                      <RunQueueDock
+                        items={queued}
+                        theme={theme}
+                        keybinds={props.keybinds}
+                        disabled={busy()}
+                        editing={() => !!editingQueueID()}
+                        editingMessageID={editingQueueID}
+                        onEdit={(id) => {
+                          void beginEditQueue(id).catch(() => {})
+                        }}
+                        onSendNow={(id) => {
+                          void sendQueuedAndMaybeEditNext(id).catch(() => {})
+                        }}
+                      />
+                      </box>
+                      <box id="run-direct-footer-prompt-slot" width="100%" flexGrow={1} flexShrink={1} minHeight={0}>
                       <RunPromptBody
                         theme={theme}
                         placeholder={composer.placeholder}
@@ -415,6 +590,7 @@ export function RunFooterView(props: RunFooterViewProps) {
                         onContentChange={composer.onContentChange}
                         bind={composer.bind}
                       />
+                      </box>
                     </Match>
                     <Match when={selectingSubagent()}>
                       <RunSubagentSelectBody
@@ -663,11 +839,6 @@ export function RunFooterView(props: RunFooterViewProps) {
                         when={shell()}
                         fallback={
                           <>
-                            <Show when={queue() > 0}>
-                              <text id="run-direct-footer-queue" fg={theme().muted} wrapMode="none" truncate>
-                                {queue()} queued
-                              </text>
-                            </Show>
                             <Show when={usage().length > 0}>
                               <text id="run-direct-footer-usage" fg={theme().muted} wrapMode="none" truncate>
                                 {usage()}

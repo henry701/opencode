@@ -19,6 +19,7 @@ import path from "path"
 import { Session } from "@/session/session"
 import { LLM } from "../../src/session/llm"
 import { SessionPrompt } from "../../src/session/prompt"
+import { SessionPromptQueue } from "../../src/session/prompt-queue"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionSummary } from "../../src/session/summary"
 import { MessageV2 } from "../../src/session/message-v2"
@@ -165,6 +166,7 @@ function makeHttp() {
     TestLLMServer.layer,
     SessionSummary.defaultLayer,
     SessionPrompt.layer.pipe(
+      Layer.provide(SessionPromptQueue.defaultLayer),
       Layer.provide(SessionRevert.defaultLayer),
       Layer.provide(Image.defaultLayer),
       Layer.provide(Reference.defaultLayer),

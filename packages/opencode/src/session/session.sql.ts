@@ -5,7 +5,7 @@ import type { SessionMessage } from "@opencode-ai/core/session-message"
 import type { Snapshot } from "../snapshot"
 import type { Permission } from "../permission"
 import type { ProjectID } from "../project/schema"
-import type { SessionID, MessageID, PartID } from "./schema"
+import type { SessionID, MessageID, PartID, QueueItemID } from "./schema"
 import type { WorkspaceID } from "../control-plane/schema"
 import { Timestamps } from "../storage/schema.sql"
 
@@ -126,6 +126,21 @@ export const SessionMessageTable = sqliteTable(
     index("session_message_session_type_idx").on(table.session_id, table.type),
     index("session_message_time_created_idx").on(table.time_created),
   ],
+)
+
+export const PromptQueueTable = sqliteTable(
+  "prompt_queue",
+  {
+    id: text().$type<QueueItemID>().primaryKey(),
+    session_id: text()
+      .$type<SessionID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    position: integer().notNull(),
+    ...Timestamps,
+    data: text({ mode: "json" }).notNull(),
+  },
+  (table) => [index("prompt_queue_session_position_idx").on(table.session_id, table.position)],
 )
 
 export const PermissionTable = sqliteTable("permission", {

@@ -13,10 +13,13 @@
 //      local sessions,
 //   4. runs the prompt queue until the footer closes.
 import { createOpencodeClient } from "@opencode-ai/sdk/v2"
+import { MemoryPromptQueue } from "@/queue/prompt-queue"
+import { SessionID } from "@/session/schema"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { createRunDemo } from "./demo"
 import { resolveDiffStyle, resolveFooterKeybinds, resolveModelInfo, resolveSessionInfo } from "./runtime.boot"
 import { createRuntimeLifecycle } from "./runtime.lifecycle"
+import { buildQueuePromptPayload, buildQueueSendPayload, runPromptFromQueueDetail } from "./runtime.queue-remote"
 import { recordRunSpanError, setRunSpanAttributes, withRunSpan } from "./otel"
 import { trace } from "./trace"
 import { cycleVariant, formatModelLabel, resolveSavedVariant, resolveVariant, saveVariant } from "./variant.shared"
@@ -525,10 +528,99 @@ async function runInteractiveRuntime(input: RunRuntimeInput): Promise<void> {
 
         const mod = await import("./runtime.queue")
         const createSession = input.createSession
+        const memoryQueue = new MemoryPromptQueue()
         await mod.runPromptQueue({
           footer,
           initialInput: input.initialInput,
           trace: log,
+          demo: !!state.demo,
+          sessionID: state.sessionID ? SessionID.make(state.sessionID) : undefined,
+          agent: state.agent,
+          model: state.model,
+          memoryQueue,
+          enqueueRemote: state.demo
+            ? undefined
+            : async (prompt) => {
+                await ensureStream()
+                if (!state.sessionID) return
+                await ctx.sdk.session.queue.enqueue({
+                  sessionID: state.sessionID,
+                  ...buildQueuePromptPayload({
+                    agent: state.agent,
+                    model: state.model,
+                    variant: state.activeVariant,
+                    prompt,
+                  }),
+                })
+              },
+          updateQueueRemote: state.demo
+            ? undefined
+            : async (queueID, prompt) => {
+                await ensureStream()
+                if (!state.sessionID) return
+                await ctx.sdk.session.queue.update({
+                  sessionID: state.sessionID,
+                  queueID,
+                  body: buildQueuePromptPayload({
+                    agent: state.agent,
+                    model: state.model,
+                    variant: state.activeVariant,
+                    prompt,
+                  }),
+                })
+              },
+          removeQueueRemote: state.demo
+            ? undefined
+            : async (queueID) => {
+                await ensureStream()
+                if (!state.sessionID) return
+                await ctx.sdk.session.queue.remove({
+                  sessionID: state.sessionID,
+                  queueID,
+                })
+              },
+          getQueueRemote: state.demo
+            ? undefined
+            : async (queueID) => {
+                await ensureStream()
+                if (!state.sessionID) return
+                const result = await ctx.sdk.session.queue.get({
+                  sessionID: state.sessionID,
+                  queueID,
+                })
+                if (!result.data) return
+                return runPromptFromQueueDetail(result.data)
+              },
+          sendQueueRemote: state.demo
+            ? undefined
+            : async (queueID, prompt) => {
+                await ensureStream()
+                if (!state.sessionID) return
+                await ctx.sdk.session.queue.send({
+                  sessionID: state.sessionID,
+                  queueID,
+                  body: buildQueueSendPayload({
+                    agent: state.agent,
+                    model: state.model,
+                    variant: state.activeVariant,
+                    prompt,
+                  }),
+                })
+              },
+          pauseQueueDrainRemote: state.demo
+            ? undefined
+            : async () => {
+                await ensureStream()
+                if (!state.sessionID) return
+                await ctx.sdk.session.queue.drain.pause({ sessionID: state.sessionID })
+              },
+          resumeQueueDrainRemote: state.demo
+            ? undefined
+            : async () => {
+                await ensureStream()
+                if (!state.sessionID) return
+                await ctx.sdk.session.queue.drain.resume({ sessionID: state.sessionID })
+              },
           onSend: (prompt) => {
             state.shown = true
             state.history.push(prompt)
