@@ -33,13 +33,14 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionPromptQueue") {}
 
-const drainPaused = new Map<string, Set<SessionID>>()
+const drainPaused = new Map<string, Map<SessionID, number>>()
+const drainPauseTTL = 30 * 60 * 1000
 
 const pauseState = Effect.fn("SessionPromptQueue.pauseState")(function* () {
   const directory = yield* InstanceState.directory
   const existing = drainPaused.get(directory)
   if (existing) return existing
-  const next = new Set<SessionID>()
+  const next = new Map<SessionID, number>()
   drainPaused.set(directory, next)
   return next
 })
@@ -105,7 +106,7 @@ export const layer = Layer.effect(
 
     const pauseDrain = Effect.fn("SessionPromptQueue.pauseDrain")(function* (sessionID: SessionID) {
       const paused = yield* pauseState()
-      paused.add(sessionID)
+      paused.set(sessionID, Date.now() + drainPauseTTL)
     })
 
     const resumeDrain = Effect.fn("SessionPromptQueue.resumeDrain")(function* (sessionID: SessionID) {
@@ -114,7 +115,12 @@ export const layer = Layer.effect(
     })
 
     const drainPausedFor = Effect.fn("SessionPromptQueue.drainPaused")(function* (sessionID: SessionID) {
-      return (yield* pauseState()).has(sessionID)
+      const paused = yield* pauseState()
+      const expires = paused.get(sessionID)
+      if (!expires) return false
+      if (expires > Date.now()) return true
+      paused.delete(sessionID)
+      return false
     })
 
     return Service.of({

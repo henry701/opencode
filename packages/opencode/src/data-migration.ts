@@ -105,7 +105,22 @@ export const deferredUserMessagesToPromptQueue = Effect.gen(function* () {
       !["tool-calls", "unknown"].includes(assistantMsg.info.finish) &&
       !MessageV2.assistantNeedsToolFollowup([message, assistantMsg], info, assistantMsg.info, assistantMsg)
 
-    if (assistantMsg && !processed) continue
+    if (assistantMsg && !processed) {
+      const migrated = { ...(row.data as Record<string, unknown>), delivery: "immediate" }
+      yield* Effect.sync(() =>
+        Database.use((db) =>
+          db
+            .update(MessageTable)
+            .set({
+              data: migrated as typeof row.data,
+              time_updated: sql`${MessageTable.time_updated}`,
+            })
+            .where(eq(MessageTable.id, messageID))
+            .run(),
+        ),
+      )
+      continue
+    }
 
     if (!processed) {
       const data = queueDataFromMessage(message)

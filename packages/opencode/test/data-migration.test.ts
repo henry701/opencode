@@ -274,7 +274,12 @@ describe("data migrations", () => {
 
     await Effect.runPromise(deferredUserMessagesToPromptQueue)
 
-    expect(Database.use((db) => db.select().from(MessageTable).where(eq(MessageTable.id, userID)).get())).toBeDefined()
+    expect(Database.use((db) => db.select().from(MessageTable).where(eq(MessageTable.id, userID)).get()?.data)).toEqual(
+      expect.objectContaining({
+        role: "user",
+        delivery: "immediate",
+      }),
+    )
     expect(Database.use((db) => db.select().from(MessageTable).where(eq(MessageTable.id, assistantID)).get())).toBeDefined()
     expect(Database.use((db) => db.select().from(PromptQueueTable).where(eq(PromptQueueTable.session_id, sessionID)).all()))
       .toEqual([])
