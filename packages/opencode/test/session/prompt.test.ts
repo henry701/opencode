@@ -1317,31 +1317,27 @@ noLLMServer.instance("sending a stale queued prompt fails instead of dying", () 
   }),
 )
 
-raceNoLLMServer.instance("sending a queued prompt while busy fails before mutating the queue", () =>
+it.instance("sending a queued prompt while busy steers and removes it from the queue", () =>
   Effect.gen(function* () {
-    processorCreateStarted.length = 0
-    yield* Effect.addFinalizer(() =>
-      Effect.sync(() => {
-        processorCreateStarted.length = 0
-      }),
-    )
-
+    const { llm } = yield* useServerConfig(providerCfg)
+    const openGate = yield* Deferred.make<void>()
     const prompt = yield* SessionPrompt.Service
     const promptQueue = yield* SessionPromptQueue.Service
     const sessions = yield* Session.Service
     const chat = yield* sessions.create({ title: "Busy queue send" })
 
-    yield* prompt.prompt({
-      sessionID: chat.id,
-      agent: "build",
-      noReply: true,
-      parts: [{ type: "text", text: "open" }],
-    })
+    yield* llm.hold("open", deferredAsPromise(openGate))
+    yield* llm.text("queued-done")
 
-    const firstCreate = defer<void>()
-    processorCreateStarted.push(firstCreate.resolve)
-    const running = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
-    yield* Effect.promise(() => firstCreate.promise)
+    const running = yield* prompt
+      .prompt({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "open" }],
+      })
+      .pipe(Effect.forkChild)
+    yield* llm.wait(1)
 
     const item = yield* prompt.queueEnqueue({
       sessionID: chat.id,
@@ -1350,26 +1346,36 @@ raceNoLLMServer.instance("sending a queued prompt while busy fails before mutati
       parts: [{ type: "text", text: "queued" }],
     })
 
-    const exit = yield* prompt
+    const sent = yield* prompt
       .queueSend({
         sessionID: chat.id,
         queueID: item.id,
       })
-      .pipe(
-        Effect.timeoutOrElse({
-          duration: "200 millis",
-          orElse: () => Effect.fail(new Error("queueSend did not reject while busy")),
-        }),
-        Effect.exit,
-      )
+      .pipe(Effect.forkChild)
 
-    expect(Exit.isFailure(exit)).toBe(true)
-    if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("SessionBusyError")
-    expect((yield* promptQueue.list(chat.id)).map((entry) => entry.id)).toContain(item.id)
+    yield* pollWithTimeout(
+      sessions.messages({ sessionID: chat.id }).pipe(
+        Effect.map((msgs) =>
+          msgs.some(
+            (msg) =>
+              msg.info.role === "user" &&
+              msg.info.delivery === "immediate" &&
+              msg.parts.some((part) => part.type === "text" && part.text === "queued"),
+          )
+            ? true
+            : undefined,
+        ),
+      ),
+      "timed out waiting for queued send-now user message",
+    )
+    expect((yield* promptQueue.list(chat.id)).map((entry) => entry.id)).not.toContain(item.id)
 
-    yield* prompt.cancel(chat.id)
-    yield* Fiber.await(running)
+    yield* Deferred.succeed(openGate, void 0)
+    expect(Exit.isSuccess(yield* Fiber.await(running))).toBe(true)
+    expect(Exit.isSuccess(yield* Fiber.await(sent))).toBe(true)
+    expect(JSON.stringify(yield* llm.inputs)).toContain("queued")
   }),
+  5_000,
 )
 
 it.instance(

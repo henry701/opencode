@@ -104,10 +104,7 @@ export function QueueDock(props: {
     return undefined
   })
 
-  const itemText = (item: QueuedItem) => {
-    if (props.editingMessageID?.() === item.id) return item.text
-    return truncateQueueLine(item.text)
-  }
+  const itemText = (item: QueuedItem) => truncateQueueLine(item.text)
 
   return (
     <Show when={total() > 0 || props.editing?.()}>
@@ -164,7 +161,7 @@ export function QueueDock(props: {
                       fg={props.editingMessageID?.() === item.id ? props.theme().text : props.theme().textMuted}
                       flexGrow={1}
                       flexShrink={1}
-                      wrapMode={props.editingMessageID?.() === item.id ? "word" : "none"}
+                      wrapMode="none"
                     >
                       {itemText(item)}
                     </text>

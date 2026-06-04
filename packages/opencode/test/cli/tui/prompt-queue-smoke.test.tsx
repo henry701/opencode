@@ -91,6 +91,22 @@ test("queue dock lists deferred messages in fifo order with screencap artifact",
   expect(frame).toContain("1. first queued")
 })
 
+test("queue dock keeps active queued edit preview to one line", async () => {
+  const frame = await renderFrame(() => (
+    <PromptQueueDock
+      items={() => [{ id: "pqu_1", text: "line one\nline two\nline three" }]}
+      editing={() => true}
+      editingMessageID={() => "pqu_1"}
+      onEdit={() => {}}
+      onSendNow={() => {}}
+    />
+  ))
+
+  expect(frame).toContain("Editing queued message")
+  expect(frame).toContain("1. line one")
+  expect(frame).not.toContain("line two")
+})
+
 test("runs serve API smoke script when bash is available", async () => {
   if (!Bun.which("bash") || !Bun.which("curl") || !Bun.which("jq")) return
 

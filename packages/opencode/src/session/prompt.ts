@@ -1834,7 +1834,6 @@ export const layer = Layer.effect(
       queueID: QueueItemID,
       message?: MessageV2.WithParts,
     ) {
-      yield* state.assertNotBusy(sessionID)
       if (message) {
         const ok = yield* promptQueue.update(sessionID, queueID, queueDataFromMessage(message))
         if (!ok) return yield* new QueueItemNotFoundError({ message: "Queued message not found" })
