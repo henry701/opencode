@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
-import { eq } from "drizzle-orm"
+import { asc, eq } from "drizzle-orm"
 import { deferredUserMessagesToPromptQueue } from "@/data-migration"
 import { ModelID, ProviderID } from "@/provider/schema"
 import { ProjectID } from "@/project/schema"
@@ -56,6 +56,22 @@ function insertMessage(input: {
         time_created: input.time,
         time_updated: input.time,
         data: input.data,
+      })
+      .run(),
+  )
+}
+
+function insertTextPart(input: { id: PartID; messageID: MessageID; sessionID: SessionID; time: number; text: string }) {
+  Database.use((db) =>
+    db
+      .insert(PartTable)
+      .values({
+        id: input.id,
+        message_id: input.messageID,
+        session_id: input.sessionID,
+        time_created: input.time,
+        time_updated: input.time,
+        data: { type: "text", text: input.text } as typeof PartTable.$inferInsert.data,
       })
       .run(),
   )
@@ -146,5 +162,69 @@ describe("data migrations", () => {
     expect(Database.use((db) => db.select().from(PromptQueueTable).where(eq(PromptQueueTable.session_id, sessionID)).all()))
       .toEqual([])
     expect(Database.use((db) => db.select().from(PartTable).where(eq(PartTable.message_id, userID)).all())).toHaveLength(1)
+  })
+
+  test("deferred user migration preserves prompt queue order by message creation time", async () => {
+    const sessionID = SessionID.make("ses_data_migration_deferred_order")
+    const firstID = MessageID.ascending()
+    const secondID = MessageID.ascending()
+    const now = Date.now()
+
+    seedSession(sessionID)
+    insertMessage({
+      id: secondID,
+      sessionID,
+      time: now + 2,
+      data: {
+        role: "user",
+        time: { created: now + 2 },
+        agent: "build",
+        model: { providerID: ProviderID.make("test"), modelID: ModelID.make("test-model") },
+        delivery: "deferred",
+      } satisfies Omit<MessageV2.User, "id" | "sessionID">,
+    })
+    insertMessage({
+      id: firstID,
+      sessionID,
+      time: now + 1,
+      data: {
+        role: "user",
+        time: { created: now + 1 },
+        agent: "build",
+        model: { providerID: ProviderID.make("test"), modelID: ModelID.make("test-model") },
+        delivery: "deferred",
+      } satisfies Omit<MessageV2.User, "id" | "sessionID">,
+    })
+    insertTextPart({
+      id: PartID.ascending(),
+      messageID: secondID,
+      sessionID,
+      time: now + 2,
+      text: "second queued",
+    })
+    insertTextPart({
+      id: PartID.ascending(),
+      messageID: firstID,
+      sessionID,
+      time: now + 1,
+      text: "first queued",
+    })
+
+    await Effect.runPromise(deferredUserMessagesToPromptQueue)
+
+    const rows = Database.use((db) =>
+      db
+        .select()
+        .from(PromptQueueTable)
+        .where(eq(PromptQueueTable.session_id, sessionID))
+        .orderBy(asc(PromptQueueTable.position))
+        .all(),
+    )
+
+    expect(rows.map((row) => row.position)).toEqual([0, 1])
+    expect(rows.map((row) => (row.data as { parts: { type: string; text?: string }[] }).parts[0]?.text)).toEqual([
+      "first queued",
+      "second queued",
+    ])
   })
 })

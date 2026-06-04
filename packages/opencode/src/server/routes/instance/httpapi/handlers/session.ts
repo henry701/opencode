@@ -526,7 +526,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
     }) {
       yield* requireSession(ctx.params.sessionID)
-      yield* promptQueueSvc.resumeDrain(ctx.params.sessionID)
+      yield* promptSvc.resumeQueueDrain(ctx.params.sessionID)
       return true
     })
 

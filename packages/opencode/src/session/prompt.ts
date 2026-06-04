@@ -113,6 +113,7 @@ export interface Interface {
     MessageV2.WithParts,
     Image.Error | QueueItemNotFoundError | Session.BusyError
   >
+  readonly resumeQueueDrain: (sessionID: SessionID) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionPrompt") {}
@@ -1304,6 +1305,13 @@ export const layer = Layer.effect(
       return yield* sendDeferredNow(input.sessionID, input.queueID)
     })
 
+    const resumeQueueDrain = Effect.fn("SessionPrompt.resumeQueueDrain")(function* (sessionID: SessionID) {
+      yield* promptQueue.resumeDrain(sessionID)
+      const pending = yield* promptQueue.peek(sessionID)
+      if (!pending) return
+      yield* loop({ sessionID }).pipe(Effect.ignore, Effect.forkIn(scope))
+    })
+
     const lastAssistant = Effect.fnUntraced(function* (sessionID: SessionID) {
       const match = yield* sessions.findMessage(sessionID, (m) => m.info.role !== "user").pipe(Effect.orDie)
       if (Option.isSome(match)) return match.value
@@ -1858,6 +1866,7 @@ export const layer = Layer.effect(
       queueEnqueue,
       queueUpdate,
       queueSend,
+      resumeQueueDrain,
     })
   }),
 )

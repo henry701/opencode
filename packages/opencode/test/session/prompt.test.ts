@@ -1273,6 +1273,54 @@ it.instance(
   3_000,
 )
 
+it.instance(
+  "resuming paused queue drain restarts an idle loop with pending queued prompts",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const promptQueue = yield* SessionPromptQueue.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Paused queue resume" })
+
+      yield* llm.text("open-done")
+      yield* llm.text("queued-done")
+      yield* promptQueue.pauseDrain(chat.id)
+
+      yield* prompt.queueEnqueue({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "queued while paused" }],
+      })
+
+      const run = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "open" }],
+        })
+        .pipe(Effect.forkChild)
+
+      expect(Exit.isSuccess(yield* Fiber.await(run))).toBe(true)
+      expect(yield* promptQueue.peek(chat.id)).toBeDefined()
+      expect(JSON.stringify(yield* llm.inputs)).not.toContain("queued while paused")
+
+      yield* prompt.resumeQueueDrain(chat.id)
+
+      yield* pollWithTimeout(
+        promptQueue.peek(chat.id).pipe(Effect.map((next) => (next ? undefined : true))),
+        "timed out waiting for paused queue drain to resume",
+      )
+      yield* pollWithTimeout(
+        llm.inputs.pipe(Effect.map((inputs) => (JSON.stringify(inputs).includes("queued while paused") ? true : undefined))),
+        "timed out waiting for resumed queue prompt to reach the model",
+      )
+    }),
+  5_000,
+)
+
 noLLMServer.instance("queued prompt tools do not mutate live session permissions before dequeue", () =>
   Effect.gen(function* () {
     const prompt = yield* SessionPrompt.Service

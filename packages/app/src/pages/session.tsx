@@ -423,6 +423,20 @@ export default function Page() {
     resumeQueueDrain(sessionID)
   }
 
+  createEffect(
+    on(
+      () => params.id,
+      (id, prev) => {
+        if (!prev || prev === id || !editingQueueMessageID()) return
+        stopEditingQueueMessage()
+        clearFollowupEdit()
+        prompt.reset()
+        resumeQueueDrain(prev)
+      },
+      { defer: true },
+    ),
+  )
+
   createComputed((prev) => {
     const key = sessionKey()
     if (key !== prev) {
@@ -1699,6 +1713,8 @@ export default function Page() {
   })
 
   onCleanup(() => {
+    const sessionID = params.id
+    if (sessionID && editingQueueMessageID()) resumeQueueDrain(sessionID)
     if (reviewFrame !== undefined) cancelAnimationFrame(reviewFrame)
     if (refreshFrame !== undefined) cancelAnimationFrame(refreshFrame)
     if (refreshTimer !== undefined) window.clearTimeout(refreshTimer)

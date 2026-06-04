@@ -186,7 +186,16 @@ export const sqliteList = Effect.fn("PromptQueue.sqliteList")(function* (session
 })
 
 export const sqliteEnqueue = Effect.fn("PromptQueue.sqliteEnqueue")(function* (sessionID: SessionID, data: PromptQueueData) {
-  const existing = yield* sqliteList(sessionID)
+  return yield* Effect.sync(() => Database.use((db) => sqliteEnqueueWithDb(db, sessionID, data)))
+})
+
+export function sqliteEnqueueWithDb(db: Database.TxOrDb, sessionID: SessionID, data: PromptQueueData): QueueItem {
+  const existing = db
+    .select()
+    .from(PromptQueueTable)
+    .where(eq(PromptQueueTable.session_id, sessionID))
+    .orderBy(asc(PromptQueueTable.position))
+    .all()
   const item: QueueItem = {
     id: QueueItemID.ascending(),
     sessionID,
@@ -194,23 +203,18 @@ export const sqliteEnqueue = Effect.fn("PromptQueue.sqliteEnqueue")(function* (s
     time_created: Date.now(),
     data,
   }
-  yield* Effect.sync(() =>
-    Database.use((db) =>
-      db
-        .insert(PromptQueueTable)
-        .values({
-          id: item.id,
-          session_id: sessionID,
-          position: item.position,
-          time_created: item.time_created,
-          time_updated: item.time_created,
-          data,
-        })
-        .run(),
-    ),
-  )
+  db.insert(PromptQueueTable)
+    .values({
+      id: item.id,
+      session_id: sessionID,
+      position: item.position,
+      time_created: item.time_created,
+      time_updated: item.time_created,
+      data,
+    })
+    .run()
   return item
-})
+}
 
 export const sqliteUpdate = Effect.fn("PromptQueue.sqliteUpdate")(function* (
   sessionID: SessionID,

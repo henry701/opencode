@@ -31,6 +31,7 @@ export const deferredUserMessagesToPromptQueue = Effect.gen(function* () {
             sql`json_extract(${MessageTable.data}, '$.delivery') = 'deferred'`,
           ),
         )
+        .orderBy(asc(MessageTable.session_id), asc(MessageTable.time_created), asc(MessageTable.id))
         .all(),
     ),
   )
@@ -84,10 +85,9 @@ export const deferredUserMessagesToPromptQueue = Effect.gen(function* () {
 
     if (!processed) {
       const data = queueDataFromMessage(message)
-      yield* PromptQueue.sqliteEnqueue(sessionID, data)
-
       yield* Effect.sync(() =>
         Database.transaction((db) => {
+          PromptQueue.sqliteEnqueueWithDb(db, sessionID, data)
           db.delete(PartTable).where(eq(PartTable.message_id, messageID)).run()
           db.delete(MessageTable).where(eq(MessageTable.id, messageID)).run()
         }),
