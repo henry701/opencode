@@ -37,7 +37,7 @@ export function dropSessionCaches(store: SessionCache, sessionIDs: Iterable<stri
 
   for (const sessionID of stale) {
     delete store.message[sessionID]
-    delete store.prompt_queue[sessionID]
+    if (store.prompt_queue) delete store.prompt_queue[sessionID]
     delete store.todo[sessionID]
     delete store.session_diff[sessionID]
     delete store.session_status[sessionID]
