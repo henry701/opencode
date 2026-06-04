@@ -77,11 +77,35 @@ export const deferredUserMessagesToPromptQueue = Effect.gen(function* () {
         .orderBy(desc(MessageTable.time_created), desc(MessageTable.id))
         .get(),
     )
-    const finish =
+    const assistantMsg =
       assistant && typeof assistant.data === "object" && assistant.data !== null
-        ? (assistant.data as { finish?: string }).finish
+        ? ({
+            info: { ...assistant.data, id: assistant.id, sessionID: assistant.session_id },
+            parts: Database.use((db) =>
+              db
+                .select()
+                .from(PartTable)
+                .where(eq(PartTable.message_id, assistant.id))
+                .all()
+                .map(
+                  (partRow) =>
+                    ({
+                      ...partRow.data,
+                      id: partRow.id,
+                      sessionID: partRow.session_id,
+                      messageID: partRow.message_id,
+                    }) as MessageV2.Part,
+                ),
+            ),
+          } as MessageV2.WithParts)
         : undefined
-    const processed = !!finish && !["tool-calls", "unknown"].includes(finish)
+    const processed =
+      assistantMsg?.info.role === "assistant" &&
+      !!assistantMsg.info.finish &&
+      !["tool-calls", "unknown"].includes(assistantMsg.info.finish) &&
+      !MessageV2.assistantNeedsToolFollowup([message, assistantMsg], info, assistantMsg.info, assistantMsg)
+
+    if (assistantMsg && !processed) continue
 
     if (!processed) {
       const data = queueDataFromMessage(message)

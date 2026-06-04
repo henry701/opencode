@@ -227,4 +227,56 @@ describe("data migrations", () => {
       "second queued",
     ])
   })
+
+  test("deferred user migration leaves in-flight assistant turns intact", async () => {
+    const sessionID = SessionID.make("ses_data_migration_deferred_inflight")
+    const userID = MessageID.ascending()
+    const assistantID = MessageID.ascending()
+    const now = Date.now()
+
+    seedSession(sessionID)
+    insertMessage({
+      id: userID,
+      sessionID,
+      time: now,
+      data: {
+        role: "user",
+        time: { created: now },
+        agent: "build",
+        model: { providerID: ProviderID.make("test"), modelID: ModelID.make("test-model") },
+        delivery: "deferred",
+      } satisfies Omit<MessageV2.User, "id" | "sessionID">,
+    })
+    insertTextPart({
+      id: PartID.ascending(),
+      messageID: userID,
+      sessionID,
+      time: now,
+      text: "in flight",
+    })
+    insertMessage({
+      id: assistantID,
+      sessionID,
+      time: now + 1,
+      data: {
+        role: "assistant",
+        time: { created: now + 1 },
+        parentID: userID,
+        modelID: ModelID.make("test-model"),
+        providerID: ProviderID.make("test"),
+        mode: "build",
+        agent: "build",
+        path: { cwd: "/tmp/project", root: "/tmp/project" },
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      } satisfies Omit<MessageV2.Assistant, "id" | "sessionID">,
+    })
+
+    await Effect.runPromise(deferredUserMessagesToPromptQueue)
+
+    expect(Database.use((db) => db.select().from(MessageTable).where(eq(MessageTable.id, userID)).get())).toBeDefined()
+    expect(Database.use((db) => db.select().from(MessageTable).where(eq(MessageTable.id, assistantID)).get())).toBeDefined()
+    expect(Database.use((db) => db.select().from(PromptQueueTable).where(eq(PromptQueueTable.session_id, sessionID)).all()))
+      .toEqual([])
+  })
 })

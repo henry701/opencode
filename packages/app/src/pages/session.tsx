@@ -1507,7 +1507,15 @@ export default function Page() {
           resumeDrain: resumeQueueDrain,
         })
       })
-      .catch(fail)
+      .catch((err) => {
+        if (draft.queueID && editingQueueMessageID() === draft.queueID) {
+          stopEditingQueueMessage()
+          clearFollowupEdit()
+          prompt.reset()
+          resumeQueueDrain(draft.sessionID)
+        }
+        fail(err)
+      })
   }
 
   const sendFollowup = (sessionID: string, id: string, opts?: { manual?: boolean }) => {

@@ -186,7 +186,9 @@ export const sqliteList = Effect.fn("PromptQueue.sqliteList")(function* (session
 })
 
 export const sqliteEnqueue = Effect.fn("PromptQueue.sqliteEnqueue")(function* (sessionID: SessionID, data: PromptQueueData) {
-  return yield* Effect.sync(() => Database.use((db) => sqliteEnqueueWithDb(db, sessionID, data)))
+  return yield* Effect.sync(() =>
+    Database.transaction((db) => sqliteEnqueueWithDb(db, sessionID, data), { behavior: "immediate" }),
+  )
 })
 
 export function sqliteEnqueueWithDb(db: Database.TxOrDb, sessionID: SessionID, data: PromptQueueData): QueueItem {
