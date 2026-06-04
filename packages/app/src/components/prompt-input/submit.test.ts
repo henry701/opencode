@@ -20,8 +20,6 @@ const storedSessions: Record<string, Array<{ id: string; title?: string }>> = {}
 const promoted: Array<{ directory: string; sessionID: string }> = []
 const sentShell: string[] = []
 const syncedDirectories: string[] = []
-const queuedDrafts: unknown[] = []
-const promptAsyncCalls: unknown[] = []
 
 let params: { id?: string } = {}
 let selected = "/repo/worktree-a"
@@ -47,10 +45,7 @@ const clientFor = (directory: string) => {
         return { data: undefined }
       },
       prompt: async () => ({ data: undefined }),
-      promptAsync: async (input: unknown) => {
-        promptAsyncCalls.push(input)
-        return { data: undefined }
-      },
+      promptAsync: async () => ({ data: undefined }),
       command: async () => ({ data: undefined }),
       abort: async () => ({ data: undefined }),
     },
@@ -216,8 +211,6 @@ beforeEach(() => {
   params = {}
   sentShell.length = 0
   syncedDirectories.length = 0
-  queuedDrafts.length = 0
-  promptAsyncCalls.length = 0
   selected = "/repo/worktree-a"
   variant = undefined
   for (const key of Object.keys(storedSessions)) delete storedSessions[key]
@@ -348,119 +341,5 @@ describe("prompt submit worktree selection", () => {
 
     expect(storedSessions["/repo/worktree-a"]).toEqual([{ id: "session-1", title: "New session 1" }])
     expect(optimisticSeeded).toEqual([true])
-  })
-})
-
-describe("prompt submit queue mode", () => {
-  test("queueMode routes existing sessions through onQueue", async () => {
-    params = { id: "session-1" }
-
-    const submit = createPromptSubmit({
-      info: () => ({ id: "session-1" }),
-      imageAttachments: () => [],
-      commentCount: () => 0,
-      autoAccept: () => false,
-      mode: () => "normal",
-      working: () => false,
-      editor: () => undefined,
-      queueScroll: () => undefined,
-      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
-      addToHistory: () => undefined,
-      resetHistoryNavigation: () => undefined,
-      setMode: () => undefined,
-      setPopover: () => undefined,
-      queueMode: () => true,
-      resetQueueMode: () => undefined,
-      onQueue: (draft) => {
-        queuedDrafts.push(draft)
-      },
-      onSubmit: () => undefined,
-    })
-
-    const event = { preventDefault: () => undefined } as unknown as Event
-
-    await submit.handleSubmit(event)
-
-    expect(queuedDrafts).toHaveLength(1)
-    expect(promptAsyncCalls).toHaveLength(0)
-  })
-
-  test("shouldQueue routes existing sessions through onQueue", async () => {
-    params = { id: "session-1" }
-
-    const submit = createPromptSubmit({
-      info: () => ({ id: "session-1" }),
-      imageAttachments: () => [],
-      commentCount: () => 0,
-      autoAccept: () => false,
-      mode: () => "normal",
-      working: () => false,
-      editor: () => undefined,
-      queueScroll: () => undefined,
-      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
-      addToHistory: () => undefined,
-      resetHistoryNavigation: () => undefined,
-      setMode: () => undefined,
-      setPopover: () => undefined,
-      shouldQueue: () => true,
-      onQueue: (draft) => {
-        queuedDrafts.push(draft)
-      },
-      onSubmit: () => undefined,
-    })
-
-    const event = { preventDefault: () => undefined } as unknown as Event
-
-    await submit.handleSubmit(event)
-
-    expect(queuedDrafts).toHaveLength(1)
-    expect(promptAsyncCalls).toHaveLength(0)
-  })
-})
-
-describe("sendFollowupDraft delivery", () => {
-  test("forwards delivery to promptAsync", async () => {
-    const { sendFollowupDraft } = await import("./submit")
-    const calls: unknown[] = []
-
-    await sendFollowupDraft({
-      client: {
-        session: {
-          promptAsync: async (input: unknown) => {
-            calls.push(input)
-            return { data: undefined }
-          },
-          command: async () => ({ data: undefined }),
-        },
-      } as never,
-      sync: {
-        session: {
-          optimistic: {
-            add: () => undefined,
-            remove: () => undefined,
-          },
-        },
-      } as never,
-      serverSync: {
-        child: () => [{}, () => undefined],
-      } as never,
-      draft: {
-        sessionID: "session-1",
-        sessionDirectory: "/repo/main",
-        prompt: [{ type: "text", content: "follow up", start: 0, end: 9 }],
-        context: [],
-        agent: "agent",
-        model: { providerID: "provider", modelID: "model" },
-      },
-      delivery: "deferred",
-      optimisticBusy: false,
-    })
-
-    expect(calls).toEqual([
-      expect.objectContaining({
-        delivery: "deferred",
-        sessionID: "session-1",
-      }),
-    ])
   })
 })

@@ -284,8 +284,6 @@ export const dict = {
   "prompt.attachment.remove": "Remove attachment",
   "prompt.action.send": "Send",
   "prompt.action.stop": "Stop",
-  "prompt.action.queue": "Queue message (Alt+Enter)",
-  "prompt.action.sendDirect": "Send directly",
 
   "prompt.toast.pasteUnsupported.title": "Unsupported attachment",
   "prompt.toast.pasteUnsupported.description": "Only images, PDFs, or text files can be attached here.",
@@ -533,6 +531,8 @@ export const dict = {
   "home.projects": "Projects",
   "home.project.add": "Add project",
   "home.sessions.search.placeholder": "Search sessions",
+  "home.sessions.search.sessions": "Sessions",
+  "home.sessions.search.noResults": "No sessions found for {{query}}",
   "home.sessions.empty": "No sessions found",
   "home.sessions.empty.description": "Start a new session for this project",
   "home.sessions.group.today": "Today",

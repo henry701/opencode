@@ -7,7 +7,8 @@ import { Switch } from "@opencode-ai/ui/switch"
 import { TextField } from "@opencode-ai/ui/text-field"
 import { Tooltip } from "@opencode-ai/ui/tooltip"
 import { useTheme, type ColorScheme } from "@opencode-ai/ui/theme/context"
-import { showToast } from "@opencode-ai/ui/toast"
+import { useDialog } from "@opencode-ai/ui/context/dialog"
+import { showToast } from "@/utils/toast"
 import { useParams } from "@solidjs/router"
 import { useLanguage } from "@/context/language"
 import { usePermission } from "@/context/permission"
@@ -86,6 +87,7 @@ export const SettingsGeneral: Component = () => {
   const language = useLanguage()
   const permission = usePermission()
   const platform = usePlatform()
+  const dialog = useDialog()
   const params = useParams()
   const settings = useSettings()
 
@@ -265,11 +267,6 @@ export const SettingsGeneral: Component = () => {
     })),
   )
 
-  const followupOptions = createMemo((): { value: "queue" | "steer"; label: string }[] => [
-    { value: "steer", label: language.t("settings.general.row.followup.option.steer") },
-    { value: "queue", label: language.t("settings.general.row.followup.option.queue") },
-  ])
-
   const noneSound = { id: "none", label: "sound.option.none" } as const
   const soundOptions = [noneSound, ...SOUND_OPTIONS]
   const mono = () => monoInput(settings.appearance.font())
@@ -358,23 +355,6 @@ export const SettingsGeneral: Component = () => {
         </SettingsRow>
 
         <SettingsRow
-          title={language.t("settings.general.row.followup.title")}
-          description={language.t("settings.general.row.followup.description")}
-        >
-          <Select
-            data-action="settings-followup"
-            options={followupOptions()}
-            current={followupOptions().find((o) => o.value === settings.general.followup())}
-            value={(o) => o.value}
-            label={(o) => o.label}
-            onSelect={(option) => option && settings.general.setFollowup(option.value)}
-            variant="secondary"
-            size="small"
-            triggerVariant="settings"
-          />
-        </SettingsRow>
-
-        <SettingsRow
           title={language.t("settings.general.row.reasoningSummaries.title")}
           description={language.t("settings.general.row.reasoningSummaries.description")}
         >
@@ -429,7 +409,13 @@ export const SettingsGeneral: Component = () => {
           <div data-action="settings-new-layout-designs">
             <Switch
               checked={settings.general.newLayoutDesigns()}
-              onChange={(checked) => settings.general.setNewLayoutDesigns(checked)}
+              onChange={(checked) => {
+                settings.general.setNewLayoutDesigns(checked)
+                if (!checked) return
+                void import("@/components/settings-v2").then((module) => {
+                  dialog.show(() => <module.DialogSettings />)
+                })
+              }}
             />
           </div>
         </SettingsRow>

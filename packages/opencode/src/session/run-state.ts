@@ -1,8 +1,9 @@
 import { InstanceState } from "@/effect/instance-state"
+import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Runner } from "@/effect/runner"
 import { BackgroundJob } from "@/background/job"
 import { Effect, Latch, Layer, Scope, Context } from "effect"
-import * as Session from "./session"
+import { Session } from "./session"
 import { MessageV2 } from "./message-v2"
 import { SessionID } from "./schema"
 import { SessionStatus } from "./status"
@@ -10,21 +11,17 @@ import { SessionStatus } from "./status"
 export interface Interface {
   readonly assertNotBusy: (sessionID: SessionID) => Effect.Effect<void, Session.BusyError>
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
-  readonly hasRunner: (sessionID: SessionID) => Effect.Effect<boolean>
-  readonly defer: (sessionID: SessionID, message: MessageV2.WithParts) => Effect.Effect<void>
-  readonly drainDeferred: (sessionID: SessionID) => Effect.Effect<MessageV2.WithParts[]>
-  readonly hasDeferred: (sessionID: SessionID) => Effect.Effect<boolean>
   readonly ensureRunning: (
     sessionID: SessionID,
-    onInterrupt: Effect.Effect<MessageV2.WithParts>,
-    work: Effect.Effect<MessageV2.WithParts>,
-  ) => Effect.Effect<MessageV2.WithParts>
+    onInterrupt: Effect.Effect<SessionV1.WithParts>,
+    work: Effect.Effect<SessionV1.WithParts>,
+  ) => Effect.Effect<SessionV1.WithParts>
   readonly startShell: (
     sessionID: SessionID,
-    onInterrupt: Effect.Effect<MessageV2.WithParts>,
-    work: Effect.Effect<MessageV2.WithParts>,
+    onInterrupt: Effect.Effect<SessionV1.WithParts>,
+    work: Effect.Effect<SessionV1.WithParts>,
     ready?: Latch.Latch,
-  ) => Effect.Effect<MessageV2.WithParts, Session.BusyError>
+  ) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionRunState") {}
@@ -38,8 +35,7 @@ export const layer = Layer.effect(
     const state = yield* InstanceState.make(
       Effect.fn("SessionRunState.state")(function* () {
         const scope = yield* Scope.Scope
-        const runners = new Map<SessionID, Runner.Runner<MessageV2.WithParts>>()
-        const deferred = new Map<SessionID, MessageV2.WithParts[]>()
+        const runners = new Map<SessionID, Runner.Runner<SessionV1.WithParts>>()
         yield* Effect.addFinalizer(
           Effect.fnUntraced(function* () {
             yield* Effect.forEach(runners.values(), (runner) => runner.cancel, {
@@ -47,21 +43,20 @@ export const layer = Layer.effect(
               discard: true,
             })
             runners.clear()
-            deferred.clear()
           }),
         )
-        return { runners, deferred, scope }
+        return { runners, scope }
       }),
     )
 
     const runner = Effect.fn("SessionRunState.runner")(function* (
       sessionID: SessionID,
-      onInterrupt: Effect.Effect<MessageV2.WithParts>,
+      onInterrupt: Effect.Effect<SessionV1.WithParts>,
     ) {
       const data = yield* InstanceState.get(state)
       const existing = data.runners.get(sessionID)
       if (existing) return existing
-      const next = Runner.make<MessageV2.WithParts>(data.scope, {
+      const next = Runner.make<SessionV1.WithParts>(data.scope, {
         onIdle: Effect.gen(function* () {
           data.runners.delete(sessionID)
           yield* status.set(sessionID, { type: "idle" })
@@ -79,36 +74,11 @@ export const layer = Layer.effect(
       if (existing?.busy) yield* busyError(sessionID)
     })
 
-    const hasRunner = Effect.fn("SessionRunState.hasRunner")(function* (sessionID: SessionID) {
-      const data = yield* InstanceState.get(state)
-      return data.runners.get(sessionID)?.busy ?? false
-    })
-
-    const defer = Effect.fn("SessionRunState.defer")(function* (sessionID: SessionID, message: MessageV2.WithParts) {
-      const data = yield* InstanceState.get(state)
-      const queue = data.deferred.get(sessionID)
-      if (queue) queue.push(message)
-      else data.deferred.set(sessionID, [message])
-    })
-
-    const drainDeferred = Effect.fn("SessionRunState.drainDeferred")(function* (sessionID: SessionID) {
-      const data = yield* InstanceState.get(state)
-      const queue = data.deferred.get(sessionID) ?? []
-      data.deferred.delete(sessionID)
-      return queue
-    })
-
-    const hasDeferred = Effect.fn("SessionRunState.hasDeferred")(function* (sessionID: SessionID) {
-      const data = yield* InstanceState.get(state)
-      return (data.deferred.get(sessionID)?.length ?? 0) > 0
-    })
-
     const cancel = Effect.fn("SessionRunState.cancel")(function* (sessionID: SessionID) {
       yield* cancelBackgroundJobs(background, sessionID)
       const data = yield* InstanceState.get(state)
-      data.deferred.delete(sessionID)
       const existing = data.runners.get(sessionID)
-      if (!existing || !existing.busy) {
+      if (!existing) {
         yield* status.set(sessionID, { type: "idle" })
         return
       }
@@ -117,16 +87,16 @@ export const layer = Layer.effect(
 
     const ensureRunning = Effect.fn("SessionRunState.ensureRunning")(function* (
       sessionID: SessionID,
-      onInterrupt: Effect.Effect<MessageV2.WithParts>,
-      work: Effect.Effect<MessageV2.WithParts>,
+      onInterrupt: Effect.Effect<SessionV1.WithParts>,
+      work: Effect.Effect<SessionV1.WithParts>,
     ) {
       return yield* (yield* runner(sessionID, onInterrupt)).ensureRunning(work)
     })
 
     const startShell = Effect.fn("SessionRunState.startShell")(function* (
       sessionID: SessionID,
-      onInterrupt: Effect.Effect<MessageV2.WithParts>,
-      work: Effect.Effect<MessageV2.WithParts>,
+      onInterrupt: Effect.Effect<SessionV1.WithParts>,
+      work: Effect.Effect<SessionV1.WithParts>,
       ready?: Latch.Latch,
     ) {
       return yield* (yield* runner(sessionID, onInterrupt))
@@ -134,16 +104,7 @@ export const layer = Layer.effect(
         .pipe(Effect.catchTag("RunnerBusy", () => Effect.fail(busyError(sessionID))))
     })
 
-    return Service.of({
-      assertNotBusy,
-      cancel,
-      hasRunner,
-      defer,
-      drainDeferred,
-      hasDeferred,
-      ensureRunning,
-      startShell,
-    })
+    return Service.of({ assertNotBusy, cancel, ensureRunning, startShell })
   }),
 )
 

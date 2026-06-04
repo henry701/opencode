@@ -160,10 +160,19 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
     const [store, setStore, _, ready] = persisted("settings.v3", createStore<Settings>(defaultSettings))
 
     createEffect(() => {
+      console.log("settings", { ready: ready() })
+    })
+
+    createEffect(() => {
       if (typeof document === "undefined") return
       const root = document.documentElement
       root.style.setProperty("--font-family-mono", monoFontFamily(store.appearance?.mono))
       root.style.setProperty("--font-family-sans", sansFontFamily(store.appearance?.sans))
+    })
+
+    createEffect(() => {
+      if (store.general?.followup !== "queue") return
+      setStore("general", "followup", "steer")
     })
 
     return {
@@ -180,9 +189,12 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         setReleaseNotes(value: boolean) {
           setStore("general", "releaseNotes", value)
         },
-        followup: withFallback(() => store.general?.followup, defaultSettings.general.followup),
+        followup: withFallback(
+          () => (store.general?.followup === "queue" ? "steer" : store.general?.followup),
+          defaultSettings.general.followup,
+        ),
         setFollowup(value: "queue" | "steer") {
-          setStore("general", "followup", value)
+          setStore("general", "followup", value === "queue" ? "steer" : value)
         },
         showFileTree: withFallback(() => store.general?.showFileTree, defaultSettings.general.showFileTree),
         setShowFileTree(value: boolean) {
