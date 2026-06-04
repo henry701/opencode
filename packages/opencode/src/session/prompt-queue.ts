@@ -34,7 +34,7 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionPromptQueue") {}
 
 const drainPaused = new Map<string, Map<SessionID, number>>()
-const drainPauseTTL = 30 * 60 * 1000
+export const drainPauseTTL = 30 * 60 * 1000
 
 const pauseState = Effect.fn("SessionPromptQueue.pauseState")(function* () {
   const directory = yield* InstanceState.directory

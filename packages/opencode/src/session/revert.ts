@@ -9,6 +9,7 @@ import { MessageV2 } from "./message-v2"
 import { SessionID, MessageID, PartID } from "./schema"
 import { SessionRunState } from "./run-state"
 import { SessionSummary } from "./summary"
+import { SessionPromptQueue } from "./prompt-queue"
 
 const log = Log.create({ service: "session.revert" })
 
@@ -37,6 +38,7 @@ export const layer = Layer.effect(
     const summary = yield* SessionSummary.Service
     const state = yield* SessionRunState.Service
     const sync = yield* SyncEvent.Service
+    const promptQueue = yield* SessionPromptQueue.Service
 
     const revert = Effect.fn("SessionRevert.revert")(function* (input: RevertInput) {
       yield* state.assertNotBusy(input.sessionID)
@@ -87,6 +89,7 @@ export const layer = Layer.effect(
           files: diffs.length,
         },
       })
+      yield* promptQueue.clear(input.sessionID)
       return yield* sessions.get(input.sessionID).pipe(Effect.orDie)
     })
 
@@ -156,6 +159,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Bus.layer),
     Layer.provide(SessionSummary.defaultLayer),
     Layer.provide(SyncEvent.defaultLayer),
+    Layer.provide(SessionPromptQueue.defaultLayer),
   ),
 )
 

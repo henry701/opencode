@@ -1305,6 +1305,13 @@ export const layer = Layer.effect(
       return yield* sendDeferredNow(input.sessionID, input.queueID)
     })
 
+    const persistQueuedItem = Effect.fn("SessionPrompt.persistQueuedItem")(function* (item: QueueItem) {
+      const exit = yield* persistUserMessage(materializeQueuedItem(item)).pipe(Effect.exit)
+      if (Exit.isSuccess(exit)) return
+      yield* promptQueue.enqueue(item.sessionID, item.data).pipe(Effect.ignore)
+      return yield* Effect.failCause(exit.cause)
+    })
+
     const resumeQueueDrain = Effect.fn("SessionPrompt.resumeQueueDrain")(function* (sessionID: SessionID) {
       yield* promptQueue.resumeDrain(sessionID)
       const pending = yield* promptQueue.peek(sessionID)
@@ -1384,7 +1391,7 @@ export const layer = Layer.effect(
           ) {
             const next = yield* promptQueue.dequeue(sessionID)
             if (next) {
-              yield* persistUserMessage(materializeQueuedItem(next))
+              yield* persistQueuedItem(next)
               continue
             }
           }
@@ -1851,7 +1858,7 @@ export const layer = Layer.effect(
       if (!item) return yield* new QueueItemNotFoundError({ message: "Queued message not found" })
       const removed = yield* promptQueue.remove(sessionID, queueID)
       if (!removed) return yield* new QueueItemNotFoundError({ message: "Queued message not found" })
-      yield* persistUserMessage(materializeQueuedItem(item))
+      yield* persistQueuedItem(item)
       return yield* loop({ sessionID })
     })
 

@@ -519,6 +519,11 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     }) {
       yield* requireSession(ctx.params.sessionID)
       yield* promptQueueSvc.pauseDrain(ctx.params.sessionID)
+      yield* Effect.sleep(SessionPromptQueue.drainPauseTTL).pipe(
+        Effect.flatMap(() => promptSvc.resumeQueueDrain(ctx.params.sessionID)),
+        Effect.ignore,
+        Effect.forkIn(scope),
+      )
       return true
     })
 
