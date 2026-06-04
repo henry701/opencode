@@ -41,6 +41,7 @@ export type QueueInput = {
   resumeQueueDrainRemote?: () => Promise<void>
   getQueueRemote?: (queueID: string) => Promise<RunPrompt | undefined>
   updateQueueRemote?: (queueID: string, prompt: RunPrompt) => Promise<void>
+  removeQueueRemote?: (queueID: string) => Promise<void>
   sendQueueRemote?: (queueID: string, prompt?: RunPrompt) => Promise<void>
   onSend?: (prompt: RunPrompt) => void
   onNewSession?: () => void | Promise<void>
@@ -173,6 +174,15 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
     return true
   }
 
+  const removeRemote = async (id: string) => {
+    const prompt = findQueued(id)
+    remoteDrafts.delete(id)
+    await input.removeQueueRemote?.(id).catch((error) => {
+      done.reject(error)
+    })
+    return prompt
+  }
+
   const queueControl: QueueControl = {
     get: findQueued,
     load: input.getQueueRemote
@@ -190,7 +200,10 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
       if (input.updateQueueRemote) return updateRemote(id, prompt)
       return updateQueued(id, prompt)
     },
-    remove: removeQueued,
+    remove: (id) => {
+      if (input.removeQueueRemote) return removeRemote(id)
+      return removeQueued(id)
+    },
     pauseDrain: () => {
       if (input.pauseQueueDrainRemote) return input.pauseQueueDrainRemote()
     },

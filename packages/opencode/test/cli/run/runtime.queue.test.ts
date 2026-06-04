@@ -506,6 +506,38 @@ describe("run runtime queue", () => {
     await task
   })
 
+  test("remote queue control removes queued prompts", async () => {
+    const ui = footer()
+    let control: import("@/cli/cmd/run/types").QueueControl | undefined
+    const removed: string[] = []
+
+    const task = runPromptQueue({
+      footer: {
+        ...ui.api,
+        setQueueControl(next) {
+          control = next
+        },
+      },
+      updateQueueRemote: async () => {},
+      removeQueueRemote: async (id) => {
+        removed.push(id)
+      },
+      run: async () => {
+        ui.api.close()
+      },
+    })
+
+    expect(control?.update("pqu_test", { text: "draft", parts: [], queueID: "pqu_test" })).toBe(true)
+    expect(control?.get("pqu_test")?.text).toBe("draft")
+    await control?.remove("pqu_test")
+
+    expect(control?.get("pqu_test")).toBeUndefined()
+    expect(removed).toEqual(["pqu_test"])
+
+    ui.api.close()
+    await task
+  })
+
   test("remote queue control loads full queued prompt details before editing", async () => {
     const ui = footer()
     let control: import("@/cli/cmd/run/types").QueueControl | undefined

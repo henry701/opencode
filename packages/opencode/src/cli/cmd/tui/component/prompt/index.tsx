@@ -29,6 +29,7 @@ import { createStore, produce, unwrap } from "solid-js/store"
 import { usePromptHistory, type PromptInfo } from "./history"
 import { computePromptTraits } from "./traits"
 import { assign, expandPastedTextPlaceholders } from "./part"
+import { queueEditCommitPlan, queueEditSwitchPlan } from "@/queue/edit"
 import { queueMutationError } from "./queue-actions"
 import { usePromptStash } from "./stash"
 import { partsToPromptInfo } from "./queue"
@@ -1317,7 +1318,27 @@ export function Prompt(props: PromptProps) {
     if (!props.sessionID || props.disabled) return false
     const body = queueEditBody()
     if (!body) return false
-    if (!body.parts.some((part) => part.type === "text" && part.text.trim())) return false
+    if (queueEditCommitPlan({ text: body.parts.find((part) => part.type === "text")?.text ?? "" }).type === "remove") {
+      const result = await sdk.client.session.queue
+        .remove({
+          sessionID: props.sessionID,
+          queueID: messageID,
+        })
+        .catch((error: unknown) => ({ error }))
+      const error = queueMutationError({ result, fallback: "no response" })
+      if (error) {
+        toast.show({
+          message: `Removing queued prompt failed: ${errorMessage(error)}`,
+          variant: "error",
+        })
+        return false
+      }
+      if (editingQueuedMessageID() === messageID) {
+        await sdk.client.session.queue.drain.resume({ sessionID: props.sessionID }).catch(() => {})
+        exitQueueEditMode()
+      }
+      return true
+    }
 
     const result = await sdk.client.session.queue
       .update({
@@ -1353,7 +1374,40 @@ export function Prompt(props: PromptProps) {
     const editing = editingQueuedMessageID() === messageID
     const body = editing ? queueEditBody() : undefined
     if (editing && !body) return false
-    if (body && !body.parts.some((part) => part.type === "text" && part.text.trim())) return false
+    if (
+      body &&
+      queueEditCommitPlan({ text: body.parts.find((part) => part.type === "text")?.text ?? "" }).type === "remove"
+    ) {
+      const result = await sdk.client.session.queue
+        .remove({
+          sessionID,
+          queueID: messageID,
+        })
+        .catch((error: unknown) => ({ error }))
+      const error = queueMutationError({ result, fallback: "no response" })
+      if (error) {
+        toast.show({
+          message: `Removing queued prompt failed: ${errorMessage(error)}`,
+          variant: "error",
+        })
+        return false
+      }
+
+      if (nextID) {
+        clearPromptDraft()
+        setEditingQueuedMessageID(undefined)
+        const advanced = await editQueuedMessage(nextID)
+        if (!advanced) {
+          exitQueueEditMode()
+          await sdk.client.session.queue.drain.resume({ sessionID }).catch(() => {})
+        }
+      } else {
+        exitQueueEditMode()
+        await sdk.client.session.queue.drain.resume({ sessionID }).catch(() => {})
+      }
+      if (input && !input.isDestroyed) input.focus()
+      return true
+    }
 
     const editorParts = editorContextParts()
 
@@ -1446,7 +1500,6 @@ export function Prompt(props: PromptProps) {
       return editQueuedMessage(next.id)
     }
 
-    if (!(await saveQueuedEdit(current))) return false
     const index = items.findIndex((item) => item.id === current)
     if (index < 0) {
       const fallback = items[0]
@@ -1456,15 +1509,13 @@ export function Prompt(props: PromptProps) {
 
     const next = items[(index + dir + items.length) % items.length]
     if (!next) return false
-    return editQueuedMessage(next.id)
+    return editQueuedMessage(queueEditSwitchPlan({ currentID: current, targetID: next.id }).editID)
   }
 
   async function editQueuedMessage(messageID: string, opts?: { submit?: boolean }) {
     if (!props.sessionID || props.disabled) return false
     const sessionID = props.sessionID
     await sdk.client.session.queue.drain.pause({ sessionID }).catch(() => {})
-    const current = editingQueuedMessageID()
-    if (current && current !== messageID && !(await saveQueuedEdit(current))) return false
 
     const parts = sync.data.part[messageID] ?? []
     const promptInfo =

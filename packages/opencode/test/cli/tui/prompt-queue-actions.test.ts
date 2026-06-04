@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { queueMutationError } from "@/cli/cmd/tui/component/prompt/queue-actions"
+import { queueEditCommitPlan, queueEditSwitchPlan } from "@/queue/edit"
 
 describe("main TUI prompt queue actions", () => {
   test("treats missing queue mutation results as failures", () => {
@@ -13,5 +14,20 @@ describe("main TUI prompt queue actions", () => {
 
   test("accepts queue mutation results without an error", () => {
     expect(queueMutationError({ result: { data: { id: "pqu_1" } }, fallback: "no response" })).toBeUndefined()
+  })
+
+  test("discards the current draft when switching queued messages", () => {
+    expect(queueEditSwitchPlan({ currentID: "pqu_1", targetID: "pqu_2" })).toEqual({
+      editID: "pqu_2",
+      saveCurrent: false,
+    })
+  })
+
+  test("saves non-empty queued edit commits", () => {
+    expect(queueEditCommitPlan({ text: " updated queued prompt " })).toEqual({ type: "save" })
+  })
+
+  test("removes empty queued edit commits", () => {
+    expect(queueEditCommitPlan({ text: " \n\t " })).toEqual({ type: "remove" })
   })
 })

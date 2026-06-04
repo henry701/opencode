@@ -1195,7 +1195,6 @@ export function createPromptState(input: PromptInput): PromptState {
     if (input.editingQueueID?.()) {
       const id = input.editingQueueID()
       if (!id) return
-      input.onUpdateQueued?.(id, clonePrompt(draft))
       input.onSendQueuedNow?.(id)
       return
     }
@@ -1209,15 +1208,15 @@ export function createPromptState(input: PromptInput): PromptState {
     if (shell()) return
     syncDraft()
     if (visible()) hide()
-    if (!draft.text.trim()) {
-      input.onStatus("empty prompt ignored")
-      return
-    }
     const queued = clonePrompt(draft)
     queued.queued = true
     if (input.editingQueueID?.()) {
       const id = input.editingQueueID()
       if (id) input.onUpdateQueued?.(id, queued)
+      return
+    }
+    if (!draft.text.trim()) {
+      input.onStatus("empty prompt ignored")
       return
     }
     input.onQueue(queued)

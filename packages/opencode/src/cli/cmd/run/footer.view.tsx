@@ -25,6 +25,7 @@ import { FOOTER_MENU_ROWS, RunFooterMenu } from "./footer.menu"
 import { RunFooterSubagentBody } from "./footer.subagent"
 import { RunPromptBody, createPromptState, hintFlags } from "./footer.prompt"
 import { queueDockRows } from "@/queue/queue-dock"
+import { queueEditCommitPlan, queueEditSwitchPlan } from "@/queue/edit"
 import { RunQueueDock } from "./footer.queue-dock"
 import type { QueueControl } from "./types"
 import { RunPermissionBody } from "./footer.permission"
@@ -287,8 +288,17 @@ export function RunFooterView(props: RunFooterViewProps) {
 
   let composer!: ReturnType<typeof createPromptState>
 
-  const saveEditorToQueue = (id: string) => {
-    return queueControl()?.update(id, composer.currentPrompt()) ?? false
+  const saveEditorToQueue = async (id: string) => {
+    const prompt = composer.currentPrompt()
+    if (queueEditCommitPlan({ text: prompt.text }).type === "remove") {
+      await queueControl()?.remove(id)
+      if (editingQueueID() === id) {
+        setEditingQueueID(undefined)
+        composer.restorePrompt({ text: "", parts: [] })
+      }
+      return "removed" as const
+    }
+    return queueControl()?.update(id, prompt) ? ("saved" as const) : false
   }
 
   const cancelQueueEdit = () => {
@@ -308,8 +318,6 @@ export function RunFooterView(props: RunFooterViewProps) {
   }
 
   const beginEditQueue = async (id: string) => {
-    const current = editingQueueID()
-    if (current && current !== id && !saveEditorToQueue(current)) return
     const control = queueControl()
     const prompt = control?.get(id) ?? (control?.load ? await control.load(id) : promptFromPreview(id))
     if (!prompt) return
@@ -321,7 +329,13 @@ export function RunFooterView(props: RunFooterViewProps) {
 
   const sendQueuedAndMaybeEditNext = async (id: string) => {
     const plan = queuedSendPlan(queued(), id, editingQueueID())
-    if (plan.saveID) saveEditorToQueue(plan.saveID)
+    const saveResult = plan.saveID ? await saveEditorToQueue(plan.saveID) : undefined
+    if (saveResult === "removed") {
+      if (plan.resumeDrain) await queueControl()?.resumeDrain?.()
+      if (plan.editID) await beginEditQueue(plan.editID)
+      else composer.focus()
+      return
+    }
     if (plan.pauseDrain) await queueControl()?.pauseDrain?.()
     await queueControl()?.sendNow(id)
     if (plan.resumeDrain) await queueControl()?.resumeDrain?.()
@@ -342,14 +356,13 @@ export function RunFooterView(props: RunFooterViewProps) {
       await beginEditQueue(items[index]!.id)
       return
     }
-    if (!saveEditorToQueue(current)) return
     const index = items.findIndex((item) => item.id === current)
     if (index < 0) {
       await beginEditQueue(items[0]!.id)
       return
     }
     const next = items[(index + dir + items.length) % items.length]
-    if (next) await beginEditQueue(next.id)
+    if (next) await beginEditQueue(queueEditSwitchPlan({ currentID: current, targetID: next.id }).editID)
   }
 
   composer = createPromptState({
@@ -375,6 +388,15 @@ export function RunFooterView(props: RunFooterViewProps) {
     queueEscapeGuard,
     clearQueueEscapeGuard: () => setQueueEscapeGuard(false),
     onUpdateQueued: (id, prompt) => {
+      if (queueEditCommitPlan({ text: prompt.text }).type === "remove") {
+        void Promise.resolve(queueControl()?.remove(id)).then(() => {
+          if (editingQueueID() === id) {
+            setEditingQueueID(undefined)
+            composer.restorePrompt({ text: "", parts: [] })
+          }
+        })
+        return
+      }
       queueControl()?.update(id, prompt)
     },
     onEditQueue: () => {

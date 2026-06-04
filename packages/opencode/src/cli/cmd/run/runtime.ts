@@ -569,6 +569,16 @@ async function runInteractiveRuntime(input: RunRuntimeInput): Promise<void> {
                   }),
                 })
               },
+          removeQueueRemote: state.demo
+            ? undefined
+            : async (queueID) => {
+                await ensureStream()
+                if (!state.sessionID) return
+                await ctx.sdk.session.queue.remove({
+                  sessionID: state.sessionID,
+                  queueID,
+                })
+              },
           getQueueRemote: state.demo
             ? undefined
             : async (queueID) => {
