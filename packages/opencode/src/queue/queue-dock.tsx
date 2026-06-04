@@ -36,6 +36,30 @@ const DEFAULT_BORDER = {
 }
 
 const IDLE_VISIBLE_ITEMS = 2
+const EDIT_VISIBLE_ITEMS = 3
+
+export function queueDockVisibleItems(input: {
+  items: QueuedItem[]
+  editing: boolean
+  editingID?: string
+}): Array<{ item: QueuedItem; ordinal: number }> {
+  if (!input.editing) {
+    return input.items.slice(0, IDLE_VISIBLE_ITEMS).map((item, index) => ({ item, ordinal: index + 1 }))
+  }
+
+  if (input.items.length <= EDIT_VISIBLE_ITEMS) {
+    return input.items.map((item, index) => ({ item, ordinal: index + 1 }))
+  }
+
+  const activeIndex = Math.max(
+    0,
+    input.items.findIndex((item) => item.id === input.editingID),
+  )
+  const start = Math.min(Math.max(activeIndex - 1, 0), input.items.length - EDIT_VISIBLE_ITEMS)
+  return input.items
+    .slice(start, start + EDIT_VISIBLE_ITEMS)
+    .map((item, index) => ({ item, ordinal: start + index + 1 }))
+}
 
 /** Terminal rows reserved above the prompt textarea (run footer height sync). */
 export function queueDockRows(input: { count: number; editing: boolean; collapsed?: boolean }) {
@@ -45,7 +69,7 @@ export function queueDockRows(input: { count: number; editing: boolean; collapse
   let rows = 1
   if (input.editing) rows += 2
   const itemRows = input.editing
-    ? Math.min(Math.max(input.count, 1), 8)
+    ? Math.min(Math.max(input.count, 1), EDIT_VISIBLE_ITEMS)
     : Math.min(input.count, IDLE_VISIBLE_ITEMS)
   rows += itemRows
   if (!input.editing && input.count > IDLE_VISIBLE_ITEMS) rows += 1
@@ -75,10 +99,11 @@ export function QueueDock(props: {
     return Math.max(0, total() - IDLE_VISIBLE_ITEMS)
   })
   const visibleItems = createMemo(() => {
-    const items = props.items()
-    if (props.editing?.()) return items
-    if (items.length <= IDLE_VISIBLE_ITEMS) return items
-    return items.slice(0, IDLE_VISIBLE_ITEMS)
+    return queueDockVisibleItems({
+      items: props.items(),
+      editing: !!props.editing?.(),
+      editingID: props.editingMessageID?.(),
+    })
   })
 
   const editingHint = createMemo(() => {
@@ -143,11 +168,11 @@ export function QueueDock(props: {
           <Show when={!collapsed()}>
             <box flexDirection="column" flexShrink={0} gap={1}>
               <For each={visibleItems()}>
-                {(item, index) => (
+                {(entry, index) => (
                   <box flexDirection="row" flexShrink={0} gap={1}>
                     <text
                       fg={
-                        props.editingMessageID?.() === item.id
+                        props.editingMessageID?.() === entry.item.id
                           ? props.theme().primary
                           : index() === 0 && !props.editing?.()
                             ? props.theme().primary
@@ -155,21 +180,21 @@ export function QueueDock(props: {
                       }
                       flexShrink={0}
                     >
-                      {index() + 1}.
+                      {entry.ordinal}.
                     </text>
                     <text
-                      fg={props.editingMessageID?.() === item.id ? props.theme().text : props.theme().textMuted}
+                      fg={props.editingMessageID?.() === entry.item.id ? props.theme().text : props.theme().textMuted}
                       flexGrow={1}
                       flexShrink={1}
                       wrapMode="none"
                     >
-                      {itemText(item)}
+                      {itemText(entry.item)}
                     </text>
                     <box
                       flexShrink={0}
                       onMouseUp={() => {
                         if (props.disabled) return
-                        props.onSendNow(item.id)
+                        props.onSendNow(entry.item.id)
                       }}
                     >
                       <text fg={props.disabled ? props.theme().textMuted : props.theme().text}>
@@ -182,7 +207,7 @@ export function QueueDock(props: {
                       flexShrink={0}
                       onMouseUp={() => {
                         if (props.disabled) return
-                        props.onEdit(item.id)
+                        props.onEdit(entry.item.id)
                       }}
                     >
                       <text fg={props.disabled ? props.theme().textMuted : props.theme().primary}>

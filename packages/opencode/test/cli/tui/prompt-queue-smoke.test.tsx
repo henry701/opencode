@@ -107,6 +107,33 @@ test("queue dock keeps active queued edit preview to one line", async () => {
   expect(frame).not.toContain("line two")
 })
 
+test("queue dock edit mode renders only a three item window around the active queue item", async () => {
+  const items = [
+    { id: "pqu_1", text: "first queued" },
+    { id: "pqu_2", text: "second queued" },
+    { id: "pqu_3", text: "third queued" },
+    { id: "pqu_4", text: "fourth queued" },
+    { id: "pqu_5", text: "fifth queued" },
+  ]
+
+  const frame = await renderFrame(() => (
+    <PromptQueueDock
+      items={() => items}
+      editing={() => true}
+      editingMessageID={() => "pqu_3"}
+      onEdit={() => {}}
+      onSendNow={() => {}}
+    />
+  ))
+
+  expect(frame).toContain("5 messages queued")
+  expect(frame).toContain("2. second queued")
+  expect(frame).toContain("3. third queued")
+  expect(frame).toContain("4. fourth queued")
+  expect(frame).not.toContain("first queued")
+  expect(frame).not.toContain("fifth queued")
+})
+
 test("runs serve API smoke script when bash is available", async () => {
   if (!Bun.which("bash") || !Bun.which("curl") || !Bun.which("jq")) return
 
