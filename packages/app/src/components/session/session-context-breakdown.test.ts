@@ -10,12 +10,11 @@ const user = (id: string) => {
   } as unknown as Message
 }
 
-const assistant = (id: string, toolDefs?: string) => {
+const assistant = (id: string) => {
   return {
     id,
     role: "assistant",
     time: { created: 1 },
-    tool_defs: toolDefs,
   } as unknown as Message
 }
 
@@ -58,46 +57,5 @@ describe("estimateSessionContextBreakdown", () => {
     const total = output.reduce((sum, segment) => sum + segment.tokens, 0)
     expect(total).toBeLessThanOrEqual(10)
     expect(output.every((segment) => segment.width <= 100)).toBeTrue()
-  })
-
-  test("only counts tool_defs from latest assistant message", () => {
-    const td1 = "tool defs v1"
-    const td2 = "tool defs v2"
-    const messages = [user("u1"), assistant("a1", td1), assistant("a2", td2)]
-    const parts = {
-      u1: [{ type: "text", text: "hello" }] as unknown as Part[],
-      a1: [{ type: "text", text: "response 1" }] as unknown as Part[],
-      a2: [{ type: "text", text: "response 2" }] as unknown as Part[],
-    }
-
-    const output = estimateSessionContextBreakdown({
-      messages,
-      parts,
-      input: 100,
-      systemPrompt: "system",
-    })
-
-    const map = Object.fromEntries(output.map((segment) => [segment.key, segment.tokens]))
-    expect(map.toolDefs).toBe(Math.ceil(td2.length / 4))
-  })
-
-  test("counts tool_defs when only first assistant has it", () => {
-    const td1 = "tool defs v1"
-    const messages = [user("u1"), assistant("a1", td1), assistant("a2")]
-    const parts = {
-      u1: [{ type: "text", text: "hello" }] as unknown as Part[],
-      a1: [{ type: "text", text: "response 1" }] as unknown as Part[],
-      a2: [{ type: "text", text: "response 2" }] as unknown as Part[],
-    }
-
-    const output = estimateSessionContextBreakdown({
-      messages,
-      parts,
-      input: 100,
-      systemPrompt: "system",
-    })
-
-    const map = Object.fromEntries(output.map((segment) => [segment.key, segment.tokens]))
-    expect(map.toolDefs).toBe(Math.ceil(td1.length / 4))
   })
 })

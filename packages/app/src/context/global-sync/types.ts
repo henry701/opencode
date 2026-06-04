@@ -70,9 +70,6 @@ export type State = {
   message: {
     [sessionID: string]: Message[]
   }
-  prompt_queue: {
-    [sessionID: string]: { id: string; text: string }[]
-  }
   part: {
     [messageID: string]: Part[]
   }

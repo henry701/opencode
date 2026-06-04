@@ -15,7 +15,6 @@ type SessionCache = {
   session_diff: Record<string, SnapshotFileDiff[] | undefined>
   todo: Record<string, Todo[] | undefined>
   message: Record<string, Message[] | undefined>
-  prompt_queue: Record<string, { id: string; text: string }[] | undefined>
   part: Record<string, Part[] | undefined>
   permission: Record<string, PermissionRequest[] | undefined>
   question: Record<string, QuestionRequest[] | undefined>
@@ -37,7 +36,6 @@ export function dropSessionCaches(store: SessionCache, sessionIDs: Iterable<stri
 
   for (const sessionID of stale) {
     delete store.message[sessionID]
-    if (store.prompt_queue) delete store.prompt_queue[sessionID]
     delete store.todo[sessionID]
     delete store.session_diff[sessionID]
     delete store.session_status[sessionID]

@@ -1,15 +1,14 @@
 import { Config } from "effect"
 
-function truthy(key: string) {
+export function truthy(key: string) {
   const value = process.env[key]?.toLowerCase()
   return value === "true" || value === "1"
 }
 
-const OPENCODE_EXPERIMENTAL = truthy("OPENCODE_EXPERIMENTAL")
 const copy = process.env["OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT"]
 
 function enabledByExperimental(key: string) {
-  return process.env[key] === undefined ? OPENCODE_EXPERIMENTAL : truthy(key)
+  return process.env[key] === undefined ? truthy("OPENCODE_EXPERIMENTAL") : truthy(key)
 }
 
 export const Flag = {
@@ -54,6 +53,9 @@ export const Flag = {
   get OPENCODE_DISABLE_PROJECT_CONFIG() {
     return truthy("OPENCODE_DISABLE_PROJECT_CONFIG")
   },
+  get OPENCODE_EXPERIMENTAL_REFERENCES() {
+    return enabledByExperimental("OPENCODE_EXPERIMENTAL_REFERENCES")
+  },
   get OPENCODE_TUI_CONFIG() {
     return process.env["OPENCODE_TUI_CONFIG"]
   },
@@ -71,11 +73,5 @@ export const Flag = {
   },
   get OPENCODE_CLIENT() {
     return process.env["OPENCODE_CLIENT"] ?? "cli"
-  },
-  get OPENCODE_EXPERIMENTAL_CACHE_STABILIZATION() {
-    return truthy("OPENCODE_EXPERIMENTAL_CACHE_STABILIZATION")
-  },
-  get OPENCODE_EXPERIMENTAL_CACHE_1H_TTL() {
-    return truthy("OPENCODE_EXPERIMENTAL_CACHE_1H_TTL")
   },
 }

@@ -1,21 +1,20 @@
+import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Agent } from "@/agent/agent"
-import { Bus } from "@/bus"
+import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { Command } from "@/command"
 import { Permission } from "@/permission"
-import { PermissionID } from "@/permission/schema"
 import { SessionShare } from "@/share/session"
 import { Session } from "@/session/session"
 import { SessionCompaction } from "@/session/compaction"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionPrompt } from "@/session/prompt"
-import { SessionPromptQueue } from "@/session/prompt-queue"
-import { PromptQueue } from "@/queue/prompt-queue"
 import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
-import { MessageID, PartID, QueueItemID, SessionID } from "@/session/schema"
+import { MessageID, PartID, SessionID } from "@/session/schema"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { Cause, Effect, Option, Schema, Scope } from "effect"
 import * as Stream from "effect/Stream"
@@ -37,7 +36,6 @@ import {
   UpdatePayload,
 } from "../groups/session"
 import { PermissionNotFoundError } from "../errors"
-import * as ApiError from "../errors"
 import * as SessionError from "./session-errors"
 
 const tryParseJson = (text: string) =>
@@ -46,34 +44,11 @@ const tryParseJson = (text: string) =>
     catch: () => new HttpApiError.BadRequest({}),
   })
 
-const tagged = (error: unknown, tag: string): error is { _tag: string } & Record<string, unknown> =>
-  !!error && typeof error === "object" && "_tag" in error && error._tag === tag
-
-function mapQueuePromptError(error: unknown) {
-  if (tagged(error, "SessionPrompt.QueueItemNotFound")) {
-    return ApiError.notFound(
-      "message" in error && typeof error.message === "string" ? error.message : "Queued message not found",
-    )
-  }
-  if (tagged(error, "SessionBusyError")) {
-    const sessionID = "sessionID" in error ? SessionID.make(String(error.sessionID)) : SessionID.make("")
-    return new ApiError.SessionBusyError({
-      sessionID,
-      message: sessionID ? `Session is busy: ${sessionID}` : "Session is busy",
-    })
-  }
-  return new HttpApiError.BadRequest({})
-}
-
-const isPromptPayload = (payload: unknown): payload is typeof PromptPayload.Type =>
-  !!payload && typeof payload === "object" && "parts" in payload
-
 export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", (handlers) =>
   Effect.gen(function* () {
     const session = yield* Session.Service
     const shareSvc = yield* SessionShare.Service
     const promptSvc = yield* SessionPrompt.Service
-    const promptQueueSvc = yield* SessionPromptQueue.Service
     const revertSvc = yield* SessionRevert.Service
     const compactSvc = yield* SessionCompaction.Service
     const runState = yield* SessionRunState.Service
@@ -82,7 +57,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const statusSvc = yield* SessionStatus.Service
     const todoSvc = yield* Todo.Service
     const summary = yield* SessionSummary.Service
-    const bus = yield* Bus.Service
+    const events = yield* EventV2Bridge.Service
     const scope = yield* Scope.Scope
 
     const list = Effect.fn("SessionHttpApi.list")(function* (ctx: { query: typeof ListQuery.Type }) {
@@ -211,6 +186,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       if (ctx.payload.title !== undefined) {
         yield* session.setTitle({ sessionID: ctx.params.sessionID, title: ctx.payload.title })
       }
+      if (ctx.payload.metadata !== undefined) {
+        yield* session.setMetadata({ sessionID: ctx.params.sessionID, metadata: ctx.payload.metadata })
+      }
       if (ctx.payload.permission !== undefined) {
         yield* session.setPermission({
           sessionID: ctx.params.sessionID,
@@ -228,7 +206,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload?: typeof ForkPayload.Type
     }) {
       return yield* SessionError.mapStorageNotFound(
-        session.fork({ sessionID: ctx.params.sessionID, messageID: ctx.payload?.messageID }),
+        session.fork({
+          sessionID: ctx.params.sessionID,
+          messageID: ctx.payload?.messageID,
+        }),
       )
     })
 
@@ -336,7 +317,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
             yield* Effect.logError("prompt_async failed").pipe(
               Effect.annotateLogs({ sessionID: ctx.params.sessionID, cause }),
             )
-            yield* bus.publish(Session.Event.Error, {
+            yield* events.publish(Session.Event.Error, {
               sessionID: ctx.params.sessionID,
               error: new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
             })
@@ -379,7 +360,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const permissionRespond = Effect.fn("SessionHttpApi.permissionRespond")(function* (ctx: {
-      params: { sessionID: SessionID; permissionID: PermissionID }
+      params: { sessionID: SessionID; permissionID: PermissionV1.ID }
       payload: typeof PermissionResponsePayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
@@ -415,10 +396,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
 
     const updatePart = Effect.fn("SessionHttpApi.updatePart")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID; partID: PartID }
-      payload: typeof MessageV2.Part.Type
+      payload: typeof SessionV1.Part.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      const payload = ctx.payload as MessageV2.Part
+      const payload = ctx.payload as SessionV1.Part
       if (
         payload.id !== ctx.params.partID ||
         payload.messageID !== ctx.params.messageID ||
@@ -427,113 +408,6 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         return yield* new HttpApiError.BadRequest({})
       }
       return yield* session.updatePart(payload)
-    })
-
-    const updateDeferred = Effect.fn("SessionHttpApi.updateDeferred")(function* (ctx: {
-      params: { sessionID: SessionID; queueID: QueueItemID }
-      payload: unknown
-    }) {
-      yield* requireSession(ctx.params.sessionID)
-      const message = ctx.payload as MessageV2.WithParts
-      const ok = yield* promptSvc.updateDeferredQueue(ctx.params.sessionID, ctx.params.queueID, message)
-      if (!ok) return yield* Effect.fail(ApiError.notFound("Queued message not found"))
-      return true
-    })
-
-    const sendDeferred = Effect.fn("SessionHttpApi.sendDeferred")(function* (ctx: {
-      params: { sessionID: SessionID; queueID: QueueItemID }
-      payload: unknown
-    }) {
-      yield* requireSession(ctx.params.sessionID)
-      const message = ctx.payload as MessageV2.WithParts | undefined
-      return yield* promptSvc
-        .sendDeferredNow(ctx.params.sessionID, ctx.params.queueID, message)
-        .pipe(Effect.mapError(mapQueuePromptError))
-    })
-
-    const listQueue = Effect.fn("SessionHttpApi.listQueue")(function* (ctx: { params: { sessionID: SessionID } }) {
-      yield* requireSession(ctx.params.sessionID)
-      return yield* promptQueueSvc.listPreview(ctx.params.sessionID)
-    })
-
-    const getQueue = Effect.fn("SessionHttpApi.getQueue")(function* (ctx: {
-      params: { sessionID: SessionID; queueID: QueueItemID }
-    }) {
-      yield* requireSession(ctx.params.sessionID)
-      const items = yield* promptQueueSvc.list(ctx.params.sessionID)
-      const item = items.find((entry) => entry.id === ctx.params.queueID)
-      if (!item) return yield* Effect.fail(ApiError.notFound("Queued message not found"))
-      return { id: item.id, ...item.data }
-    })
-
-    const enqueueQueue = Effect.fn("SessionHttpApi.enqueueQueue")(function* (ctx: {
-      params: { sessionID: SessionID }
-      payload: typeof PromptPayload.Type
-    }) {
-      yield* requireSession(ctx.params.sessionID)
-      const item = yield* promptSvc
-        .queueEnqueue({ ...ctx.payload, sessionID: ctx.params.sessionID })
-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
-      return PromptQueue.queueItemPreview(item)
-    })
-
-    const updateQueue = Effect.fn("SessionHttpApi.updateQueue")(function* (ctx: {
-      params: { sessionID: SessionID; queueID: QueueItemID }
-      payload: unknown
-    }) {
-      yield* requireSession(ctx.params.sessionID)
-      const payload = ctx.payload as typeof PromptPayload.Type
-      const ok = yield* promptSvc
-        .queueUpdate({ ...payload, sessionID: ctx.params.sessionID, queueID: ctx.params.queueID })
-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
-      if (!ok) return yield* Effect.fail(ApiError.notFound("Queued message not found"))
-      return true
-    })
-
-    const removeQueue = Effect.fn("SessionHttpApi.removeQueue")(function* (ctx: {
-      params: { sessionID: SessionID; queueID: QueueItemID }
-    }) {
-      yield* requireSession(ctx.params.sessionID)
-      const ok = yield* promptQueueSvc.remove(ctx.params.sessionID, ctx.params.queueID)
-      if (!ok) return yield* Effect.fail(ApiError.notFound("Queued message not found"))
-      return true
-    })
-
-    const sendQueue = Effect.fn("SessionHttpApi.sendQueue")(function* (ctx: {
-      params: { sessionID: SessionID; queueID: QueueItemID }
-      payload: unknown
-    }) {
-      yield* requireSession(ctx.params.sessionID)
-      const payload = isPromptPayload(ctx.payload) ? ctx.payload : undefined
-      return yield* promptSvc
-        .queueSend({
-          sessionID: ctx.params.sessionID,
-          queueID: ctx.params.queueID,
-          prompt: payload ? { ...payload, sessionID: ctx.params.sessionID } : undefined,
-        })
-        .pipe(Effect.mapError(mapQueuePromptError))
-    })
-
-    const pauseQueueDrain = Effect.fn("SessionHttpApi.pauseQueueDrain")(function* (ctx: {
-      params: { sessionID: SessionID }
-    }) {
-      yield* requireSession(ctx.params.sessionID)
-      const token = yield* promptQueueSvc.pauseDrain(ctx.params.sessionID)
-      yield* Effect.sleep(SessionPromptQueue.drainPauseTTL).pipe(
-        Effect.flatMap(() => promptQueueSvc.resumeExpiredDrain(ctx.params.sessionID, token)),
-        Effect.flatMap((expired) => (expired ? promptSvc.resumeQueueDrain(ctx.params.sessionID) : Effect.void)),
-        Effect.ignore,
-        Effect.forkIn(scope),
-      )
-      return true
-    })
-
-    const resumeQueueDrain = Effect.fn("SessionHttpApi.resumeQueueDrain")(function* (ctx: {
-      params: { sessionID: SessionID }
-    }) {
-      yield* requireSession(ctx.params.sessionID)
-      yield* promptSvc.resumeQueueDrain(ctx.params.sessionID)
-      return true
     })
 
     return handlers
@@ -564,15 +438,5 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("deleteMessage", deleteMessage)
       .handle("deletePart", deletePart)
       .handle("updatePart", updatePart)
-      .handle("updateDeferred", updateDeferred)
-      .handle("sendDeferred", sendDeferred)
-      .handle("listQueue", listQueue)
-      .handle("getQueue", getQueue)
-      .handle("enqueueQueue", enqueueQueue)
-      .handle("updateQueue", updateQueue)
-      .handle("removeQueue", removeQueue)
-      .handle("sendQueue", sendQueue)
-      .handle("pauseQueueDrain", pauseQueueDrain)
-      .handle("resumeQueueDrain", resumeQueueDrain)
   }),
 )

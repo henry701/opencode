@@ -11,9 +11,8 @@
 //     → stream.ts bridges to footer API
 //       → footer.ts queues commits and patches the footer view
 //         → OpenTUI split-footer renderer writes to terminal
-import type { KeyEvent, Renderable } from "@opentui/core"
-import type { Binding } from "@opentui/keymap"
 import type { OpencodeClient, PermissionRequest, QuestionRequest, ToolPart } from "@opencode-ai/sdk/v2"
+import type { TuiConfig } from "@/cli/cmd/tui/config/tui"
 
 export type RunFilePart = {
   type: "file"
@@ -32,6 +31,8 @@ export type RunCommand = NonNullable<Awaited<ReturnType<OpencodeClient["command"
 export type RunProvider = NonNullable<Awaited<ReturnType<OpencodeClient["provider"]["list"]>>["data"]>["all"][number]
 
 export type RunPrompt = {
+  messageID?: string
+  partID?: string
   text: string
   parts: RunPromptPart[]
   mode?: "shell"
@@ -39,24 +40,12 @@ export type RunPrompt = {
     name: string
     arguments: string
   }
-  delivery?: "immediate" | "deferred"
-  queued?: boolean
-  queueID?: string
 }
 
-export type QueuedPromptPreview = {
-  id: string
-  text: string
-}
-
-export type QueueControl = {
-  get: (id: string) => RunPrompt | undefined
-  load?: (id: string) => Promise<RunPrompt | undefined>
-  update: (id: string, prompt: RunPrompt) => boolean
-  remove: (id: string) => RunPrompt | undefined | Promise<RunPrompt | undefined>
-  sendNow: (id: string) => void | Promise<void>
-  pauseDrain?: () => void | Promise<void>
-  resumeDrain?: () => void | Promise<void>
+export type FooterQueuedPrompt = {
+  messageID: string
+  partID: string
+  prompt: RunPrompt
 }
 
 export type RunAgent = NonNullable<Awaited<ReturnType<OpencodeClient["app"]["agents"]>>["data"]>[number]
@@ -94,7 +83,6 @@ export type FooterState = {
   phase: FooterPhase
   status: string
   queue: number
-  queued: QueuedPromptPreview[]
   model: string
   duration: string
   usage: string
@@ -182,6 +170,7 @@ export type FooterView =
 
 export type FooterPromptRoute =
   | { type: "composer" }
+  | { type: "queued-menu" }
   | { type: "subagent-menu" }
   | { type: "subagent"; sessionID: string }
   | { type: "command" }
@@ -241,7 +230,10 @@ export type FooterEvent =
   | {
       type: "queue"
       queue: number
-      queued: QueuedPromptPreview[]
+    }
+  | {
+      type: "queued.prompts"
+      prompts: FooterQueuedPrompt[]
     }
   | {
       type: "first"
@@ -285,24 +277,7 @@ export type QuestionReply = Parameters<OpencodeClient["question"]["reply"]>[0]
 
 export type QuestionReject = Parameters<OpencodeClient["question"]["reject"]>[0]
 
-type FooterBinding = Binding<Renderable, KeyEvent>
-
-export type FooterKeybinds = {
-  leader: string
-  leaderTimeout: number
-  commandList: readonly FooterBinding[]
-  variantCycle: readonly FooterBinding[]
-  interrupt: readonly FooterBinding[]
-  historyPrevious: readonly FooterBinding[]
-  historyNext: readonly FooterBinding[]
-  inputClear: readonly FooterBinding[]
-  inputSubmit: readonly FooterBinding[]
-  inputNewline: readonly FooterBinding[]
-  inputQueue: readonly FooterBinding[]
-  inputEditQueue: readonly FooterBinding[]
-  inputEditQueueNext: readonly FooterBinding[]
-  inputEditQueueCancel: readonly FooterBinding[]
-}
+export type RunTuiConfig = Pick<TuiConfig.Resolved, "keybinds" | "leader_timeout" | "diff_style">
 
 // Lifecycle phase of a scrollback entry. "start" opens the entry, "progress"
 // appends content (coalesced in the footer queue), "final" closes it.
@@ -334,14 +309,29 @@ export type StreamCommit = {
   }
 }
 
+export type LocalReplayAnchor = {
+  kind: EntryKind
+  text: string
+  phase: StreamPhase
+  messageID?: string
+  partID?: string
+  toolState?: StreamToolState
+  visible?: string
+}
+
+export type LocalReplayRow = {
+  commit: StreamCommit
+  after?: LocalReplayAnchor
+}
+
 // The public contract between the stream transport / prompt queue and
 // the footer. RunFooter implements this. The transport and queue never
 // touch the renderer directly -- they go through this interface.
 export type FooterApi = {
   readonly isClosed: boolean
   onPrompt(fn: (input: RunPrompt) => void): () => void
+  onQueuedRemove(fn: (messageID: string) => boolean | Promise<boolean>): () => void
   onClose(fn: () => void): () => void
-  setQueueControl?(control: QueueControl | undefined): void
   event(next: FooterEvent): void
   append(commit: StreamCommit): void
   idle(): Promise<void>

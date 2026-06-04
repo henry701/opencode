@@ -23,7 +23,6 @@ const BREAKDOWN_COLOR: Record<SessionContextBreakdownKey, string> = {
   user: "var(--syntax-success)",
   assistant: "var(--syntax-property)",
   tool: "var(--syntax-warning)",
-  toolDefs: "var(--syntax-keyword)",
   other: "var(--syntax-comment)",
 }
 
@@ -153,21 +152,12 @@ export function SessionContextTab() {
   })
 
   const systemPrompt = createMemo(() => {
-    const allMsgs = messages()
-    for (let i = allMsgs.length - 1; i >= 0; i--) {
-      const msg = allMsgs[i]
-      if (msg.role === "assistant" && "system_prompt" in msg && typeof msg.system_prompt === "string") {
-        const trimmed = msg.system_prompt.trim()
-        if (trimmed) return trimmed
-      }
-    }
-    for (let i = allMsgs.length - 1; i >= 0; i--) {
-      const msg = allMsgs[i]
-      if (msg.role === "user" && "system" in msg && typeof msg.system === "string") {
-        const trimmed = msg.system.trim()
-        if (trimmed) return trimmed
-      }
-    }
+    const msg = findLast(visibleUserMessages(), (m) => !!m.system)
+    const system = msg?.system
+    if (!system) return
+    const trimmed = system.trim()
+    if (!trimmed) return
+    return trimmed
   })
 
   const providerLabel = createMemo(() => {
@@ -200,7 +190,6 @@ export function SessionContextTab() {
 
   const breakdownLabel = (key: SessionContextBreakdownKey) => {
     if (key === "system") return language.t("context.breakdown.system")
-    if (key === "toolDefs") return "Tool Definitions"
     if (key === "user") return language.t("context.breakdown.user")
     if (key === "assistant") return language.t("context.breakdown.assistant")
     if (key === "tool") return language.t("context.breakdown.tool")

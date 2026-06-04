@@ -39,7 +39,6 @@ describe("bootstrapDirectory", () => {
       vcs: undefined,
       limit: 5,
       message: {},
-      prompt_queue: {},
       part: {},
       part_text_accum_delta: {},
     })

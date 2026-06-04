@@ -9,7 +9,7 @@ import type {
   Session,
   Todo,
 } from "@opencode-ai/sdk/v2/client"
-import { showToast } from "@opencode-ai/ui/toast"
+import { showToast } from "@/utils/toast"
 import { getFilename } from "@opencode-ai/core/util/path"
 import { retry } from "@opencode-ai/core/util/retry"
 import { batch } from "solid-js"
@@ -18,6 +18,7 @@ import type { State, VcsCache } from "./types"
 import { cmp, normalizeAgentList, normalizeProviderList } from "./utils"
 import { formatServerError } from "@/utils/server-errors"
 import { QueryClient, queryOptions } from "@tanstack/solid-query"
+import { loadMcpQuery } from "../server-sync"
 import { NormalizedProviderListResponse } from "@opencode-ai/ui/context"
 
 type GlobalStore = {
@@ -193,18 +194,6 @@ export const loadPathQuery = (directory: string | null, sdk: OpencodeClient) =>
   queryOptions<Path>({
     queryKey: [directory, "path"],
     queryFn: () => retry(() => sdk.path.get().then((x) => x.data!)),
-  })
-
-export const loadMcpQuery = (directory: string, sdk: OpencodeClient) =>
-  queryOptions({
-    queryKey: [directory, "mcp"] as const,
-    queryFn: () => sdk.mcp.status().then((r) => r.data ?? {}),
-  })
-
-export const loadLspQuery = (directory: string, sdk: OpencodeClient) =>
-  queryOptions({
-    queryKey: [directory, "lsp"] as const,
-    queryFn: () => sdk.lsp.status().then((r) => r.data ?? []),
   })
 
 export async function bootstrapDirectory(input: {

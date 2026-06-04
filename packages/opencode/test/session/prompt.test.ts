@@ -1,4 +1,9 @@
 import { NodeFileSystem } from "@effect/platform-node"
+import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
+import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { Database } from "@opencode-ai/core/database/database"
+import { eq } from "drizzle-orm"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { FetchHttpClient } from "effect/unstable/http"
 import { expect } from "bun:test"
 import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer } from "effect"
@@ -7,7 +12,6 @@ import { fileURLToPath, pathToFileURL } from "url"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { Agent as AgentSvc } from "../../src/agent/agent"
 import { BackgroundJob } from "@/background/job"
-import { Bus } from "../../src/bus"
 import { Command } from "../../src/command"
 import { Config } from "@/config/config"
 import { LSP } from "@/lsp/lsp"
@@ -18,14 +22,14 @@ import { Provider as ProviderSvc } from "@/provider/provider"
 import { Env } from "../../src/env"
 import { Git } from "../../src/git"
 import { Image } from "../../src/image/image"
-import { ModelID, ProviderID } from "../../src/provider/schema"
+
 import { Question } from "../../src/question"
 import { Todo } from "../../src/session/todo"
 import { Session } from "@/session/session"
-import { SessionMessageTable } from "../../src/session/session.sql"
+import { SessionMessageTable } from "@opencode-ai/core/session/sql"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
-import { AppFileSystem } from "@opencode-ai/core/filesystem"
+import { FSUtil } from "@opencode-ai/core/fs-util"
 import { SessionCompaction } from "../../src/session/compaction"
 import { SessionSummary } from "../../src/session/summary"
 import { Instruction } from "../../src/session/instruction"
@@ -33,10 +37,9 @@ import { SessionProcessor } from "../../src/session/processor"
 import { SessionPrompt } from "../../src/session/prompt"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
-import { SessionPromptQueue } from "../../src/session/prompt-queue"
-import { MessageID, PartID, QueueItemID, SessionID } from "../../src/session/schema"
+import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
-import { SessionV2 } from "../../src/v2/session"
+import { SessionV2 } from "@opencode-ai/core/session"
 import { Skill } from "../../src/skill"
 import { SystemPrompt } from "../../src/session/system"
 import { Shell } from "../../src/shell/shell"
@@ -45,17 +48,16 @@ import { ToolRegistry } from "@/tool/registry"
 import { Truncate } from "@/tool/truncate"
 import * as Log from "@opencode-ai/core/util/log"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
-import * as Database from "../../src/storage/db"
-import { Ripgrep } from "../../src/file/ripgrep"
+import { Ripgrep } from "@opencode-ai/core/filesystem/ripgrep"
 import { Format } from "../../src/format"
 import { Reference } from "../../src/reference/reference"
 import { RepositoryCache } from "../../src/reference/repository-cache"
 import { TestInstance } from "../fixture/fixture"
 import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 import { reply, TestLLMServer } from "../lib/llm-server"
-import { SyncEvent } from "@/sync"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { EventV2Bridge } from "@/event-v2-bridge"
+import { ProviderV2 } from "@opencode-ai/core/provider"
+import { ModelV2 } from "@opencode-ai/core/model"
 
 void Log.init({ print: false })
 
@@ -69,8 +71,8 @@ const summary = Layer.succeed(
 )
 
 const ref = {
-  providerID: ProviderID.make("test"),
-  modelID: ModelID.make("test-model"),
+  providerID: ProviderV2.ID.make("test"),
+  modelID: ModelV2.ID.make("test-model"),
 }
 
 function withSh<A, E, R>(fx: () => Effect.Effect<A, E, R>) {
@@ -91,20 +93,20 @@ function withSh<A, E, R>(fx: () => Effect.Effect<A, E, R>) {
   )
 }
 
-function toolPart(parts: MessageV2.Part[]) {
-  return parts.find((part): part is MessageV2.ToolPart => part.type === "tool")
+function toolPart(parts: SessionV1.Part[]) {
+  return parts.find((part): part is SessionV1.ToolPart => part.type === "tool")
 }
 
-type CompletedToolPart = MessageV2.ToolPart & { state: MessageV2.ToolStateCompleted }
-type ErrorToolPart = MessageV2.ToolPart & { state: MessageV2.ToolStateError }
+type CompletedToolPart = SessionV1.ToolPart & { state: SessionV1.ToolStateCompleted }
+type ErrorToolPart = SessionV1.ToolPart & { state: SessionV1.ToolStateError }
 
-function completedTool(parts: MessageV2.Part[]) {
+function completedTool(parts: SessionV1.Part[]) {
   const part = toolPart(parts)
   expect(part?.state.status).toBe("completed")
   return part?.state.status === "completed" ? (part as CompletedToolPart) : undefined
 }
 
-function errorTool(parts: MessageV2.Part[]) {
+function errorTool(parts: SessionV1.Part[]) {
   const part = toolPart(parts)
   expect(part?.state.status).toBe("error")
   return part?.state.status === "error" ? (part as ErrorToolPart) : undefined
@@ -153,7 +155,7 @@ const lsp = Layer.succeed(
   }),
 )
 
-const status = SessionStatus.layer.pipe(Layer.provideMerge(Bus.layer))
+const status = SessionStatus.layer.pipe(Layer.provideMerge(EventV2Bridge.defaultLayer))
 const run = SessionRunState.layer.pipe(Layer.provide(status))
 const infra = Layer.mergeAll(NodeFileSystem.layer, CrossSpawnSpawner.defaultLayer)
 
@@ -179,12 +181,11 @@ function makePrompt(input?: { processor?: "blocking" }) {
     ProviderSvc.defaultLayer,
     lsp,
     mcp,
-    AppFileSystem.defaultLayer,
+    FSUtil.defaultLayer,
     BackgroundJob.defaultLayer,
     status,
-    SyncEvent.defaultLayer,
+    Database.defaultLayer,
     EventV2Bridge.defaultLayer,
-    SessionPromptQueue.defaultLayer,
   ).pipe(Layer.provideMerge(infra))
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))
@@ -297,33 +298,32 @@ function providerCfg(url: string) {
 }
 
 const writeText = Effect.fn("test.writeText")(function* (file: string, text: string) {
-  const fs = yield* AppFileSystem.Service
+  const fs = yield* FSUtil.Service
   yield* fs.writeWithDirs(file, text)
 })
 
 const ensureDir = Effect.fn("test.ensureDir")(function* (dir: string) {
-  const fs = yield* AppFileSystem.Service
+  const fs = yield* FSUtil.Service
   yield* fs.ensureDir(dir)
 })
 
-const writeConfig = Effect.fn("test.writeConfig")(function* (dir: string, config: Partial<Config.Info>) {
+const writeConfig = Effect.fn("test.writeConfig")(function* (dir: string, config: Partial<ConfigV1.Info>) {
   yield* writeText(
     path.join(dir, "opencode.json"),
     JSON.stringify({ $schema: "https://opencode.ai/config.json", ...config }),
   )
 })
 
-const useServerConfig = Effect.fn("test.useServerConfig")(function* (config: (url: string) => Partial<Config.Info>) {
+const useServerConfig = Effect.fn("test.useServerConfig")(function* (config: (url: string) => Partial<ConfigV1.Info>) {
   const { directory: dir } = yield* TestInstance
   const llm = yield* TestLLMServer
   yield* writeConfig(dir, config(llm.url))
   return { dir, llm }
 })
 
-// Wait for a session's runner to enter a busy state. SessionStatus is flipped to
-// "busy" inside Runner.startShell's modifyEffect at the same moment the runner
-// is registered, so this is a deterministic readiness signal — cancel can't
-// no-op once we observe it.
+// Wait for a session's runner to enter a busy state. SessionStatus is flipped
+// inside Runner.startShell's serialized transition, so cancel can't no-op once
+// we observe it.
 const waitForBusy = (sessionID: SessionID, duration: Duration.Input = "2 seconds") =>
   pollWithTimeout(
     Effect.gen(function* () {
@@ -390,7 +390,7 @@ const user = Effect.fn("test.user")(function* (sessionID: SessionID, text: strin
 const seed = Effect.fn("test.seed")(function* (sessionID: SessionID, opts?: { finish?: string }) {
   const session = yield* Session.Service
   const msg = yield* user(sessionID, "hello")
-  const assistant: MessageV2.Assistant = {
+  const assistant: SessionV1.Assistant = {
     id: MessageID.ascending(),
     role: "assistant",
     parentID: msg.id,
@@ -483,7 +483,7 @@ it.instance("loop exits without an LLM request for interrupted orphan tool calls
     })
 
     const result = yield* prompt.loop({ sessionID: chat.id })
-    expect(result.info.role).toBe("assistant")
+    expect(result.info.id).toBe(seeded.assistant.id)
     expect(yield* llm.hits).toHaveLength(0)
   }),
 )
@@ -513,8 +513,38 @@ it.instance("loop calls LLM and returns assistant message", () =>
   }),
 )
 
-noLLMServer.instance(
-  "prompt emits v2 prompted and synthetic events",
+it.instance("loop stops provider overflow instead of auto-compacting when disabled", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig((url) => ({
+      ...providerCfg(url),
+      compaction: { auto: false },
+    }))
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+
+    yield* llm.error(413, { error: { message: "request entity too large" } })
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    const messages = yield* sessions.messages({ sessionID: chat.id })
+
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") {
+      expect(result.info.error?.name).toBe("ContextOverflowError")
+      expect(result.info.finish).toBe("error")
+    }
+    expect(messages.some((message) => message.parts.some((part) => part.type === "compaction"))).toBe(false)
+  }),
+)
+
+noLLMServer.instance.skip(
+  "prompt emits v2 prompted and synthetic events (v2 projector disabled)",
   () =>
     Effect.gen(function* () {
       const prompt = yield* SessionPrompt.Service
@@ -537,11 +567,15 @@ noLLMServer.instance(
       })
 
       const messages = yield* SessionV2.Service.use((session) => session.messages({ sessionID: chat.id })).pipe(
-        Effect.provide(SessionV2.layer),
+        Effect.provide(SessionV2.defaultLayer),
       )
-      const row = Database.use((db) =>
-        db.select().from(SessionMessageTable).where(Database.eq(SessionMessageTable.session_id, chat.id)).get(),
-      )
+      const { db } = yield* Database.Service
+      const row = yield* db
+        .select()
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.session_id, chat.id))
+        .get()
+        .pipe(Effect.orDie)
       expect(messages.find((message) => message.type === "user")).toMatchObject({ type: "user", text: "hello v2" })
       expect(typeof row?.data.time.created).toBe("number")
       expect(messages).toEqual(
@@ -755,8 +789,8 @@ it.instance("failed subtask preserves metadata on error tool state", () =>
     expect(tool.state.metadata).toBeDefined()
     expect(tool.state.metadata?.sessionId).toBeDefined()
     expect(tool.state.metadata?.model).toEqual({
-      providerID: ProviderID.make("test"),
-      modelID: ModelID.make("missing-model"),
+      providerID: ProviderV2.ID.make("test"),
+      modelID: ModelV2.ID.make("missing-model"),
     })
   }),
 )
@@ -779,7 +813,7 @@ it.instance(
         Effect.gen(function* () {
           const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
           const taskMsg = msgs.find((item) => item.info.role === "assistant" && item.info.agent === "general")
-          const tool = taskMsg?.parts.find((part): part is MessageV2.ToolPart => part.type === "tool")
+          const tool = taskMsg?.parts.find((part): part is SessionV1.ToolPart => part.type === "tool")
           if (tool?.state.status === "running" && tool.state.metadata?.sessionId) return tool
         }),
         "timed out waiting for running subtask metadata",
@@ -822,7 +856,7 @@ it.instance(
           const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
           const assistant = msgs.findLast((item) => item.info.role === "assistant" && item.info.agent === "build")
           const tool = assistant?.parts.find(
-            (part): part is MessageV2.ToolPart => part.type === "tool" && part.tool === "task",
+            (part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === "task",
           )
           if (tool?.state.status === "running" && tool.state.metadata?.sessionId) return tool
         }),
@@ -1224,739 +1258,6 @@ it.instance(
 )
 
 it.instance(
-  "deferred prompt is not persisted until the run loop dequeues it",
-  () =>
-    Effect.gen(function* () {
-      const { llm } = yield* useServerConfig(providerCfg)
-      const gate = yield* Deferred.make<void>()
-      const prompt = yield* SessionPrompt.Service
-      const sessions = yield* Session.Service
-      const chat = yield* sessions.create({ title: "Pinned" })
-
-      yield* llm.hold("open", deferredAsPromise(gate))
-      yield* llm.text("done")
-
-      const run = yield* prompt
-        .prompt({
-          sessionID: chat.id,
-          agent: "build",
-          model: ref,
-          parts: [{ type: "text", text: "open" }],
-        })
-        .pipe(Effect.forkChild)
-
-      yield* llm.wait(1)
-
-      yield* prompt.queueEnqueue({
-        sessionID: chat.id,
-        agent: "build",
-        model: ref,
-        parts: [{ type: "text", text: "queued" }],
-      })
-
-      const queued = (yield* sessions.messages({ sessionID: chat.id })).filter((msg) =>
-        msg.parts.some((part) => part.type === "text" && part.text === "queued"),
-      )
-      expect(queued).toHaveLength(0)
-
-      yield* Deferred.succeed(gate, void 0)
-      const exit = yield* Fiber.await(run)
-      expect(Exit.isSuccess(exit)).toBe(true)
-
-      const persisted = (yield* sessions.messages({ sessionID: chat.id })).filter(
-        (msg) =>
-          msg.info.role === "user" &&
-          msg.parts.some((part) => part.type === "text" && part.text === "queued"),
-      )
-      expect(persisted).toHaveLength(1)
-    }),
-  3_000,
-)
-
-it.instance(
-  "resuming paused queue drain restarts an idle loop with pending queued prompts",
-  () =>
-    Effect.gen(function* () {
-      const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
-      const promptQueue = yield* SessionPromptQueue.Service
-      const sessions = yield* Session.Service
-      const chat = yield* sessions.create({ title: "Paused queue resume" })
-
-      yield* llm.text("open-done")
-      yield* llm.text("queued-done")
-      yield* promptQueue.pauseDrain(chat.id)
-
-      yield* prompt.queueEnqueue({
-        sessionID: chat.id,
-        agent: "build",
-        model: ref,
-        parts: [{ type: "text", text: "queued while paused" }],
-      })
-
-      const run = yield* prompt
-        .prompt({
-          sessionID: chat.id,
-          agent: "build",
-          model: ref,
-          parts: [{ type: "text", text: "open" }],
-        })
-        .pipe(Effect.forkChild)
-
-      expect(Exit.isSuccess(yield* Fiber.await(run))).toBe(true)
-      expect(yield* promptQueue.peek(chat.id)).toBeDefined()
-      expect(JSON.stringify(yield* llm.inputs)).not.toContain("queued while paused")
-
-      yield* prompt.resumeQueueDrain(chat.id)
-
-      yield* pollWithTimeout(
-        promptQueue.peek(chat.id).pipe(Effect.map((next) => (next ? undefined : true))),
-        "timed out waiting for paused queue drain to resume",
-      )
-      yield* pollWithTimeout(
-        llm.inputs.pipe(Effect.map((inputs) => (JSON.stringify(inputs).includes("queued while paused") ? true : undefined))),
-        "timed out waiting for resumed queue prompt to reach the model",
-      )
-    }),
-  5_000,
-)
-
-noLLMServer.instance("queued prompt tools do not mutate live session permissions before dequeue", () =>
-  Effect.gen(function* () {
-    const prompt = yield* SessionPrompt.Service
-    const promptQueue = yield* SessionPromptQueue.Service
-    const sessions = yield* Session.Service
-    const chat = yield* sessions.create({
-      title: "Pinned",
-      permission: [{ permission: "*", pattern: "*", action: "allow" }],
-    })
-
-    const item = yield* prompt.queueEnqueue({
-      sessionID: chat.id,
-      agent: "build",
-      model: ref,
-      tools: { bash: false },
-      parts: [{ type: "text", text: "queued" }],
-    })
-
-    expect((yield* sessions.get(chat.id)).permission).toEqual([{ permission: "*", pattern: "*", action: "allow" }])
-    expect((yield* promptQueue.list(chat.id))[0]?.data.tools).toEqual({ bash: false })
-    expect(item.data.tools).toEqual({ bash: false })
-  }),
-)
-
-noLLMServer.instance("sending a stale queued prompt fails instead of dying", () =>
-  Effect.gen(function* () {
-    const prompt = yield* SessionPrompt.Service
-    const sessions = yield* Session.Service
-    const chat = yield* sessions.create({ title: "Pinned" })
-
-    const exit = yield* prompt
-      .queueSend({
-        sessionID: chat.id,
-        queueID: QueueItemID.make("pqu_missing"),
-      })
-      .pipe(Effect.exit)
-
-    expect(Exit.isFailure(exit)).toBe(true)
-    if (!Exit.isFailure(exit)) return
-    expect(exit.cause.reasons.some(Cause.isDieReason)).toBe(false)
-    expect(Cause.pretty(exit.cause)).toContain("Queued message not found")
-  }),
-)
-
-it.instance("sending a queued prompt while busy steers and removes it from the queue", () =>
-  Effect.gen(function* () {
-    const { llm } = yield* useServerConfig(providerCfg)
-    const openGate = yield* Deferred.make<void>()
-    const prompt = yield* SessionPrompt.Service
-    const promptQueue = yield* SessionPromptQueue.Service
-    const sessions = yield* Session.Service
-    const chat = yield* sessions.create({ title: "Busy queue send" })
-
-    yield* llm.hold("open", deferredAsPromise(openGate))
-    yield* llm.text("queued-done")
-
-    const running = yield* prompt
-      .prompt({
-        sessionID: chat.id,
-        agent: "build",
-        model: ref,
-        parts: [{ type: "text", text: "open" }],
-      })
-      .pipe(Effect.forkChild)
-    yield* llm.wait(1)
-
-    const item = yield* prompt.queueEnqueue({
-      sessionID: chat.id,
-      agent: "build",
-      model: ref,
-      parts: [{ type: "text", text: "queued" }],
-    })
-
-    const sent = yield* prompt
-      .queueSend({
-        sessionID: chat.id,
-        queueID: item.id,
-      })
-      .pipe(Effect.forkChild)
-
-    yield* pollWithTimeout(
-      sessions.messages({ sessionID: chat.id }).pipe(
-        Effect.map((msgs) =>
-          msgs.some(
-            (msg) =>
-              msg.info.role === "user" &&
-              msg.info.delivery === "immediate" &&
-              msg.parts.some((part) => part.type === "text" && part.text === "queued"),
-          )
-            ? true
-            : undefined,
-        ),
-      ),
-      "timed out waiting for queued send-now user message",
-    )
-    expect((yield* promptQueue.list(chat.id)).map((entry) => entry.id)).not.toContain(item.id)
-
-    yield* Deferred.succeed(openGate, void 0)
-    expect(Exit.isSuccess(yield* Fiber.await(running))).toBe(true)
-    expect(Exit.isSuccess(yield* Fiber.await(sent))).toBe(true)
-    expect(JSON.stringify(yield* llm.inputs)).toContain("queued")
-  }),
-  5_000,
-)
-
-it.instance(
-  "deferred prompt joins the active run instead of starting a separate turn",
-  () =>
-    Effect.gen(function* () {
-      const { llm } = yield* useServerConfig(providerCfg)
-      const gate = yield* Deferred.make<void>()
-      const prompt = yield* SessionPrompt.Service
-      const sessions = yield* Session.Service
-      const chat = yield* sessions.create({ title: "Pinned" })
-
-      yield* llm.hold("first", deferredAsPromise(gate))
-      yield* llm.text("second")
-
-      const a = yield* prompt
-        .prompt({
-          sessionID: chat.id,
-          agent: "build",
-          model: ref,
-          parts: [{ type: "text", text: "first" }],
-        })
-        .pipe(Effect.forkChild)
-
-      yield* llm.wait(1)
-
-      yield* prompt.queueEnqueue({
-        sessionID: chat.id,
-        agent: "build",
-        model: ref,
-        parts: [{ type: "text", text: "second" }],
-      })
-
-      yield* Deferred.succeed(gate, void 0)
-      const ea = yield* Fiber.await(a)
-      expect(Exit.isSuccess(ea)).toBe(true)
-
-      yield* pollWithTimeout(
-        llm.calls.pipe(Effect.map((n) => (n >= 2 ? true : undefined))),
-        "timed out waiting for deferred message to be processed",
-      )
-      expect(yield* llm.calls).toBe(2)
-
-      const inputs = yield* llm.inputs
-      expect(JSON.stringify(inputs.at(-1)?.messages)).toContain("second")
-    }),
-  3_000,
-)
-
-it.instance(
-  "deferred prompt is not sent to the model until the active turn finishes",
-  () =>
-    Effect.gen(function* () {
-      const { llm } = yield* useServerConfig(providerCfg)
-      const gate = yield* Deferred.make<void>()
-      const prompt = yield* SessionPrompt.Service
-      const sessions = yield* Session.Service
-      const chat = yield* sessions.create({ title: "Pinned" })
-
-      yield* llm.hold("start", deferredAsPromise(gate))
-      yield* llm.text("turn-done")
-      yield* llm.text("queued-result")
-
-      const run = yield* prompt
-        .prompt({
-          sessionID: chat.id,
-          agent: "build",
-          model: ref,
-          parts: [{ type: "text", text: "sleep then essay" }],
-        })
-        .pipe(Effect.forkChild)
-
-      yield* llm.wait(1)
-
-      yield* prompt.queueEnqueue({
-        sessionID: chat.id,
-        agent: "build",
-        model: ref,
-        parts: [{ type: "text", text: "queued-message" }],
-      })
-
-      const inputsBeforeRelease = yield* llm.inputs
-      expect(inputsBeforeRelease).toHaveLength(1)
-      expect(JSON.stringify(inputsBeforeRelease)).not.toContain("queued-message")
-
-      yield* Deferred.succeed(gate, void 0)
-
-      const exit = yield* Fiber.await(run)
-      expect(Exit.isSuccess(exit)).toBe(true)
-
-      const inputs = yield* llm.inputs
-      expect(inputs.length).toBeGreaterThanOrEqual(2)
-      expect(JSON.stringify(inputs.slice(0, -1))).not.toContain("queued-message")
-      expect(JSON.stringify(inputs.at(-1)?.messages)).toContain("queued-message")
-    }),
-  3_000,
-)
-
-it.instance(
-  "deferred prompt is not sent to the model until after tool follow-up completes",
-  () =>
-    withSh(() =>
-      Effect.gen(function* () {
-        const { llm } = yield* useServerConfig(providerCfg)
-        const gate = yield* Deferred.make<void>()
-        const prompt = yield* SessionPrompt.Service
-        const sessions = yield* Session.Service
-        const chat = yield* sessions.create({
-          title: "Pinned",
-          permission: [{ permission: "*", pattern: "*", action: "allow" }],
-        })
-
-        yield* llm.tool("bash", { command: "sleep 15" })
-        yield* llm.hold("haiku", deferredAsPromise(gate))
-        yield* llm.text("cherry blossoms fall")
-        yield* llm.text("queued-done")
-
-        const run = yield* prompt
-          .prompt({
-            sessionID: chat.id,
-            agent: "build",
-            model: ref,
-            parts: [{ type: "text", text: "sleep 15 then haiku" }],
-          })
-          .pipe(Effect.forkChild)
-
-        yield* llm.wait(1)
-
-        yield* prompt.queueEnqueue({
-          sessionID: chat.id,
-          agent: "build",
-          model: ref,
-          parts: [{ type: "text", text: "queued-message" }],
-        })
-
-        const inputsBeforeRelease = yield* llm.inputs
-        expect(inputsBeforeRelease).toHaveLength(1)
-        expect(JSON.stringify(inputsBeforeRelease)).not.toContain("queued-message")
-
-        yield* Deferred.succeed(gate, void 0)
-
-        const exit = yield* Fiber.await(run)
-        expect(Exit.isSuccess(exit)).toBe(true)
-
-        const inputs = yield* llm.inputs
-        expect(inputs.length).toBeGreaterThanOrEqual(2)
-        expect(JSON.stringify(inputs[1]?.messages)).not.toContain("queued-message")
-        expect(JSON.stringify(inputs)).toContain("queued-message")
-      }),
-    ),
-  10_000,
-)
-
-it.instance(
-  "deferred prompt does not re-run the open user after the queued turn completes",
-  () =>
-    Effect.gen(function* () {
-      const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
-      const sessions = yield* Session.Service
-      const chat = yield* sessions.create({ title: "Pinned" })
-
-      yield* llm.text("open-done")
-      yield* llm.text("queued-done")
-
-      const run = yield* prompt
-        .prompt({
-          sessionID: chat.id,
-          agent: "build",
-          model: ref,
-          parts: [{ type: "text", text: "open message" }],
-        })
-        .pipe(Effect.forkChild)
-
-      yield* llm.wait(1)
-
-      yield* prompt.queueEnqueue({
-        sessionID: chat.id,
-        agent: "build",
-        model: ref,
-        parts: [{ type: "text", text: "queued-message" }],
-      })
-
-      const exit = yield* Fiber.await(run)
-      expect(Exit.isSuccess(exit)).toBe(true)
-
-      expect(yield* llm.calls).toBe(2)
-
-      const msgs = yield* sessions.messages({ sessionID: chat.id })
-      const openUser = msgs.find(
-        (msg) =>
-          msg.info.role === "user" &&
-          msg.parts.some((part) => part.type === "text" && part.text === "open message"),
-      )
-      if (!openUser || openUser.info.role !== "user") throw new Error("expected open user")
-      const openAssistants = msgs.filter(
-        (msg) => msg.info.role === "assistant" && msg.info.parentID === openUser.info.id,
-      )
-      expect(openAssistants).toHaveLength(1)
-    }),
-  5_000,
-)
-
-it.instance(
-  "processes three deferred prompts in fifo order",
-  () =>
-    Effect.gen(function* () {
-      const { llm } = yield* useServerConfig(providerCfg)
-      const gate = yield* Deferred.make<void>()
-      const prompt = yield* SessionPrompt.Service
-      const sessions = yield* Session.Service
-      const chat = yield* sessions.create({
-        title: "Pinned",
-        permission: [{ permission: "*", pattern: "*", action: "allow" }],
-      })
-
-      yield* llm.hold("open", deferredAsPromise(gate))
-      yield* llm.text("queue-1-done")
-      yield* llm.text("queue-2-done")
-      yield* llm.text("queue-3-done")
-
-      const run = yield* prompt
-        .prompt({
-          sessionID: chat.id,
-          agent: "build",
-          model: ref,
-          parts: [{ type: "text", text: "open turn" }],
-        })
-        .pipe(Effect.forkChild)
-
-      yield* llm.wait(1)
-
-      for (const text of ["queue-one", "queue-two", "queue-three"]) {
-        yield* prompt.queueEnqueue({
-          sessionID: chat.id,
-          agent: "build",
-          model: ref,
-          parts: [{ type: "text", text }],
-        })
-      }
-
-      yield* Deferred.succeed(gate, void 0)
-
-      const exit = yield* Fiber.await(run)
-      expect(Exit.isSuccess(exit)).toBe(true)
-
-      const inputs = yield* llm.inputs
-      expect(inputs).toHaveLength(4)
-      expect(JSON.stringify(inputs[1]?.messages)).toContain("queue-one")
-      expect(JSON.stringify(inputs[1]?.messages)).not.toContain("queue-two")
-      expect(JSON.stringify(inputs[2]?.messages)).toContain("queue-two")
-      expect(JSON.stringify(inputs[2]?.messages)).not.toContain("queue-three")
-      expect(JSON.stringify(inputs[3]?.messages)).toContain("queue-three")
-
-      const queued = (yield* sessions.messages({ sessionID: chat.id })).filter(
-        (msg) =>
-          msg.info.role === "user" &&
-          msg.parts.some(
-            (part) =>
-              part.type === "text" &&
-              (part.text === "queue-one" || part.text === "queue-two" || part.text === "queue-three"),
-          ),
-      )
-      expect(queued).toHaveLength(3)
-      const assistants = yield* sessions.messages({ sessionID: chat.id })
-      const parents = assistants
-        .filter((msg) => msg.info.role === "assistant")
-        .map((msg) => (msg.info.role === "assistant" ? msg.info.parentID : ""))
-      expect(parents.filter((id) => queued.some((user) => user.info.id === id)).length).toBe(3)
-    }),
-  10_000,
-)
-
-it.instance(
-  "deferred queue stays out of transcript until each item is dequeued (sleep haiku fifo)",
-  () =>
-    Effect.gen(function* () {
-      const { llm } = yield* useServerConfig(providerCfg)
-      const gate = yield* Deferred.make<void>()
-      const prompt = yield* SessionPrompt.Service
-      const sessions = yield* Session.Service
-      const chat = yield* sessions.create({ title: "Sleep, haiku, factorial 128" })
-
-      yield* llm.hold("open", deferredAsPromise(gate))
-      yield* llm.text("haiku-done")
-      yield* llm.text("APPLE")
-      yield* llm.text("ORANGE")
-      yield* llm.text("BANANA")
-
-      const run = yield* prompt
-        .prompt({
-          sessionID: chat.id,
-          agent: "build",
-          model: ref,
-          parts: [
-            {
-              type: "text",
-              text: "Sleep 15 seconds, then once the tool call returns, think about a Haiku and send it to me.",
-            },
-          ],
-        })
-        .pipe(Effect.forkChild)
-
-      yield* llm.wait(1)
-
-      for (const text of ["Say APPLE", "Say ORANGE", "Say BANANA!!!"]) {
-        yield* prompt.queueEnqueue({
-          sessionID: chat.id,
-          agent: "build",
-          model: ref,
-          parts: [{ type: "text", text }],
-        })
-      }
-
-      const whileHeld = (yield* sessions.messages({ sessionID: chat.id })).filter((msg) =>
-        msg.parts.some(
-          (part) =>
-            part.type === "text" &&
-            (part.text === "Say APPLE" || part.text === "Say ORANGE" || part.text === "Say BANANA!!!"),
-        ),
-      )
-      expect(whileHeld).toHaveLength(0)
-
-      const inputsWhileHeld = yield* llm.inputs
-      expect(JSON.stringify(inputsWhileHeld)).not.toContain("Say APPLE")
-      expect(JSON.stringify(inputsWhileHeld)).not.toContain("Say ORANGE")
-      expect(JSON.stringify(inputsWhileHeld)).not.toContain("Say BANANA")
-
-      yield* Deferred.succeed(gate, void 0)
-
-      const exit = yield* Fiber.await(run)
-      expect(Exit.isSuccess(exit)).toBe(true)
-
-      const inputs = yield* llm.inputs
-      const serialized = inputs.map((input) => JSON.stringify(input.messages))
-      const appleIndex = serialized.findIndex((body) => body.includes("Say APPLE"))
-      const orangeIndex = serialized.findIndex((body) => body.includes("Say ORANGE"))
-      const bananaIndex = serialized.findIndex((body) => body.includes("Say BANANA"))
-      expect(appleIndex).toBeGreaterThan(0)
-      expect(orangeIndex).toBeGreaterThan(appleIndex)
-      expect(bananaIndex).toBeGreaterThan(orangeIndex)
-      expect(serialized.slice(0, appleIndex).join()).not.toContain("Say APPLE")
-      expect(serialized.slice(0, orangeIndex).join()).not.toContain("Say ORANGE")
-      expect(serialized.slice(0, bananaIndex).join()).not.toContain("Say BANANA")
-
-      const msgs = yield* sessions.messages({ sessionID: chat.id })
-      const users = msgs
-        .filter((msg) => msg.info.role === "user")
-        .map((msg) => (msg.info.role === "user" ? msg.info : undefined))
-        .filter((info): info is MessageV2.User => info !== undefined)
-      const assistants = msgs
-        .filter((msg) => msg.info.role === "assistant")
-        .map((msg) => (msg.info.role === "assistant" ? msg.info : undefined))
-        .filter((info): info is MessageV2.Assistant => info !== undefined)
-
-      const openUser = users.find((user) =>
-        msgs
-          .find((msg) => msg.info.id === user.id)
-          ?.parts.some((part) => part.type === "text" && part.text.includes("Sleep 15 seconds")),
-      )
-      if (!openUser) throw new Error("expected open user")
-      const openAssistants = assistants.filter((assistant) => assistant.parentID === openUser.id)
-      expect(openAssistants).toHaveLength(1)
-
-      const queuedUsers = users.filter((user) =>
-        ["Say APPLE", "Say ORANGE", "Say BANANA!!!"].some((text) =>
-          msgs
-            .find((msg) => msg.info.id === user.id)
-            ?.parts.some((part) => part.type === "text" && part.text === text),
-        ),
-      )
-      expect(queuedUsers).toHaveLength(3)
-
-      const timeline = msgs.map((msg) => msg.info.id)
-      for (const queued of queuedUsers) {
-        const userIndex = timeline.indexOf(queued.id)
-        const assistant = assistants.find((entry) => entry.parentID === queued.id)
-        if (!assistant) throw new Error(`expected assistant for ${queued.id}`)
-        const assistantIndex = timeline.indexOf(assistant.id)
-        expect(userIndex).toBeGreaterThan(-1)
-        expect(assistantIndex).toBeGreaterThan(userIndex)
-        for (const other of queuedUsers) {
-          if (other.id === queued.id) continue
-          const otherIndex = timeline.indexOf(other.id)
-          if (otherIndex < userIndex) expect(assistantIndex).toBeGreaterThan(otherIndex)
-        }
-      }
-
-      const openIndex = timeline.indexOf(openUser.id)
-      const firstQueuedIndex = timeline.indexOf(queuedUsers[0]!.id)
-      expect(firstQueuedIndex).toBeGreaterThan(openIndex)
-      const lastOpenAssistantIndex = timeline.indexOf(openAssistants[0]!.id)
-      expect(firstQueuedIndex).toBeGreaterThan(lastOpenAssistantIndex)
-    }),
-  10_000,
-)
-
-it.instance(
-  "steering does not dequeue deferred prompts until the steer turn finishes",
-  () =>
-    Effect.gen(function* () {
-      const { llm } = yield* useServerConfig(providerCfg)
-      const openGate = yield* Deferred.make<void>()
-      const steerGate = yield* Deferred.make<void>()
-      const prompt = yield* SessionPrompt.Service
-      const promptQueue = yield* SessionPromptQueue.Service
-      const sessions = yield* Session.Service
-      const chat = yield* sessions.create({ title: "Pinned" })
-
-      yield* llm.hold("open", deferredAsPromise(openGate))
-      yield* llm.text("open-done")
-      yield* llm.hold("steer", deferredAsPromise(steerGate))
-      yield* llm.text("queue-1-done")
-
-      const run = yield* prompt
-        .prompt({
-          sessionID: chat.id,
-          agent: "build",
-          model: ref,
-          parts: [{ type: "text", text: "open turn" }],
-        })
-        .pipe(Effect.forkChild)
-
-      yield* llm.wait(1)
-
-      yield* promptQueue.enqueue(chat.id, {
-        version: 1,
-        agent: "build",
-        model: ref,
-        parts: [{ type: "text", text: "queued-one" }],
-      })
-
-      expect(yield* promptQueue.peek(chat.id)).toBeDefined()
-
-      yield* prompt
-        .prompt({
-          sessionID: chat.id,
-          agent: "build",
-          model: ref,
-          delivery: "immediate",
-          parts: [{ type: "text", text: "steer now" }],
-        })
-        .pipe(Effect.forkChild)
-
-      yield* pollWithTimeout(
-        sessions.messages({ sessionID: chat.id }).pipe(
-          Effect.map((msgs) =>
-            msgs.some(
-              (msg) =>
-                msg.info.role === "user" &&
-                msg.parts.some((part) => part.type === "text" && part.text === "steer now"),
-            )
-              ? true
-              : undefined,
-          ),
-        ),
-        "timed out waiting for steer message",
-      )
-      expect(yield* promptQueue.peek(chat.id)).toBeDefined()
-
-      yield* Deferred.succeed(openGate, void 0)
-      yield* llm.wait(2)
-
-      expect(yield* promptQueue.peek(chat.id)).toBeDefined()
-      const inputsBeforeSteerDone = yield* llm.inputs
-      expect(JSON.stringify(inputsBeforeSteerDone)).not.toContain("queued-one")
-
-      yield* Deferred.succeed(steerGate, void 0)
-
-      const exit = yield* Fiber.await(run)
-      expect(Exit.isSuccess(exit)).toBe(true)
-
-      expect(yield* promptQueue.peek(chat.id)).toBeUndefined()
-      expect(JSON.stringify(yield* llm.inputs)).toContain("queued-one")
-    }),
-  10_000,
-)
-
-it.instance(
-  "delivery deferred on session.prompt is dormant and runs an immediate turn",
-  () =>
-    Effect.gen(function* () {
-      const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
-      const sessions = yield* Session.Service
-      const chat = yield* sessions.create({ title: "Pinned" })
-
-      yield* llm.text("hello")
-
-      const result = yield* prompt.prompt({
-        sessionID: chat.id,
-        agent: "build",
-        model: ref,
-        delivery: "deferred",
-        parts: [{ type: "text", text: "hi" }],
-      })
-
-      expect(result.info.role).toBe("assistant")
-      expect(yield* llm.hits).toHaveLength(1)
-      const user = (yield* sessions.messages({ sessionID: chat.id })).find((msg) => msg.info.role === "user")
-      if (!user || user.info.role !== "user") throw new Error("expected user")
-      expect(user.info.delivery).not.toBe("deferred")
-    }),
-  3_000,
-)
-
-it.instance(
-  "immediate prompt persists delivery on the user message",
-  () =>
-    Effect.gen(function* () {
-      const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
-      const sessions = yield* Session.Service
-      const chat = yield* sessions.create({ title: "Pinned" })
-
-      const result = yield* prompt.prompt({
-        sessionID: chat.id,
-        agent: "build",
-        model: ref,
-        delivery: "immediate",
-        parts: [{ type: "text", text: "hello" }],
-      })
-
-      expect(result.info.role).toBe("assistant")
-      const msgs = yield* sessions.messages({ sessionID: chat.id })
-      const user = msgs.find((m) => m.info.role === "user")
-      expect(user?.info.role).toBe("user")
-      if (user?.info.role === "user") expect(user.info.delivery).toBe("immediate")
-    }),
-  3_000,
-)
-
-it.instance(
   "assertNotBusy fails with BusyError when loop running",
   () =>
     Effect.gen(function* () {
@@ -2099,24 +1400,26 @@ unixNoLLMServer(
 unixNoLLMServer(
   "shell commands can change directory after startup",
   () =>
-    Effect.gen(function* () {
-      const { directory: dir } = yield* TestInstance
-      const { prompt, run, chat } = yield* boot()
-      const parent = path.dirname(dir)
-      const result = yield* prompt.shell({
-        sessionID: chat.id,
-        agent: "build",
-        command: "cd .. && pwd",
-      })
+    withSh(() =>
+      Effect.gen(function* () {
+        const { directory: dir } = yield* TestInstance
+        const { prompt, run, chat } = yield* boot()
+        const parent = path.dirname(dir)
+        const result = yield* prompt.shell({
+          sessionID: chat.id,
+          agent: "build",
+          command: "cd .. && pwd",
+        })
 
-      expect(result.info.role).toBe("assistant")
-      const tool = completedTool(result.parts)
-      if (!tool) return
+        expect(result.info.role).toBe("assistant")
+        const tool = completedTool(result.parts)
+        if (!tool) return
 
-      expect(tool.state.output).toContain(parent)
-      expect(tool.state.metadata.output).toContain(parent)
-      yield* run.assertNotBusy(chat.id)
-    }),
+        expect(tool.state.output).toContain(parent)
+        expect(tool.state.metadata.output).toContain(parent)
+        yield* run.assertNotBusy(chat.id)
+      }),
+    ),
   { config: cfg },
 )
 
@@ -2347,7 +1650,7 @@ unixNoLLMServer(
       Effect.gen(function* () {
         const { prompt, chat } = yield* boot()
         const { directory: dir } = yield* TestInstance
-        const afs = yield* AppFileSystem.Service
+        const afs = yield* FSUtil.Service
         const ready = path.join(dir, ".trap-ready")
 
         const sh = yield* prompt
@@ -2405,7 +1708,7 @@ unix(
 
       yield* llm.tool("bash", {
         command:
-          'i=0; while [ "$i" -lt 4000 ]; do printf "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx %05d\\n" "$i"; i=$((i + 1)); done; sleep 30',
+          'i=0; while [ "$i" -lt 4000 ]; do printf "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx %05d\\n" "$i"; i=$((i + 1)); done; printf truncation-ready; sleep 30',
         description: "Print many lines",
         timeout: 30_000,
         workdir: path.resolve(dir),
@@ -2413,7 +1716,15 @@ unix(
 
       const run = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
       yield* llm.wait(1)
-      yield* Effect.sleep(150)
+      yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
+          const assistant = msgs.findLast((item) => item.info.role === "assistant")
+          const tool = assistant ? toolPart(assistant.parts) : undefined
+          if (tool?.state.status === "running" && tool.state.metadata?.output.includes("truncation-ready")) return true
+        }),
+        "timed out waiting for truncated shell output",
+      )
       yield* prompt.cancel(chat.id)
 
       const exit = yield* Fiber.await(run)
@@ -2674,11 +1985,11 @@ noLLMServer.instance(
         "Use @docs and @docs/README.md and @docs/guide and @docs/missing.md and @docs/README.md and @build",
       )
       const references = parts.filter(
-        (part): part is MessageV2.TextPartInput =>
+        (part): part is SessionV1.TextPartInput =>
           part.type === "text" && part.synthetic === true && part.text.startsWith("Referenced configured reference "),
       )
-      const files = parts.filter((part): part is MessageV2.FilePartInput => part.type === "file")
-      const agents = parts.filter((part): part is MessageV2.AgentPartInput => part.type === "agent")
+      const files = parts.filter((part): part is SessionV1.FilePartInput => part.type === "file")
+      const agents = parts.filter((part): part is SessionV1.AgentPartInput => part.type === "agent")
       const bare = references.find((part) => part.text.includes("@docs."))
       const missing = references.find((part) => part.text.includes("@docs/missing.md"))
       const guide = files.find((part) => part.filename === "docs/guide")
@@ -2731,13 +2042,13 @@ noLLMServer.instance(
 
       const stored = yield* MessageV2.get({ sessionID: session.id, messageID: message.info.id })
       const synthetic = stored.parts.filter(
-        (part): part is MessageV2.TextPart => part.type === "text" && part.synthetic === true,
+        (part): part is SessionV1.TextPart => part.type === "text" && part.synthetic === true,
       )
       const reference = synthetic.find((part) => part.text.startsWith("Referenced configured reference @docs."))
 
       expect(reference?.metadata?.reference).toMatchObject({ name: "docs", kind: "local", path: docs })
       expect(synthetic.some((part) => part.text.includes(`Reference root: ${docs}`))).toBe(true)
-      expect(synthetic.some((part) => part.text.includes("subagent scout"))).toBe(true)
+      expect(synthetic.some((part) => part.text.includes("Inspect the configured reference"))).toBe(true)
 
       yield* sessions.remove(session.id)
     }),
@@ -2786,7 +2097,7 @@ noLLMServer.instance(
 
       const stored = yield* MessageV2.get({ sessionID: session.id, messageID: message.info.id })
       const synthetic = stored.parts.filter(
-        (part): part is MessageV2.TextPart => part.type === "text" && part.synthetic === true,
+        (part): part is SessionV1.TextPart => part.type === "text" && part.synthetic === true,
       )
       const reference = synthetic.find((part) =>
         part.text.startsWith("Referenced configured reference @docs/README.md."),
@@ -2933,7 +2244,7 @@ noLLMServer.instance(
       const other = yield* prompt.prompt({
         sessionID: session.id,
         agent: "build",
-        model: { providerID: ProviderID.make("opencode"), modelID: ModelID.make("kimi-k2.5-free") },
+        model: { providerID: ProviderV2.ID.make("opencode"), modelID: ModelV2.ID.make("kimi-k2.5-free") },
         noReply: true,
         parts: [{ type: "text", text: "hello" }],
       })
@@ -2948,8 +2259,8 @@ noLLMServer.instance(
       })
       if (match.info.role !== "user") throw new Error("expected user message")
       expect(match.info.model).toEqual({
-        providerID: ProviderID.make("test"),
-        modelID: ModelID.make("test-model"),
+        providerID: ProviderV2.ID.make("test"),
+        modelID: ModelV2.ID.make("test-model"),
         variant: "xhigh",
       })
       expect(match.info.model.variant).toBe("xhigh")

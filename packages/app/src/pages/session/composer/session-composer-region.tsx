@@ -17,6 +17,7 @@ import type { SessionComposerState } from "@/pages/session/composer/session-comp
 import { SessionTodoDock } from "@/pages/session/composer/session-todo-dock"
 import type { FollowupDraft } from "@/components/prompt-input/submit"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
+import { NEW_SESSION_CONTENT_WIDTH } from "@/pages/session/new-session-layout"
 
 export function SessionComposerRegion(props: {
   state: SessionComposerState
@@ -32,15 +33,12 @@ export function SessionComposerRegion(props: {
     queue: () => boolean
     items: { id: string; text: string }[]
     sending?: string
-    editingMessageID?: string
     edit?: { id: string; prompt: FollowupDraft["prompt"]; context: FollowupDraft["context"] }
     onQueue: (draft: FollowupDraft) => void
     onAbort: () => void
     onSend: (id: string) => void
     onEdit: (id: string) => void
     onEditLoaded: () => void
-    onCancelQueueEdit?: () => void
-    onEditingQueueMessageID?: (id: string | undefined) => void
   }
   revert?: {
     items: { id: string; text: string }[]
@@ -153,8 +151,9 @@ export function SessionComposerRegion(props: {
     >
       <div
         classList={{
-          "w-full px-3 pointer-events-auto": true,
-          "max-w-[720px] px-0": props.placement === "inline",
+          "w-full pointer-events-auto": true,
+          "px-3": props.placement !== "inline",
+          [NEW_SESSION_CONTENT_WIDTH]: props.placement === "inline",
           "md:max-w-200 md:mx-auto 2xl:max-w-[1000px]": props.centered,
         }}
       >
@@ -251,11 +250,10 @@ export function SessionComposerRegion(props: {
                 "margin-top": `${-lift()}px`,
               }}
             >
-              <Show when={props.followup?.items.length || props.followup?.editingMessageID}>
+              <Show when={props.followup?.items.length}>
                 <SessionFollowupDock
                   items={props.followup!.items}
                   sending={props.followup!.sending}
-                  editingMessageID={props.followup!.editingMessageID}
                   onSend={props.followup!.onSend}
                   onEdit={props.followup!.onEdit}
                 />
@@ -270,10 +268,7 @@ export function SessionComposerRegion(props: {
                       newSessionWorktree={props.newSessionWorktree}
                       onNewSessionWorktreeReset={props.onNewSessionWorktreeReset}
                       edit={props.followup?.edit}
-                      editingQueueID={props.followup?.editingMessageID}
-                      onEditingQueueMessageID={props.followup?.onEditingQueueMessageID}
                       onEditLoaded={props.followup?.onEditLoaded}
-                      onCancelQueueEdit={props.followup?.onCancelQueueEdit}
                       shouldQueue={props.followup?.queue}
                       onQueue={props.followup?.onQueue}
                       onAbort={props.followup?.onAbort}

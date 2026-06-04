@@ -4,6 +4,7 @@ import type { FooterApi, FooterEvent, RunPrompt, StreamCommit } from "@/cli/cmd/
 
 function footer() {
   const prompts = new Set<(input: RunPrompt) => void>()
+  const queuedRemoves = new Set<(messageID: string) => void>()
   const closes = new Set<() => void>()
   const events: FooterEvent[] = []
   const commits: StreamCommit[] = []
@@ -19,6 +20,12 @@ function footer() {
         prompts.delete(fn)
       }
     },
+    onQueuedRemove(fn) {
+      queuedRemoves.add(fn)
+      return () => {
+        queuedRemoves.delete(fn)
+      }
+    },
     onClose(fn) {
       if (closed) {
         fn()
@@ -30,7 +37,6 @@ function footer() {
         closes.delete(fn)
       }
     },
-    setQueueControl() {},
     event(next) {
       events.push(next)
     },
@@ -61,17 +67,14 @@ function footer() {
     api,
     events,
     commits,
-    submit(text: string, opts?: { mode?: RunPrompt["mode"]; delivery?: RunPrompt["delivery"]; queued?: boolean }) {
-      const next: RunPrompt = {
-        text,
-        parts: [] as RunPrompt["parts"],
-        ...(opts?.mode ? { mode: opts.mode } : {}),
-        ...(opts?.delivery ? { delivery: opts.delivery } : {}),
-        ...(opts?.queued ? { queued: true } : {}),
-      }
+    submit(text: string, mode?: RunPrompt["mode"]) {
+      const next = mode ? { text, parts: [] as RunPrompt["parts"], mode } : { text, parts: [] as RunPrompt["parts"] }
       for (const fn of [...prompts]) {
         fn(next)
       }
+    },
+    removeQueued(messageID: string) {
+      for (const fn of [...queuedRemoves]) fn(messageID)
     },
   }
 }
@@ -140,6 +143,7 @@ describe("run runtime queue", () => {
         text: "hello",
         phase: "start",
         source: "system",
+        messageID: expect.any(String),
       },
     ])
   })
@@ -156,10 +160,10 @@ describe("run runtime queue", () => {
       },
     })
 
-    ui.submit("/exit", { mode: "shell" })
+    ui.submit("/exit", "shell")
     await task
 
-    expect(seen).toEqual([{ text: "/exit", parts: [], mode: "shell", queueID: "queue-1" }])
+    expect(seen).toEqual([{ text: "/exit", parts: [], mode: "shell" }])
     expect(ui.commits).toEqual([])
   })
 
@@ -179,11 +183,11 @@ describe("run runtime queue", () => {
       },
     })
 
-    ui.submit("/new", { mode: "shell" })
+    ui.submit("/new", "shell")
     await task
 
     expect(created).toBe(0)
-    expect(seen).toEqual([{ text: "/new", parts: [], mode: "shell", queueID: "queue-1" }])
+    expect(seen).toEqual([{ text: "/new", parts: [], mode: "shell" }])
     expect(ui.commits).toEqual([])
   })
 
@@ -198,7 +202,7 @@ describe("run runtime queue", () => {
       },
     })
 
-    ui.submit("ls", { mode: "shell" })
+    ui.submit("ls", "shell")
     await task
   })
 
@@ -222,6 +226,7 @@ describe("run runtime queue", () => {
         text: "  hello  ",
         phase: "start",
         source: "system",
+        messageID: expect.any(String),
       },
     ])
   })
@@ -257,6 +262,7 @@ describe("run runtime queue", () => {
             text: "/fmt bash",
             phase: "start",
             source: "system",
+            messageID: expect.any(String),
           },
         ])
         ui.api.close()
@@ -286,7 +292,7 @@ describe("run runtime queue", () => {
     })
 
     ui.submit("one")
-    ui.submit("two", { queued: true })
+    ui.submit("two")
     await Promise.resolve()
     expect(seen).toEqual(["one"])
 
@@ -294,6 +300,82 @@ describe("run runtime queue", () => {
     await task
 
     expect(seen).toEqual(["one", "two"])
+  })
+
+  test("exposes ordinary in-flight prompts for removal before sending", async () => {
+    const ui = footer()
+    const turns: RunPrompt[] = []
+    let wake: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => {
+      wake = resolve
+    })
+
+    const task = runPromptQueue({
+      footer: ui.api,
+      run: async (input) => {
+        turns.push(input)
+        await gate
+      },
+    })
+
+    ui.submit("one")
+    ui.submit("two")
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(turns.map((item) => item.text)).toEqual(["one"])
+    expect(turns[0]?.messageID).toEqual(expect.any(String))
+    expect(ui.commits.map((item) => item.text)).toEqual(["one"])
+    const first = ui.events.find((item) => item.type === "queued.prompts")
+    const event = ui.events.findLast((item) => item.type === "queued.prompts")
+    expect(first?.type === "queued.prompts" ? first.prompts : []).toEqual([])
+    expect(
+      first?.type === "queued.prompts" && event?.type === "queued.prompts" ? first.prompts === event.prompts : true,
+    ).toBe(false)
+    expect(ui.events.findLast((item) => item.type === "queue")).toEqual({ type: "queue", queue: 1 })
+    expect(event?.type === "queued.prompts" ? event.prompts.map((item) => item.prompt.text) : []).toEqual(["two"])
+    if (event?.type === "queued.prompts") ui.removeQueued(event.prompts[0]!.messageID)
+    await Promise.resolve()
+
+    wake?.()
+    ui.api.close()
+    await task
+    expect(turns.map((item) => item.text)).toEqual(["one"])
+  })
+
+  test("removing one managed queued prompt preserves the others", async () => {
+    const ui = footer()
+    const turns: string[] = []
+    let wake: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => {
+      wake = resolve
+    })
+
+    const task = runPromptQueue({
+      footer: ui.api,
+      run: async (input) => {
+        turns.push(input.text)
+        if (input.text === "active") await gate
+        if (input.text === "queued three") ui.api.close()
+      },
+    })
+
+    ui.submit("active")
+    ui.submit("queued one")
+    ui.submit("queued two")
+    ui.submit("queued three")
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const event = ui.events.findLast((item) => item.type === "queued.prompts")
+    if (event?.type === "queued.prompts") {
+      const second = event.prompts.find((item) => item.prompt.text === "queued two")
+      if (second) ui.removeQueued(second.messageID)
+    }
+
+    wake?.()
+    await task
+    expect(turns).toEqual(["active", "queued one", "queued three"])
   })
 
   test("drains a prompt queued during an in-flight turn", async () => {
@@ -359,7 +441,7 @@ describe("run runtime queue", () => {
 
     ui.submit("one")
     await Promise.resolve()
-    ui.submit("two", { queued: true })
+    ui.submit("two")
     ui.api.close()
     await task
 
@@ -379,323 +461,5 @@ describe("run runtime queue", () => {
 
     ui.submit("one")
     await expect(task).rejects.toThrow("boom")
-  })
-
-  test("steers immediate prompts during an in-flight turn", async () => {
-    const ui = footer()
-    const seen: string[] = []
-    let wake: (() => void) | undefined
-    const gate = new Promise<void>((resolve) => {
-      wake = resolve
-    })
-
-    const task = runPromptQueue({
-      footer: ui.api,
-      run: async (input) => {
-        seen.push(input.text)
-        if (seen.length === 1) {
-          await gate
-          return
-        }
-      },
-    })
-
-    ui.submit("one")
-    await Promise.resolve()
-    expect(seen).toEqual(["one"])
-
-    ui.submit("steer")
-    await Promise.resolve()
-    expect(seen).toEqual(["one", "steer"])
-    expect(ui.commits.filter((item) => item.kind === "user").map((item) => item.text)).toEqual(["one", "steer"])
-
-    wake?.()
-    ui.api.close()
-    await task
-  })
-
-  test("deferred delivery enqueues without starting a drain", async () => {
-    const ui = footer()
-    const seen: string[] = []
-    let wake: (() => void) | undefined
-    const gate = new Promise<void>((resolve) => {
-      wake = resolve
-    })
-
-    const task = runPromptQueue({
-      footer: ui.api,
-      run: async (input) => {
-        seen.push(input.text)
-        if (seen.length === 1) {
-          await gate
-          return
-        }
-
-        ui.api.close()
-      },
-    })
-
-    ui.submit("one")
-    await Promise.resolve()
-    expect(seen).toEqual(["one"])
-
-    ui.submit("queued", { queued: true })
-    await Promise.resolve()
-    expect(seen).toEqual(["one"])
-    expect(ui.events.some((event) => event.type === "queue" && event.queue === 1)).toBe(true)
-
-    wake?.()
-    await task
-
-    expect(seen).toEqual(["one", "queued"])
-  })
-
-  test("queue control updates queued prompts in place", async () => {
-    const ui = footer()
-    let control: import("@/cli/cmd/run/types").QueueControl | undefined
-
-    const task = runPromptQueue({
-      footer: {
-        ...ui.api,
-        setQueueControl(next) {
-          control = next
-        },
-      },
-      run: async () => {
-        ui.api.close()
-      },
-    })
-
-    ui.submit("one", { queued: true })
-    await Promise.resolve()
-    const id = control?.get("queue-1")?.queueID
-    expect(id).toBe("queue-1")
-    expect(control?.update("queue-1", { text: "updated", parts: [] })).toBe(true)
-    expect(control?.get("queue-1")?.text).toBe("updated")
-
-    ui.api.close()
-    await task
-  })
-
-  test("remote queue control caches drafts for edit and update", async () => {
-    const ui = footer()
-    let control: import("@/cli/cmd/run/types").QueueControl | undefined
-    const updates: { id: string; text: string }[] = []
-
-    const task = runPromptQueue({
-      footer: {
-        ...ui.api,
-        setQueueControl(next) {
-          control = next
-        },
-      },
-      updateQueueRemote: async (id, prompt) => {
-        updates.push({ id, text: prompt.text })
-      },
-      run: async () => {
-        ui.api.close()
-      },
-    })
-
-    expect(control?.get("pqu_test")).toBeUndefined()
-    expect(control?.update("pqu_test", { text: "draft", parts: [], queueID: "pqu_test" })).toBe(true)
-    expect(control?.get("pqu_test")?.text).toBe("draft")
-    expect(updates).toEqual([{ id: "pqu_test", text: "draft" }])
-
-    ui.api.close()
-    await task
-  })
-
-  test("remote queue control removes queued prompts", async () => {
-    const ui = footer()
-    let control: import("@/cli/cmd/run/types").QueueControl | undefined
-    const removed: string[] = []
-
-    const task = runPromptQueue({
-      footer: {
-        ...ui.api,
-        setQueueControl(next) {
-          control = next
-        },
-      },
-      updateQueueRemote: async () => {},
-      removeQueueRemote: async (id) => {
-        removed.push(id)
-      },
-      run: async () => {
-        ui.api.close()
-      },
-    })
-
-    expect(control?.update("pqu_test", { text: "draft", parts: [], queueID: "pqu_test" })).toBe(true)
-    expect(control?.get("pqu_test")?.text).toBe("draft")
-    await control?.remove("pqu_test")
-
-    expect(control?.get("pqu_test")).toBeUndefined()
-    expect(removed).toEqual(["pqu_test"])
-
-    ui.api.close()
-    await task
-  })
-
-  test("remote queue control loads full queued prompt details before editing", async () => {
-    const ui = footer()
-    let control: import("@/cli/cmd/run/types").QueueControl | undefined
-    const loaded: string[] = []
-
-    const task = runPromptQueue({
-      footer: {
-        ...ui.api,
-        setQueueControl(next) {
-          control = next
-        },
-      },
-      getQueueRemote: async (id) => {
-        loaded.push(id)
-        return {
-          text: "line one\nline two",
-          parts: [{ type: "file", url: "file:///tmp/a.ts", filename: "a.ts", mime: "text/typescript" }],
-          queueID: id,
-          queued: true,
-        }
-      },
-      updateQueueRemote: async () => {},
-      run: async () => {
-        ui.api.close()
-      },
-    })
-
-    expect(control?.get("pqu_full")).toBeUndefined()
-    expect(await control?.load?.("pqu_full")).toEqual({
-      text: "line one\nline two",
-      parts: [{ type: "file", url: "file:///tmp/a.ts", filename: "a.ts", mime: "text/typescript" }],
-      queueID: "pqu_full",
-      queued: true,
-    })
-    expect(control?.get("pqu_full")?.text).toBe("line one\nline two")
-    expect(loaded).toEqual(["pqu_full"])
-
-    ui.api.close()
-    await task
-  })
-
-  test("remote queue control allows pause to settle before send now", async () => {
-    const ui = footer()
-    let control: import("@/cli/cmd/run/types").QueueControl | undefined
-    const calls: string[] = []
-    const sent: { id: string; text?: string }[] = []
-
-    const task = runPromptQueue({
-      footer: {
-        ...ui.api,
-        setQueueControl(next) {
-          control = next
-        },
-      },
-      pauseQueueDrainRemote: async () => {
-        calls.push("pause")
-      },
-      updateQueueRemote: async () => {},
-      sendQueueRemote: async (id, prompt) => {
-        calls.push("send")
-        sent.push({ id, text: prompt?.text })
-      },
-      run: async () => {
-        ui.api.close()
-      },
-    })
-
-    expect(control?.update("pqu_test", { text: "edited", parts: [], queueID: "pqu_test" })).toBe(true)
-    await control?.pauseDrain?.()
-    await control?.sendNow("pqu_test")
-
-    expect(calls).toEqual(["pause", "send"])
-    expect(sent).toEqual([{ id: "pqu_test", text: "edited" }])
-
-    ui.api.close()
-    await task
-  })
-
-  test("remote queue control send now does not block on the assistant turn", async () => {
-    const ui = footer()
-    let control: import("@/cli/cmd/run/types").QueueControl | undefined
-    let finishSend!: () => void
-    const sendFinished = new Promise<void>((resolve) => {
-      finishSend = resolve
-    })
-    const sent: string[] = []
-
-    const task = runPromptQueue({
-      footer: {
-        ...ui.api,
-        setQueueControl(next) {
-          control = next
-        },
-      },
-      updateQueueRemote: async () => {},
-      sendQueueRemote: async (id) => {
-        sent.push(id)
-        await sendFinished
-      },
-      run: async () => {
-        ui.api.close()
-      },
-    })
-
-    expect(control?.update("pqu_test", { text: "edited", parts: [], queueID: "pqu_test" })).toBe(true)
-    const sendNow = control?.sendNow("pqu_test")
-    let settled = false
-    void Promise.resolve(sendNow).then(() => {
-      settled = true
-    })
-    await Promise.resolve()
-
-    expect(sent).toEqual(["pqu_test"])
-    expect(settled).toBe(true)
-
-    finishSend()
-    await sendFinished
-    ui.api.close()
-    await task
-  })
-
-  test("demo mode does not enqueue prompts", async () => {
-    const ui = footer()
-    let status = ""
-
-    ui.api.event = (next) => {
-      if (next.type === "stream.patch" && next.patch?.status) status = next.patch.status
-    }
-
-    const task = runPromptQueue({
-      footer: ui.api,
-      demo: true,
-      run: async () => {},
-    })
-
-    ui.submit("queued", { queued: true })
-    ui.api.close()
-    await task
-
-    expect(status).toBe("queue unavailable in demo")
-  })
-
-  test("deferred delivery ignores empty prompts", async () => {
-    const ui = footer()
-    let calls = 0
-
-    const task = runPromptQueue({
-      footer: ui.api,
-      run: async () => {
-        calls += 1
-        ui.api.close()
-      },
-    })
-
-    ui.submit("   ", { queued: true })
-    ui.api.close()
-    await task
-
-    expect(calls).toBe(0)
   })
 })
