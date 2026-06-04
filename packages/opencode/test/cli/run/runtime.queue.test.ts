@@ -506,6 +506,47 @@ describe("run runtime queue", () => {
     await task
   })
 
+  test("remote queue control loads full queued prompt details before editing", async () => {
+    const ui = footer()
+    let control: import("@/cli/cmd/run/types").QueueControl | undefined
+    const loaded: string[] = []
+
+    const task = runPromptQueue({
+      footer: {
+        ...ui.api,
+        setQueueControl(next) {
+          control = next
+        },
+      },
+      getQueueRemote: async (id) => {
+        loaded.push(id)
+        return {
+          text: "line one\nline two",
+          parts: [{ type: "file", url: "file:///tmp/a.ts", filename: "a.ts", mime: "text/typescript" }],
+          queueID: id,
+          queued: true,
+        }
+      },
+      updateQueueRemote: async () => {},
+      run: async () => {
+        ui.api.close()
+      },
+    })
+
+    expect(control?.get("pqu_full")).toBeUndefined()
+    expect(await control?.load?.("pqu_full")).toEqual({
+      text: "line one\nline two",
+      parts: [{ type: "file", url: "file:///tmp/a.ts", filename: "a.ts", mime: "text/typescript" }],
+      queueID: "pqu_full",
+      queued: true,
+    })
+    expect(control?.get("pqu_full")?.text).toBe("line one\nline two")
+    expect(loaded).toEqual(["pqu_full"])
+
+    ui.api.close()
+    await task
+  })
+
   test("remote queue control allows pause to settle before send now", async () => {
     const ui = footer()
     let control: import("@/cli/cmd/run/types").QueueControl | undefined

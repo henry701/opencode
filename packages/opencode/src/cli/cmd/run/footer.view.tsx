@@ -288,7 +288,7 @@ export function RunFooterView(props: RunFooterViewProps) {
   let composer!: ReturnType<typeof createPromptState>
 
   const saveEditorToQueue = (id: string) => {
-    queueControl()?.update(id, composer.currentPrompt())
+    return queueControl()?.update(id, composer.currentPrompt()) ?? false
   }
 
   const cancelQueueEdit = () => {
@@ -307,12 +307,13 @@ export function RunFooterView(props: RunFooterViewProps) {
     return { text: item.text, parts: [], queueID: id, queued: true } satisfies RunPrompt
   }
 
-  const beginEditQueue = (id: string) => {
+  const beginEditQueue = async (id: string) => {
     const current = editingQueueID()
-    if (current && current !== id) saveEditorToQueue(current)
-    const prompt = queueControl()?.get(id) ?? promptFromPreview(id)
+    if (current && current !== id && !saveEditorToQueue(current)) return
+    const control = queueControl()
+    const prompt = control?.get(id) ?? (control?.load ? await control.load(id) : promptFromPreview(id))
     if (!prompt) return
-    void Promise.resolve(queueControl()?.pauseDrain?.()).catch(() => {})
+    await control?.pauseDrain?.()
     setEditingQueueID(id)
     composer.restorePrompt(prompt)
     composer.focus()
@@ -328,27 +329,27 @@ export function RunFooterView(props: RunFooterViewProps) {
       setEditingQueueID(undefined)
       composer.restorePrompt({ text: "", parts: [] })
     }
-    if (plan.editID) beginEditQueue(plan.editID)
+    if (plan.editID) await beginEditQueue(plan.editID)
     else composer.focus()
   }
 
-  const cycleEditQueue = (dir: -1 | 1) => {
+  const cycleEditQueue = async (dir: -1 | 1) => {
     const items = queued()
     if (!items.length) return
     const current = editingQueueID()
     if (!current) {
       const index = dir === 1 ? 0 : items.length - 1
-      beginEditQueue(items[index]!.id)
+      await beginEditQueue(items[index]!.id)
       return
     }
-    saveEditorToQueue(current)
+    if (!saveEditorToQueue(current)) return
     const index = items.findIndex((item) => item.id === current)
     if (index < 0) {
-      beginEditQueue(items[0]!.id)
+      await beginEditQueue(items[0]!.id)
       return
     }
     const next = items[(index + dir + items.length) % items.length]
-    if (next) beginEditQueue(next.id)
+    if (next) await beginEditQueue(next.id)
   }
 
   composer = createPromptState({
@@ -377,15 +378,15 @@ export function RunFooterView(props: RunFooterViewProps) {
       queueControl()?.update(id, prompt)
     },
     onEditQueue: () => {
-      if (editingQueueID()) cycleEditQueue(-1)
+      if (editingQueueID()) void cycleEditQueue(-1).catch(() => {})
       else {
         const id = queued()[0]?.id
-        if (id) beginEditQueue(id)
+        if (id) void beginEditQueue(id).catch(() => {})
       }
     },
     onEditQueueNext: () => {
       if (!editingQueueID()) return
-      cycleEditQueue(1)
+      void cycleEditQueue(1).catch(() => {})
     },
     onCancelQueueEdit: cancelQueueEdit,
     onSendQueuedNow: (id) => {
@@ -549,7 +550,9 @@ export function RunFooterView(props: RunFooterViewProps) {
                         disabled={busy()}
                         editing={() => !!editingQueueID()}
                         editingMessageID={editingQueueID}
-                        onEdit={beginEditQueue}
+                        onEdit={(id) => {
+                          void beginEditQueue(id).catch(() => {})
+                        }}
                         onSendNow={(id) => {
                           void sendQueuedAndMaybeEditNext(id).catch(() => {})
                         }}

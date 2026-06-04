@@ -49,7 +49,7 @@ export function queueDockRows(input: { count: number; editing: boolean; collapse
     : Math.min(input.count, IDLE_VISIBLE_ITEMS)
   rows += itemRows
   if (!input.editing && input.count > IDLE_VISIBLE_ITEMS) rows += 1
-  if (!input.editing && input.count > 0) rows += 1
+  if (!input.editing && input.count > 0) rows += 2
   if (input.count > 0) rows += 1
   return rows
 }

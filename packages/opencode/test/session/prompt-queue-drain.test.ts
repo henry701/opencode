@@ -28,6 +28,7 @@ const queueLayer = Layer.mergeAll(Session.defaultLayer, SessionPromptQueue.defau
 
 const itService = testEffect(queueLayer)
 const itHttp = testEffect(SessionNs.defaultLayer)
+const itHttpWithQueue = testEffect(queueLayer)
 
 afterEach(async () => {
   mock.restore()
@@ -252,6 +253,31 @@ describe("session queue drain pause (http)", () => {
         const items = (yield* Effect.promise(() => list.json())) as { text: string }[]
         expect(items).toHaveLength(1)
         expect(items[0]?.text).toBe("hold in queue")
+      }),
+    { git: true },
+  )
+
+  itHttpWithQueue.instance(
+    "http pause is visible to another queue service layer for the same instance",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const promptQueue = yield* SessionPromptQueue.Service
+        const session = yield* Effect.acquireRelease(SessionNs.use.create({}), (created) =>
+          SessionNs.use.remove(created.id).pipe(Effect.ignore),
+        )
+
+        const pause = yield* Effect.promise(() =>
+          Promise.resolve(
+            Server.Default().app.request(`/session/${session.id}/queue/drain-pause`, {
+              method: "POST",
+              headers: { "x-opencode-directory": test.directory },
+            }),
+          ),
+        )
+
+        expect(pause.status).toBe(200)
+        expect(yield* promptQueue.drainPaused(session.id)).toBe(true)
       }),
     { git: true },
   )

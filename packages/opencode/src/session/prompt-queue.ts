@@ -15,6 +15,7 @@ import {
 import * as Session from "./session"
 import { QueueItemID, SessionID } from "./schema"
 import { Effect, Layer, Context } from "effect"
+import { InstanceState } from "@/effect/instance-state"
 
 export interface Interface {
   readonly list: (sessionID: SessionID) => Effect.Effect<QueueItem[]>
@@ -32,11 +33,21 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionPromptQueue") {}
 
+const drainPaused = new Map<string, Set<SessionID>>()
+
+const pauseState = Effect.fn("SessionPromptQueue.pauseState")(function* () {
+  const directory = yield* InstanceState.directory
+  const existing = drainPaused.get(directory)
+  if (existing) return existing
+  const next = new Set<SessionID>()
+  drainPaused.set(directory, next)
+  return next
+})
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const bus = yield* Bus.Service
-    const drainPaused = new Set<SessionID>()
 
     const list = Effect.fn("SessionPromptQueue.list")(function* (sessionID: SessionID) {
       return yield* sqliteList(sessionID)
@@ -87,20 +98,23 @@ export const layer = Layer.effect(
 
     const clear = Effect.fn("SessionPromptQueue.clear")(function* (sessionID: SessionID) {
       yield* sqliteClear(sessionID)
-      drainPaused.delete(sessionID)
+      const paused = yield* pauseState()
+      paused.delete(sessionID)
       yield* publish(sessionID)
     })
 
     const pauseDrain = Effect.fn("SessionPromptQueue.pauseDrain")(function* (sessionID: SessionID) {
-      drainPaused.add(sessionID)
+      const paused = yield* pauseState()
+      paused.add(sessionID)
     })
 
     const resumeDrain = Effect.fn("SessionPromptQueue.resumeDrain")(function* (sessionID: SessionID) {
-      drainPaused.delete(sessionID)
+      const paused = yield* pauseState()
+      paused.delete(sessionID)
     })
 
     const drainPausedFor = Effect.fn("SessionPromptQueue.drainPaused")(function* (sessionID: SessionID) {
-      return drainPaused.has(sessionID)
+      return (yield* pauseState()).has(sessionID)
     })
 
     return Service.of({

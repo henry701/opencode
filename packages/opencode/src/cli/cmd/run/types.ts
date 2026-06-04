@@ -51,6 +51,7 @@ export type QueuedPromptPreview = {
 
 export type QueueControl = {
   get: (id: string) => RunPrompt | undefined
+  load?: (id: string) => Promise<RunPrompt | undefined>
   update: (id: string, prompt: RunPrompt) => boolean
   remove: (id: string) => RunPrompt | undefined
   sendNow: (id: string) => void | Promise<void>

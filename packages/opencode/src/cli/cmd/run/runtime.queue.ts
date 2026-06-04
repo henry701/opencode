@@ -39,6 +39,7 @@ export type QueueInput = {
   enqueueRemote?: (prompt: RunPrompt) => Promise<void>
   pauseQueueDrainRemote?: () => Promise<void>
   resumeQueueDrainRemote?: () => Promise<void>
+  getQueueRemote?: (queueID: string) => Promise<RunPrompt | undefined>
   updateQueueRemote?: (queueID: string, prompt: RunPrompt) => Promise<void>
   sendQueueRemote?: (queueID: string, prompt?: RunPrompt) => Promise<void>
   onSend?: (prompt: RunPrompt) => void
@@ -174,6 +175,17 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
 
   const queueControl: QueueControl = {
     get: findQueued,
+    load: input.getQueueRemote
+      ? async (id) => {
+          const existing = findQueued(id)
+          if (existing) return existing
+          const loaded = await input.getQueueRemote?.(id)
+          if (!loaded) return undefined
+          const next = { ...withQueueID(loaded, state), queueID: id }
+          remoteDrafts.set(id, next)
+          return next
+        }
+      : undefined,
     update: (id, prompt) => {
       if (input.updateQueueRemote) return updateRemote(id, prompt)
       return updateQueued(id, prompt)

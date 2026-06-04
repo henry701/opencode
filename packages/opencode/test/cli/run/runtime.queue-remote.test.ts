@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { buildQueuePromptPayload, buildQueueSendPayload } from "@/cli/cmd/run/runtime.queue-remote"
+import { buildQueuePromptPayload, buildQueueSendPayload, runPromptFromQueueDetail } from "@/cli/cmd/run/runtime.queue-remote"
 import { ModelID, ProviderID } from "@/provider/schema"
 
 describe("run remote queue payloads", () => {
@@ -56,5 +56,24 @@ describe("run remote queue payloads", () => {
         variant: "fast",
       }),
     ).toBeNull()
+  })
+
+  test("queue detail conversion preserves full text and attachments for editing", () => {
+    expect(
+      runPromptFromQueueDetail({
+        id: "pqu_full",
+        parts: [
+          { type: "text", text: "line one" },
+          { type: "text", text: "line two" },
+          { type: "text", text: "Attached media from tool result:", synthetic: true },
+          { type: "file", url: "file:///tmp/a.ts", filename: "a.ts", mime: "text/typescript" },
+        ],
+      }),
+    ).toEqual({
+      text: "line one\nline two",
+      parts: [{ type: "file", url: "file:///tmp/a.ts", filename: "a.ts", mime: "text/typescript" }],
+      queueID: "pqu_full",
+      queued: true,
+    })
   })
 })

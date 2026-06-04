@@ -1,5 +1,11 @@
 import type { RunInput, RunPrompt } from "./types"
 
+type QueueDetailPart = RunPrompt["parts"][number] & {
+  type: string
+  text?: string
+  synthetic?: boolean
+}
+
 export function buildQueuePromptPayload(input: {
   agent: string | undefined
   model: RunInput["model"]
@@ -27,4 +33,16 @@ export function buildQueueSendPayload(input: {
     variant: input.variant,
     prompt: input.prompt,
   })
+}
+
+export function runPromptFromQueueDetail(input: { id: string; parts?: readonly QueueDetailPart[] }): RunPrompt {
+  const parts = input.parts ?? []
+  return {
+    text: parts
+      .flatMap((part) => (part.type === "text" && !part.synthetic ? [part.text ?? ""] : []))
+      .join("\n"),
+    parts: parts.filter((part): part is RunPrompt["parts"][number] => part.type !== "text"),
+    queueID: input.id,
+    queued: true,
+  }
 }

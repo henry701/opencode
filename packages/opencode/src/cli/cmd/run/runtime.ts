@@ -19,7 +19,7 @@ import { Flag } from "@opencode-ai/core/flag/flag"
 import { createRunDemo } from "./demo"
 import { resolveDiffStyle, resolveFooterKeybinds, resolveModelInfo, resolveSessionInfo } from "./runtime.boot"
 import { createRuntimeLifecycle } from "./runtime.lifecycle"
-import { buildQueuePromptPayload, buildQueueSendPayload } from "./runtime.queue-remote"
+import { buildQueuePromptPayload, buildQueueSendPayload, runPromptFromQueueDetail } from "./runtime.queue-remote"
 import { recordRunSpanError, setRunSpanAttributes, withRunSpan } from "./otel"
 import { trace } from "./trace"
 import { cycleVariant, formatModelLabel, resolveSavedVariant, resolveVariant, saveVariant } from "./variant.shared"
@@ -568,6 +568,18 @@ async function runInteractiveRuntime(input: RunRuntimeInput): Promise<void> {
                     prompt,
                   }),
                 })
+              },
+          getQueueRemote: state.demo
+            ? undefined
+            : async (queueID) => {
+                await ensureStream()
+                if (!state.sessionID) return
+                const result = await ctx.sdk.session.queue.get({
+                  sessionID: state.sessionID,
+                  queueID,
+                })
+                if (!result.data) return
+                return runPromptFromQueueDetail(result.data)
               },
           sendQueueRemote: state.demo
             ? undefined
