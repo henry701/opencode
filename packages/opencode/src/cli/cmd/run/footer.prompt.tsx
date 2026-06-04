@@ -106,9 +106,13 @@ function clamp(rows: number): number {
 
 function clonePrompt(prompt: RunPrompt): RunPrompt {
   return {
+    ...(prompt.messageID ? { messageID: prompt.messageID } : {}),
+    ...(prompt.partID ? { partID: prompt.partID } : {}),
     text: prompt.text,
     parts: structuredClone(prompt.parts),
     ...(prompt.mode ? { mode: prompt.mode } : {}),
+    ...(prompt.command ? { command: structuredClone(prompt.command) } : {}),
+    ...(prompt.queued ? { queued: true } : {}),
   }
 }
 
@@ -695,13 +699,21 @@ export function createPromptState(input: PromptInput): PromptState {
     }
 
     syncParts()
+    const metadata = {
+      ...(draft.messageID ? { messageID: draft.messageID } : {}),
+      ...(draft.partID ? { partID: draft.partID } : {}),
+      ...(draft.command ? { command: structuredClone(draft.command) } : {}),
+      ...(draft.queued ? { queued: true } : {}),
+    }
     draft = shell()
       ? {
+          ...metadata,
           text: area.plainText,
           parts: structuredClone(parts),
           mode: "shell",
         }
       : {
+          ...metadata,
           text: area.plainText,
           parts: structuredClone(parts),
         }

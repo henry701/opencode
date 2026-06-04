@@ -29,6 +29,8 @@ export type QueueInput = {
   trace?: Trace
   onSend?: (prompt: RunPrompt) => void
   onNewSession?: () => void | Promise<void>
+  onAbortSteers?: (abort: () => void) => () => void
+  steer?: (prompt: RunPrompt, signal: AbortSignal) => Promise<void>
   run: (prompt: RunPrompt, signal: AbortSignal) => Promise<void>
 }
 
@@ -37,6 +39,7 @@ type State = {
   queued: FooterQueuedPrompt[]
   active?: RunPrompt
   ctrl?: AbortController
+  steerCtrls: Set<AbortController>
   closed: boolean
 }
 
@@ -62,6 +65,7 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
   const state: State = {
     queue: [],
     queued: [],
+    steerCtrls: new Set(),
     closed: input.footer.isClosed,
   }
   let draining: Promise<void> | undefined
@@ -89,6 +93,12 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
     syncQueue()
   }
 
+  const abortSteers = () => {
+    for (const ctrl of state.steerCtrls) {
+      ctrl.abort()
+    }
+  }
+
   const finish = () => {
     if (!state.closed || draining) {
       return
@@ -106,6 +116,7 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
     state.queue.length = 0
     state.queued.length = 0
     state.ctrl?.abort()
+    abortSteers()
     stop.resolve({ type: "closed" })
     finish()
   }
@@ -282,6 +293,41 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
       !prompt.command &&
       !isNewCommand(prompt.text)
     ) {
+      if (prompt.queued && input.steer) {
+        const sent = {
+          ...prompt,
+          messageID: prompt.messageID ?? MessageID.ascending(),
+        }
+        const ctrl = new AbortController()
+        state.steerCtrls.add(ctrl)
+        const commit = {
+          kind: "user",
+          text: sent.text,
+          phase: "start",
+          source: "system",
+          messageID: sent.messageID,
+        } as const
+        input.trace?.write("ui.commit", commit)
+        input.footer.append(commit)
+        input.onSend?.(sent)
+        void input
+          .steer(sent, ctrl.signal)
+          .catch(() => {
+            if (ctrl.signal.aborted || state.closed) return
+            emit(
+              {
+                type: "stream.patch",
+                patch: { status: "failed to send queued prompt" },
+              },
+              { status: "failed to send queued prompt" },
+            )
+          })
+          .finally(() => {
+            state.steerCtrls.delete(ctrl)
+          })
+        return
+      }
+
       const queued: FooterQueuedPrompt = {
         messageID: MessageID.ascending(),
         partID: PartID.ascending(),
@@ -318,6 +364,7 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
   const offClose = input.footer.onClose(() => {
     close()
   })
+  const offAbortSteers = input.onAbortSteers?.(abortSteers) ?? (() => {})
   const offRemoveQueued = input.footer.onQueuedRemove((messageID) => {
     const queued = state.queued.find((item) => item.messageID === messageID)
     if (!queued) return false
@@ -340,6 +387,7 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
   } finally {
     offPrompt()
     offClose()
+    offAbortSteers()
     offRemoveQueued()
     close()
     await draining?.catch(() => {})

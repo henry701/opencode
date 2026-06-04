@@ -40,6 +40,7 @@ export type RunPrompt = {
     name: string
     arguments: string
   }
+  queued?: boolean
 }
 
 export type FooterQueuedPrompt = {
