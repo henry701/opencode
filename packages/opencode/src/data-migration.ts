@@ -249,8 +249,6 @@ export const layer = Layer.effect(
     yield* Effect.gen(function* () {
       if (migrations.length === 0) return
 
-      // Migrations run in a background fiber, so they must be resumable until
-      // their completion row is written.
       for (const migration of migrations) {
         const completed = Database.use((db) =>
           db
@@ -276,7 +274,6 @@ export const layer = Layer.effect(
         Effect.logError("failed to run data migrations").pipe(Effect.annotateLogs("cause", cause)),
       ),
       Effect.ignore,
-      Effect.forkScoped,
     )
     return Service.of({})
   }),

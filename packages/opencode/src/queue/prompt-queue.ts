@@ -268,10 +268,33 @@ export const sqlitePeek = Effect.fn("PromptQueue.sqlitePeek")(function* (session
 })
 
 export const sqliteDequeue = Effect.fn("PromptQueue.sqliteDequeue")(function* (sessionID: SessionID) {
-  const head = yield* sqlitePeek(sessionID)
-  if (!head) return undefined
-  yield* sqliteRemove(sessionID, head.id)
-  return head
+  return yield* Effect.sync(() =>
+    Database.transaction(
+      (db) => {
+        const head = db
+          .select()
+          .from(PromptQueueTable)
+          .where(eq(PromptQueueTable.session_id, sessionID))
+          .orderBy(asc(PromptQueueTable.position))
+          .limit(1)
+          .get()
+        if (!head) return undefined
+        db.delete(PromptQueueTable).where(eq(PromptQueueTable.id, head.id)).run()
+        const rest = db
+          .select()
+          .from(PromptQueueTable)
+          .where(eq(PromptQueueTable.session_id, sessionID))
+          .orderBy(asc(PromptQueueTable.position))
+          .all()
+        for (const [position, entry] of rest.entries()) {
+          if (entry.position === position) continue
+          db.update(PromptQueueTable).set({ position, time_updated: Date.now() }).where(eq(PromptQueueTable.id, entry.id)).run()
+        }
+        return rowToItem(head)
+      },
+      { behavior: "immediate" },
+    ),
+  )
 })
 
 export const sqliteClear = Effect.fn("PromptQueue.sqliteClear")(function* (sessionID: SessionID) {
