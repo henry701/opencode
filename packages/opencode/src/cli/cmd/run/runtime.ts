@@ -214,6 +214,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput): Promise<void> {
         "opencode.model.variant": state.activeVariant,
         "session.id": state.sessionID || undefined,
       })
+      let abortQueuedSteers = () => {}
       const ensureSession = () => {
         if (!input.resolveSession || state.sessionID) {
           return Promise.resolve()
@@ -363,6 +364,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput): Promise<void> {
           }
 
           state.aborting = true
+          abortQueuedSteers()
           void ctx.sdk.session
             .abort({
               sessionID: state.sessionID,
@@ -659,6 +661,29 @@ async function runInteractiveRuntime(input: RunRuntimeInput): Promise<void> {
                 }
               }
             : undefined,
+          onAbortSteers: (abort) => {
+            abortQueuedSteers = abort
+            return () => {
+              if (abortQueuedSteers === abort) {
+                abortQueuedSteers = () => {}
+              }
+            }
+          },
+          steer: async (prompt, signal) => {
+            await state.switching?.catch(() => {})
+            await ensureStream()
+            await ctx.sdk.session.promptAsync(
+              {
+                sessionID: state.sessionID,
+                messageID: prompt.messageID,
+                agent: state.agent,
+                model: state.model,
+                variant: state.activeVariant,
+                parts: [{ type: "text", text: prompt.text }, ...prompt.parts],
+              },
+              { signal },
+            )
+          },
           run: async (prompt, signal) => {
             if (state.demo && (await state.demo.prompt(prompt, signal))) {
               return
@@ -733,8 +758,8 @@ async function runInteractiveRuntime(input: RunRuntimeInput): Promise<void> {
         })
       }
 
-      try {
-        const eager = eagerStream(input, ctx)
+        try {
+          const eager = eagerStream(input, ctx)
         if (eager) {
           await ensureStream()
         }
@@ -749,8 +774,8 @@ async function runInteractiveRuntime(input: RunRuntimeInput): Promise<void> {
           })
         }
 
-        try {
-          await runQueue()
+            try {
+              await runQueue()
         } finally {
           if (replayResizeTimer) {
             clearTimeout(replayResizeTimer)

@@ -73,6 +73,11 @@ function footer() {
         fn(next)
       }
     },
+    submitPrompt(prompt: RunPrompt) {
+      for (const fn of [...prompts]) {
+        fn(prompt)
+      }
+    },
     removeQueued(messageID: string) {
       for (const fn of [...queuedRemoves]) fn(messageID)
     },
@@ -376,6 +381,134 @@ describe("run runtime queue", () => {
     wake?.()
     await task
     expect(turns).toEqual(["active", "queued one", "queued three"])
+  })
+
+  test("edited queued prompt steers active turn instead of requeueing", async () => {
+    const ui = footer()
+    const turns: string[] = []
+    const steers: RunPrompt[] = []
+    let wake: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => {
+      wake = resolve
+    })
+
+    const task = runPromptQueue({
+      footer: ui.api,
+      steer: async (input) => {
+        steers.push(input)
+      },
+      run: async (input) => {
+        turns.push(input.text)
+        await gate
+      },
+    })
+
+    ui.submit("active")
+    ui.submit("queued")
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const event = ui.events.findLast((item) => item.type === "queued.prompts")
+    expect(event?.type).toBe("queued.prompts")
+    const queued = event?.type === "queued.prompts" ? event.prompts[0] : undefined
+    expect(queued).toBeDefined()
+    if (!queued) throw new Error("Expected queued prompt")
+    ui.removeQueued(queued.messageID)
+    ui.submitPrompt({
+      ...queued.prompt,
+      messageID: queued.messageID,
+      partID: queued.partID,
+      text: "edited queued",
+      queued: true,
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(turns).toEqual(["active"])
+    expect(steers.map((item) => item.text)).toEqual(["edited queued"])
+    expect(steers[0]?.messageID).toBe(queued.messageID)
+    expect(ui.events.findLast((item) => item.type === "queue")).toEqual({ type: "queue", queue: 0 })
+
+    wake?.()
+    ui.api.close()
+    await task
+  })
+
+  test("close aborts an in-flight edited queued steer", async () => {
+    const ui = footer()
+    let steerSignal: AbortSignal | undefined
+    let wake: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => {
+      wake = resolve
+    })
+
+    const task = runPromptQueue({
+      footer: ui.api,
+      steer: async (_input, signal) => {
+        steerSignal = signal
+        await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }))
+      },
+      run: async () => {
+        await gate
+      },
+    })
+
+    ui.submit("active")
+    ui.submit("queued")
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const event = ui.events.findLast((item) => item.type === "queued.prompts")
+    const queued = event?.type === "queued.prompts" ? event.prompts[0] : undefined
+    if (!queued) throw new Error("Expected queued prompt")
+    ui.removeQueued(queued.messageID)
+    ui.submitPrompt({ ...queued.prompt, messageID: queued.messageID, partID: queued.partID, queued: true })
+    await Promise.resolve()
+
+    ui.api.close()
+    wake?.()
+    await task
+    expect(steerSignal?.aborted).toBe(true)
+  })
+
+  test("edited queued steer failure does not reject active queue drain", async () => {
+    const ui = footer()
+    let wake: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => {
+      wake = resolve
+    })
+
+    const task = runPromptQueue({
+      footer: ui.api,
+      steer: async () => {
+        throw new Error("network down")
+      },
+      run: async () => {
+        await gate
+      },
+    })
+
+    ui.submit("active")
+    ui.submit("queued")
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const event = ui.events.findLast((item) => item.type === "queued.prompts")
+    const queued = event?.type === "queued.prompts" ? event.prompts[0] : undefined
+    if (!queued) throw new Error("Expected queued prompt")
+    ui.removeQueued(queued.messageID)
+    ui.submitPrompt({ ...queued.prompt, messageID: queued.messageID, partID: queued.partID, queued: true })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(ui.events.findLast((item) => item.type === "stream.patch")).toEqual({
+      type: "stream.patch",
+      patch: { status: "failed to send queued prompt" },
+    })
+
+    wake?.()
+    ui.api.close()
+    await task
   })
 
   test("drains a prompt queued during an in-flight turn", async () => {
