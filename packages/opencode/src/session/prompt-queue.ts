@@ -26,21 +26,23 @@ export interface Interface {
   readonly peek: (sessionID: SessionID) => Effect.Effect<QueueItem | undefined>
   readonly dequeue: (sessionID: SessionID) => Effect.Effect<QueueItem | undefined>
   readonly clear: (sessionID: SessionID) => Effect.Effect<void>
-  readonly pauseDrain: (sessionID: SessionID) => Effect.Effect<void>
+  readonly pauseDrain: (sessionID: SessionID) => Effect.Effect<number>
   readonly resumeDrain: (sessionID: SessionID) => Effect.Effect<void>
+  readonly resumeExpiredDrain: (sessionID: SessionID, token: number) => Effect.Effect<boolean>
   readonly drainPaused: (sessionID: SessionID) => Effect.Effect<boolean>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionPromptQueue") {}
 
-const drainPaused = new Map<string, Map<SessionID, number>>()
-export const drainPauseTTL = 30 * 60 * 1000
+const drainPaused = new Map<string, Map<SessionID, { expires: number; token: number }>>()
+export const drainPauseTTL = 24 * 60 * 60 * 1000
+let drainPauseToken = 0
 
 const pauseState = Effect.fn("SessionPromptQueue.pauseState")(function* () {
   const directory = yield* InstanceState.directory
   const existing = drainPaused.get(directory)
   if (existing) return existing
-  const next = new Map<SessionID, number>()
+  const next = new Map<SessionID, { expires: number; token: number }>()
   drainPaused.set(directory, next)
   return next
 })
@@ -106,7 +108,9 @@ export const layer = Layer.effect(
 
     const pauseDrain = Effect.fn("SessionPromptQueue.pauseDrain")(function* (sessionID: SessionID) {
       const paused = yield* pauseState()
-      paused.set(sessionID, Date.now() + drainPauseTTL)
+      const token = ++drainPauseToken
+      paused.set(sessionID, { expires: Date.now() + drainPauseTTL, token })
+      return token
     })
 
     const resumeDrain = Effect.fn("SessionPromptQueue.resumeDrain")(function* (sessionID: SessionID) {
@@ -114,11 +118,22 @@ export const layer = Layer.effect(
       paused.delete(sessionID)
     })
 
+    const resumeExpiredDrain = Effect.fn("SessionPromptQueue.resumeExpiredDrain")(function* (
+      sessionID: SessionID,
+      token: number,
+    ) {
+      const paused = yield* pauseState()
+      const entry = paused.get(sessionID)
+      if (!entry || entry.token !== token || entry.expires > Date.now()) return false
+      paused.delete(sessionID)
+      return true
+    })
+
     const drainPausedFor = Effect.fn("SessionPromptQueue.drainPaused")(function* (sessionID: SessionID) {
       const paused = yield* pauseState()
-      const expires = paused.get(sessionID)
-      if (!expires) return false
-      if (expires > Date.now()) return true
+      const entry = paused.get(sessionID)
+      if (!entry) return false
+      if (entry.expires > Date.now()) return true
       paused.delete(sessionID)
       return false
     })
@@ -134,6 +149,7 @@ export const layer = Layer.effect(
       clear,
       pauseDrain,
       resumeDrain,
+      resumeExpiredDrain,
       drainPaused: drainPausedFor,
     })
   }),
