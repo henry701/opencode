@@ -1499,16 +1499,20 @@ export function Prompt(props: PromptProps) {
       parts.length > 0
         ? partsToPromptInfo(parts)
         : await (async () => {
-            const detail = await sdk.client.session.queue.get({ sessionID, queueID: messageID }).catch(() => undefined)
-            if (!detail?.data || typeof detail.data !== "object" || !("parts" in detail.data)) {
-              const preview = sync.data.prompt_queue[sessionID]?.find((item) => item.id === messageID)
-              if (preview?.text) return { input: preview.text, parts: [] as PromptInfo["parts"] }
-              const listRes = await sdk.client.session.queue.list({ sessionID }).catch(() => undefined)
-              const listed = listRes?.data?.find((item) => item.id === messageID)
-              if (listed?.text) return { input: listed.text, parts: [] as PromptInfo["parts"] }
-              return { input: "", parts: [] as PromptInfo["parts"] }
+            const detail = await sdk.client.session.queue.get({ sessionID, queueID: messageID }).catch((error: unknown) => ({
+              error,
+            }))
+            const loadError = queueMutationError({ result: detail, fallback: "no response" })
+            const data = detail && typeof detail === "object" && "data" in detail ? detail.data : undefined
+            if (loadError || !data || typeof data !== "object" || !("parts" in data)) {
+              toast.show({
+                message: `Loading queued prompt failed: ${loadError ? errorMessage(loadError) : "invalid queue response"}`,
+                variant: "error",
+              })
+              await resumeQueueDrain(sessionID)
+              return
             }
-            const queueParts = detail.data.parts as Parameters<typeof partsToPromptInfo>[0]
+            const queueParts = data.parts as Parameters<typeof partsToPromptInfo>[0]
             return partsToPromptInfo(
               queueParts.map((part) => {
                 const id = PartID.ascending()
@@ -1519,6 +1523,7 @@ export function Prompt(props: PromptProps) {
               }),
             )
           })()
+    if (!promptInfo) return false
     if (!promptInfo.input.trim() && promptInfo.parts.length === 0) return false
 
     setEditingQueuedMessageID(messageID)
