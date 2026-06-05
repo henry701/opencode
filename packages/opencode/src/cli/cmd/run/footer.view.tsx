@@ -10,7 +10,7 @@
 // All state comes from the parent RunFooter through SolidJS signals.
 // The view itself is stateless except for derived memos.
 /** @jsxImportSource @opentui/solid */
-import { useTerminalDimensions } from "@opentui/solid"
+import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import "opentui-spinner/solid"
 import { createColors, createFrames } from "../tui/ui/spinner"
@@ -18,15 +18,19 @@ import {
   RUN_SUBAGENT_PANEL_ROWS,
   RunCommandMenuBody,
   RunModelSelectBody,
-  RunQueuedPromptSelectBody,
   RunSubagentSelectBody,
   RunVariantSelectBody,
 } from "./footer.command"
 import { FOOTER_MENU_ROWS, RunFooterMenu } from "./footer.menu"
 import { RunFooterSubagentBody } from "./footer.subagent"
 import { RunPromptBody, createPromptState, hintFlags } from "./footer.prompt"
+import { queueDockRows } from "@/queue/queue-dock"
+import { queueEditCommitPlan, queueEditSwitchPlan } from "@/queue/edit"
+import { RunQueueDock } from "./footer.queue-dock"
+import type { QueueControl } from "./types"
 import { RunPermissionBody } from "./footer.permission"
 import { RunQuestionBody } from "./footer.question"
+import { promptBindings, promptHit, promptInfo } from "./prompt.shared"
 import {
   OPENCODE_BASE_MODE,
   formatKeyBindings,
@@ -35,8 +39,8 @@ import {
   type OpenTuiKeymap,
 } from "@/cli/cmd/tui/keymap"
 import type {
+  FooterKeybinds,
   FooterPromptRoute,
-  FooterQueuedPrompt,
   FooterState,
   FooterSubagentState,
   FooterView,
@@ -53,7 +57,6 @@ import type {
   RunTuiConfig,
 } from "./types"
 import { RUN_THEME_FALLBACK, type RunTheme } from "./theme"
-import { modelInfo } from "./variant.shared"
 
 const EMPTY_BORDER = {
   topLeft: "",
@@ -82,14 +85,16 @@ type RunFooterViewProps = {
   state: () => FooterState
   view?: () => FooterView
   subagent?: () => FooterSubagentState
-  queuedPrompts?: () => FooterQueuedPrompt[]
   theme?: RunTheme
   diffStyle?: RunDiffStyle
   tuiConfig: RunTuiConfig
   backgroundSubagents: boolean
+  keybinds: FooterKeybinds
   history?: RunPrompt[]
   agent: string
   onSubmit: (input: RunPrompt) => boolean
+  onQueue: (input: RunPrompt) => void
+  queueControl?: () => QueueControl | undefined
   onPermissionReply: (input: PermissionReply) => void | Promise<void>
   onQuestionReply: (input: QuestionReply) => void | Promise<void>
   onQuestionReject: (input: QuestionReject) => void | Promise<void>
@@ -103,13 +108,38 @@ type RunFooterViewProps = {
   onModelSelect: (model: NonNullable<RunInput["model"]>) => void
   onVariantSelect: (variant: string | undefined) => void
   onRows: (rows: number) => void
-  onLayout: (input: { route: FooterPromptRoute; autocomplete: boolean; subagentRows: number }) => void
+  onLayout: (input: {
+    route: FooterPromptRoute
+    autocomplete: boolean
+    subagentRows: number
+    queueRows: number
+  }) => void
   onStatus: (text: string) => void
   onSubagentSelect?: (sessionID: string | undefined) => void
-  onQueuedRemove: (messageID: string) => Promise<boolean>
 }
 
 export { TEXTAREA_MIN_ROWS, TEXTAREA_MAX_ROWS } from "./footer.prompt"
+
+export function queuedSendPlan(items: FooterState["queued"], id: string, editingID: string | undefined) {
+  const index = items.findIndex((item) => item.id === id)
+  const nextID = index < 0 ? undefined : items[index + 1]?.id
+  if (editingID && editingID !== id) {
+    return {
+      saveID: editingID,
+      editID: editingID,
+      clearEditor: false,
+      pauseDrain: true,
+      resumeDrain: false,
+    }
+  }
+  return {
+    saveID: editingID === id ? id : undefined,
+    editID: nextID,
+    clearEditor: true,
+    pauseDrain: !!nextID,
+    resumeDrain: !nextID,
+  }
+}
 
 export function RunFooterView(props: RunFooterViewProps) {
   const term = useTerminalDimensions()
@@ -126,15 +156,13 @@ export function RunFooterView(props: RunFooterViewProps) {
   })
   const [route, setRoute] = createSignal<FooterPromptRoute>({ type: "composer" })
   const [subagentMenuRows, setSubagentMenuRows] = createSignal(RUN_SUBAGENT_PANEL_ROWS)
-  const queuedPrompts = createMemo(() => props.queuedPrompts?.() ?? [])
   const prompt = createMemo(() => active().type === "prompt" && route().type === "composer")
   const selectingSubagent = createMemo(() => active().type === "prompt" && route().type === "subagent-menu")
-  const selectingQueued = createMemo(() => active().type === "prompt" && route().type === "queued-menu")
   const inspecting = createMemo(() => active().type === "prompt" && route().type === "subagent")
   const commanding = createMemo(() => active().type === "prompt" && route().type === "command")
   const modeling = createMemo(() => active().type === "prompt" && route().type === "model")
   const varianting = createMemo(() => active().type === "prompt" && route().type === "variant")
-  const panel = createMemo(() => selectingQueued() || selectingSubagent() || commanding() || modeling() || varianting())
+  const panel = createMemo(() => selectingSubagent() || commanding() || modeling() || varianting())
   const selected = createMemo(() => {
     const current = route()
     return current.type === "subagent" ? current.sessionID : undefined
@@ -164,7 +192,7 @@ export function RunFooterView(props: RunFooterViewProps) {
     () => props.backgroundSubagents && tabs().some((item) => item.status === "running" && !item.background),
   )
   const queuedIndicator = createMemo(() => {
-    const count = queuedPrompts().length
+    const count = queued().length
     if (count === 0) return
     return { count }
   })
@@ -228,12 +256,15 @@ export function RunFooterView(props: RunFooterViewProps) {
         props.tuiConfig,
       ) ?? "",
   )
+  const commandKeys = createMemo(() => promptBindings(props.keybinds.commandList, props.keybinds.leader))
   const hints = createMemo(() => hintFlags(term().width))
   const busy = createMemo(() => props.state().phase === "running")
   const armed = createMemo(() => props.state().interrupt > 0)
   const exiting = createMemo(() => props.state().exit > 0)
-  const queue = createMemo(() => props.state().queue)
-  const additionalQueue = createMemo(() => Math.max(0, queue() - queuedPrompts().length))
+  const queued = createMemo(() => props.state().queued)
+  const [editingQueueID, setEditingQueueID] = createSignal<string | undefined>()
+  const [queueEscapeGuard, setQueueEscapeGuard] = createSignal(false)
+  const queueControl = () => props.queueControl?.()
   const duration = createMemo(() => props.state().duration)
   const usage = createMemo(() => props.state().usage)
   const interruptKey = createMemo(() => interrupt() || "/exit")
@@ -297,12 +328,6 @@ export function RunFooterView(props: RunFooterViewProps) {
     props.onSubagentSelect?.(undefined)
   }
 
-  const openQueuedMenu = () => {
-    if (queuedPrompts().length === 0) return
-    setRoute({ type: "queued-menu" })
-    props.onSubagentSelect?.(undefined)
-  }
-
   const closePanel = () => {
     setRoute({ type: "composer" })
   }
@@ -333,25 +358,141 @@ export function RunFooterView(props: RunFooterViewProps) {
 
     openTab(next.sessionID)
   }
-  const composer = createPromptState({
+
+  let composer!: ReturnType<typeof createPromptState>
+
+  const saveEditorToQueue = async (id: string) => {
+    const prompt = composer.currentPrompt()
+    if (queueEditCommitPlan({ text: prompt.text }).type === "remove") {
+      await queueControl()?.remove(id)
+      if (editingQueueID() === id) {
+        setEditingQueueID(undefined)
+        composer.restorePrompt({ text: "", parts: [] })
+      }
+      return "removed" as const
+    }
+    return queueControl()?.update(id, prompt) ? ("saved" as const) : false
+  }
+
+  const cancelQueueEdit = () => {
+    const id = editingQueueID()
+    if (!id) return false
+    void Promise.resolve(queueControl()?.resumeDrain?.()).catch(() => {})
+    setEditingQueueID(undefined)
+    composer.restorePrompt({ text: "", parts: [] })
+    setQueueEscapeGuard(true)
+    return true
+  }
+
+  const promptFromPreview = (id: string) => {
+    const item = queued().find((entry) => entry.id === id)
+    if (!item) return
+    return { text: item.text, parts: [], queueID: id, queued: true } satisfies RunPrompt
+  }
+
+  const beginEditQueue = async (id: string) => {
+    const control = queueControl()
+    const prompt = control?.get(id) ?? (control?.load ? await control.load(id) : promptFromPreview(id))
+    if (!prompt) return
+    await control?.pauseDrain?.()
+    setEditingQueueID(id)
+    composer.restorePrompt(prompt)
+    composer.focus()
+  }
+
+  const sendQueuedAndMaybeEditNext = async (id: string) => {
+    const plan = queuedSendPlan(queued(), id, editingQueueID())
+    const saveResult = plan.saveID ? await saveEditorToQueue(plan.saveID) : undefined
+    if (saveResult === "removed") {
+      if (plan.resumeDrain) await queueControl()?.resumeDrain?.()
+      if (plan.editID) await beginEditQueue(plan.editID)
+      else composer.focus()
+      return
+    }
+    if (plan.pauseDrain) await queueControl()?.pauseDrain?.()
+    await queueControl()?.sendNow(id)
+    if (plan.resumeDrain) await queueControl()?.resumeDrain?.()
+    if (plan.clearEditor) {
+      setEditingQueueID(undefined)
+      composer.restorePrompt({ text: "", parts: [] })
+    }
+    if (plan.editID) await beginEditQueue(plan.editID)
+    else composer.focus()
+  }
+
+  const cycleEditQueue = async (dir: -1 | 1) => {
+    const items = queued()
+    if (!items.length) return
+    const current = editingQueueID()
+    if (!current) {
+      const index = dir === 1 ? 0 : items.length - 1
+      await beginEditQueue(items[index]!.id)
+      return
+    }
+    const index = items.findIndex((item) => item.id === current)
+    if (index < 0) {
+      await beginEditQueue(items[0]!.id)
+      return
+    }
+    const next = items[(index + dir + items.length) % items.length]
+    if (next) await beginEditQueue(queueEditSwitchPlan({ currentID: current, targetID: next.id }).editID)
+  }
+
+  composer = createPromptState({
     directory: props.directory,
     findFiles: props.findFiles,
     agents: props.agents,
+    subagents: () => tabs().length,
     resources: props.resources,
     commands: props.commands,
-    tuiConfig: props.tuiConfig,
+    keybinds: props.keybinds,
     state: props.state,
     view: promptView,
     prompt,
     width: () => term().width,
     theme,
     history: props.history,
-    onSubmit: props.onSubmit,
+    onSubmit: (input) => {
+      if (!input.queued) void Promise.resolve(queueControl()?.resumeDrain?.()).catch(() => {})
+      return props.onSubmit(input)
+    },
+    onQueue: props.onQueue,
+    editingQueueID,
+    queueEscapeGuard,
+    clearQueueEscapeGuard: () => setQueueEscapeGuard(false),
+    onUpdateQueued: (id, prompt) => {
+      if (queueEditCommitPlan({ text: prompt.text }).type === "remove") {
+        void Promise.resolve(queueControl()?.remove(id)).then(() => {
+          if (editingQueueID() === id) {
+            setEditingQueueID(undefined)
+            composer.restorePrompt({ text: "", parts: [] })
+          }
+        })
+        return
+      }
+      queueControl()?.update(id, prompt)
+    },
+    onEditQueue: () => {
+      if (editingQueueID()) void cycleEditQueue(-1).catch(() => {})
+      else {
+        const id = queued()[0]?.id
+        if (id) void beginEditQueue(id).catch(() => {})
+      }
+    },
+    onEditQueueNext: () => {
+      if (!editingQueueID()) return
+      void cycleEditQueue(1).catch(() => {})
+    },
+    onCancelQueueEdit: cancelQueueEdit,
+    onSendQueuedNow: (id) => {
+      void sendQueuedAndMaybeEditNext(id).catch(() => {})
+    },
     onCycle: props.onCycle,
     onInterrupt: props.onInterrupt,
     onInputClear: props.onInputClear,
     onExitRequest: props.onExitRequest,
     onExit: props.onExit,
+    onSubagentMenu: openSubagentMenu,
     onRows: props.onRows,
     onStatus: props.onStatus,
   })
@@ -366,28 +507,30 @@ export function RunFooterView(props: RunFooterViewProps) {
     props.onRequestExit?.(undefined)
   })
 
-  useBindings(() => ({
-    mode: OPENCODE_BASE_MODE,
-    enabled: active().type === "prompt" && route().type === "composer" && !composer.visible(),
-    commands: [
-      {
-        name: "command.palette.show",
-        title: "Open command palette",
-        category: "Prompt",
-        run: openCommand,
-      },
-      {
-        name: "variant.cycle",
-        title: "Cycle model variant",
-        category: "Model",
-        run: props.onCycle,
-      },
-    ],
-    bindings: [
-      ...props.tuiConfig.keybinds.get("command.palette.show"),
-      ...props.tuiConfig.keybinds.get("variant.cycle"),
-    ],
-  }))
+  useKeyboard((event) => {
+    if (event.defaultPrevented) {
+      return
+    }
+
+    if (active().type !== "prompt") {
+      return
+    }
+
+    if (route().type !== "composer") {
+      return
+    }
+
+    if (composer.visible()) {
+      return
+    }
+
+    if (!promptHit(commandKeys(), promptInfo(event))) {
+      return
+    }
+
+    event.preventDefault()
+    openCommand()
+  })
 
   useBindings(() => ({
     mode: OPENCODE_BASE_MODE,
@@ -418,20 +561,6 @@ export function RunFooterView(props: RunFooterViewProps) {
     bindings: props.tuiConfig.keybinds.get("session.child.first"),
   }))
 
-  useBindings(() => ({
-    mode: OPENCODE_BASE_MODE,
-    enabled: active().type === "prompt" && route().type === "composer" && queuedPrompts().length > 0,
-    commands: [
-      {
-        name: "session.queued_prompts",
-        title: "Manage queued prompts",
-        category: "Session",
-        run: openQueuedMenu,
-      },
-    ],
-    bindings: props.tuiConfig.keybinds.get("session.queued_prompts"),
-  }))
-
   createEffect(() => {
     const current = route()
     if (current.type !== "subagent") {
@@ -458,11 +587,6 @@ export function RunFooterView(props: RunFooterViewProps) {
   })
 
   createEffect(() => {
-    if (route().type !== "queued-menu" || queuedPrompts().length > 0) return
-    closePanel()
-  })
-
-  createEffect(() => {
     if (active().type === "prompt") {
       return
     }
@@ -472,7 +596,6 @@ export function RunFooterView(props: RunFooterViewProps) {
       current.type !== "command" &&
       current.type !== "model" &&
       current.type !== "variant" &&
-      current.type !== "queued-menu" &&
       current.type !== "subagent-menu"
     ) {
       return
@@ -486,6 +609,10 @@ export function RunFooterView(props: RunFooterViewProps) {
       route: route(),
       autocomplete: menu(),
       subagentRows: subagentMenuRows(),
+      queueRows: queueDockRows({
+        count: queued().length,
+        editing: !!editingQueueID(),
+      }),
     })
   })
 
@@ -529,17 +656,43 @@ export function RunFooterView(props: RunFooterViewProps) {
                 backgroundColor={panel() ? "transparent" : theme().surface}
                 gap={0}
               >
-                <box id="run-direct-footer-body" width="100%" flexGrow={1} flexShrink={1} flexDirection="column">
+                <box
+                  id="run-direct-footer-body"
+                  width="100%"
+                  flexGrow={1}
+                  flexShrink={1}
+                  minHeight={0}
+                  flexDirection="column"
+                >
                   <Switch>
                     <Match when={active().type === "prompt" && route().type === "composer"}>
+                      <box id="run-direct-footer-queue-slot" width="100%" flexShrink={0} flexDirection="column">
+                      <RunQueueDock
+                        items={queued}
+                        theme={theme}
+                        keybinds={props.keybinds}
+                        disabled={busy()}
+                        editing={() => !!editingQueueID()}
+                        editingMessageID={editingQueueID}
+                        onEdit={(id) => {
+                          void beginEditQueue(id).catch(() => {})
+                        }}
+                        onSendNow={(id) => {
+                          void sendQueuedAndMaybeEditNext(id).catch(() => {})
+                        }}
+                      />
+                      </box>
+                      <box id="run-direct-footer-prompt-slot" width="100%" flexGrow={1} flexShrink={1} minHeight={0}>
                       <RunPromptBody
                         theme={theme}
                         placeholder={composer.placeholder}
+                        bindings={composer.bindings}
                         onSubmit={composer.onSubmit}
                         onKeyDown={composer.onKeyDown}
                         onContentChange={composer.onContentChange}
                         bind={composer.bind}
                       />
+                      </box>
                     </Match>
                     <Match when={selectingSubagent()}>
                       <RunSubagentSelectBody
@@ -551,39 +704,18 @@ export function RunFooterView(props: RunFooterViewProps) {
                         onRows={setSubagentMenuRows}
                       />
                     </Match>
-                    <Match when={selectingQueued()}>
-                      <RunQueuedPromptSelectBody
-                        theme={theme}
-                        prompts={queuedPrompts}
-                        onClose={closePanel}
-                        onDelete={(item) => void props.onQueuedRemove(item.messageID)}
-                        onEdit={async (item) => {
-                          if (!(await props.onQueuedRemove(item.messageID))) return
-                          closePanel()
-                          queueMicrotask(() =>
-                            composer.replacePrompt({
-                              ...item.prompt,
-                              messageID: item.messageID,
-                              partID: item.partID,
-                              queued: true,
-                            }),
-                          )
-                        }}
-                        onRows={setSubagentMenuRows}
-                      />
-                    </Match>
                     <Match when={commanding()}>
                       <RunCommandMenuBody
                         theme={theme}
                         commands={props.commands}
                         subagents={tabs}
-                        queued={queuedPrompts}
+                        queued={queued}
                         variants={props.variants}
                         variantCycle={variantCycle()}
                         onClose={closePanel}
                         onModel={openModel}
                         onSubagent={openSubagentMenu}
-                        onQueued={openQueuedMenu}
+                        onQueued={closePanel}
                         onVariant={openVariant}
                         onVariantCycle={() => {
                           props.onCycle()
@@ -658,33 +790,16 @@ export function RunFooterView(props: RunFooterViewProps) {
                       {shell() ? "Shell" : props.agent}
                     </text>
                     <Show when={!shell()}>
-                      <box id="run-direct-footer-model" flexDirection="row" gap={1} flexGrow={1} flexShrink={1}>
-                        <text fg={theme().muted} wrapMode="none" flexShrink={0}>
-                          ·
-                        </text>
-                        <text fg={theme().text} wrapMode="none" truncate flexShrink={1}>
-                          {model().model}
-                        </text>
-                        <Show when={model().provider}>
-                          {(provider) => (
-                            <text fg={theme().muted} wrapMode="none" truncate flexShrink={1}>
-                              {provider()}
-                            </text>
-                          )}
-                        </Show>
-                        <Show when={props.currentVariant()}>
-                          {(variant) => (
-                            <>
-                              <text fg={theme().muted} wrapMode="none" flexShrink={0}>
-                                ·
-                              </text>
-                              <text wrapMode="none" truncate flexShrink={1}>
-                                <span style={{ fg: theme().warning, bold: true }}>{variant()}</span>
-                              </text>
-                            </>
-                          )}
-                        </Show>
-                      </box>
+                      <text
+                        id="run-direct-footer-model"
+                        fg={theme().text}
+                        wrapMode="none"
+                        truncate
+                        flexGrow={1}
+                        flexShrink={1}
+                      >
+                        {props.state().model}
+                      </text>
                     </Show>
                   </box>
                 </Show>
@@ -757,9 +872,7 @@ export function RunFooterView(props: RunFooterViewProps) {
                     gap={1}
                     flexShrink={0}
                   >
-                    <Show
-                      when={busy() || exiting() || duration().length > 0 || queuedIndicator() || subagentIndicator()}
-                    >
+                    <Show when={busy() || exiting() || duration().length > 0 || subagentIndicator()}>
                       <box id="run-direct-footer-hint-left" flexDirection="row" gap={1} flexShrink={0} marginLeft={1}>
                         <Show when={exiting()}>
                           <text id="run-direct-footer-hint-exit" fg={theme().highlight} wrapMode="none" truncate>
@@ -842,11 +955,6 @@ export function RunFooterView(props: RunFooterViewProps) {
                         when={shell()}
                         fallback={
                           <>
-                            <Show when={additionalQueue() > 0}>
-                              <text id="run-direct-footer-queue" fg={theme().muted} wrapMode="none" truncate>
-                                {additionalQueue()} queued
-                              </text>
-                            </Show>
                             <Show when={usage().length > 0}>
                               <text id="run-direct-footer-usage" fg={theme().muted} wrapMode="none" truncate>
                                 {usage()}

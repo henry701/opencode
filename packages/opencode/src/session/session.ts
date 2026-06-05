@@ -34,7 +34,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { Snapshot } from "@/snapshot"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
-import { SessionID, MessageID, PartID } from "./schema"
+import { SessionID, MessageID, PartID, QueueItemID } from "./schema"
 
 import type { Provider } from "@/provider/provider"
 import { Permission } from "@/permission"
@@ -370,6 +370,18 @@ export const Event = {
       // Reuses SessionV1.Assistant.fields.error (already Schema.optional) so
       // the derived schema keeps the same discriminated-union shape on the event stream.
       error: SessionV1.Assistant.fields.error,
+    },
+  }),
+  QueueUpdated: EventV2.define({
+    type: "session.queue.updated",
+    schema: {
+      sessionID: SessionID,
+      items: Schema.Array(
+        Schema.Struct({
+          id: QueueItemID,
+          text: Schema.String,
+        }),
+      ),
     },
   }),
 }

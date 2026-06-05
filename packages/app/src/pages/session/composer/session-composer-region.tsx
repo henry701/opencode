@@ -33,12 +33,15 @@ export function SessionComposerRegion(props: {
     queue: () => boolean
     items: { id: string; text: string }[]
     sending?: string
+    editingMessageID?: string
     edit?: { id: string; prompt: FollowupDraft["prompt"]; context: FollowupDraft["context"] }
     onQueue: (draft: FollowupDraft) => void
     onAbort: () => void
     onSend: (id: string) => void
     onEdit: (id: string) => void
     onEditLoaded: () => void
+    onCancelQueueEdit?: () => void
+    onEditingQueueMessageID?: (id: string | undefined) => void
   }
   revert?: {
     items: { id: string; text: string }[]
@@ -250,10 +253,11 @@ export function SessionComposerRegion(props: {
                 "margin-top": `${-lift()}px`,
               }}
             >
-              <Show when={props.followup?.items.length}>
+              <Show when={props.followup?.items.length || props.followup?.editingMessageID}>
                 <SessionFollowupDock
                   items={props.followup!.items}
                   sending={props.followup!.sending}
+                  editingMessageID={props.followup!.editingMessageID}
                   onSend={props.followup!.onSend}
                   onEdit={props.followup!.onEdit}
                 />
@@ -268,7 +272,10 @@ export function SessionComposerRegion(props: {
                       newSessionWorktree={props.newSessionWorktree}
                       onNewSessionWorktreeReset={props.onNewSessionWorktreeReset}
                       edit={props.followup?.edit}
+                      editingQueueID={props.followup?.editingMessageID}
+                      onEditingQueueMessageID={props.followup?.onEditingQueueMessageID}
                       onEditLoaded={props.followup?.onEditLoaded}
+                      onCancelQueueEdit={props.followup?.onCancelQueueEdit}
                       shouldQueue={props.followup?.queue}
                       onQueue={props.followup?.onQueue}
                       onAbort={props.followup?.onAbort}

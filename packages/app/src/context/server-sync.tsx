@@ -12,6 +12,8 @@ import {
   clearProviderRev,
   loadAgentsQuery,
   loadGlobalConfigQuery,
+  loadLspQuery,
+  loadMcpQuery,
   loadPathQuery,
   loadProjectsQuery,
   loadProvidersQuery,
@@ -24,7 +26,7 @@ import { trimSessions } from "./global-sync/session-trim"
 import type { ProjectMeta } from "./global-sync/types"
 import { SESSION_RECENT_LIMIT } from "./global-sync/types"
 import { formatServerError } from "@/utils/server-errors"
-import { queryOptions, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/solid-query"
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/solid-query"
 import { createRefreshQueue } from "./global-sync/queue"
 import { directoryKey } from "./global-sync/utils"
 import { PathKey } from "@/utils/path-key"
@@ -48,18 +50,6 @@ type GlobalStore = {
   config: Config
   reload: undefined | "pending" | "complete"
 }
-
-export const loadMcpQuery = (directory: string, sdk: OpencodeClient) =>
-  queryOptions({
-    queryKey: [directory, "mcp"] as const,
-    queryFn: () => sdk.mcp.status().then((r) => r.data ?? {}),
-  })
-
-export const loadLspQuery = (directory: string, sdk: OpencodeClient) =>
-  queryOptions({
-    queryKey: [directory, "lsp"] as const,
-    queryFn: () => sdk.lsp.status().then((r) => r.data ?? []),
-  })
 
 function makeQueryOptionsApi(serverSDK: () => OpencodeClient, sdkFor: (dir: PathKey) => OpencodeClient) {
   return {

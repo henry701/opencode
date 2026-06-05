@@ -331,7 +331,7 @@ export function RunCommandMenuBody(props: {
               footer: `${props.queued().length} queued`,
               keywords: props
                 .queued()
-                .map((item) => item.prompt.text)
+                .map((item) => item.text)
                 .join(" "),
             },
           ]
@@ -598,9 +598,9 @@ export function RunQueuedPromptSelectBody(props: {
   const entries = createMemo<QueuedEntry[]>(() =>
     props.prompts().map((prompt) => ({
       category: "",
-      display: prompt.prompt.text.replaceAll("\n", " "),
+      display: prompt.text.replaceAll("\n", " "),
       footer: "queued · ctrl+e edit · ctrl+d remove",
-      keywords: prompt.prompt.text,
+      keywords: prompt.text,
       prompt,
     })),
   )

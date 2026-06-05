@@ -10,8 +10,8 @@
 // back to the usual two-press exit sequence through RunFooter.requestExit().
 import { CliRenderEvents, createCliRenderer, type CliRenderer, type ScrollbackWriter } from "@opentui/core"
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
-import { Session as SessionApi } from "@/session/session"
 import { registerOpencodeKeymap } from "@/cli/cmd/tui/keymap"
+import { Session as SessionApi } from "@/session/session"
 import * as Locale from "@/util/locale"
 import { withRunSpan } from "./otel"
 import { resolveInteractiveStdin } from "./runtime.stdin"
@@ -19,9 +19,11 @@ import { entrySplash, exitSplash, splashMeta } from "./splash"
 import { resolveRunTheme } from "./theme"
 import type {
   FooterApi,
+  FooterKeybinds,
   PermissionReply,
   QuestionReject,
   QuestionReply,
+  RunDiffStyle,
   RunAgent,
   RunInput,
   RunPrompt,
@@ -64,6 +66,8 @@ export type LifecycleInput = {
   variant: string | undefined
   tuiConfig: RunTuiConfig
   backgroundSubagents: boolean
+  keybinds: FooterKeybinds
+  diffStyle: RunDiffStyle
   onPermissionReply: (input: PermissionReply) => void | Promise<void>
   onQuestionReply: (input: QuestionReply) => void | Promise<void>
   onQuestionReject: (input: QuestionReject) => void | Promise<void>
@@ -173,8 +177,6 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     },
     async () => {
       const source = resolveInteractiveStdin()
-      let unregisterKeymap: (() => void) | undefined
-
       try {
         const renderer = await createCliRenderer({
           stdin: source.stdin,
@@ -193,8 +195,6 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
         })
         const theme = await resolveRunTheme(renderer)
         renderer.setBackgroundColor(theme.background)
-        const keymap = createDefaultOpenTuiKeymap(renderer)
-        unregisterKeymap = registerOpencodeKeymap(keymap, renderer, input.tuiConfig)
         const state: SplashState = {
           entry: false,
           exit: false,
@@ -240,7 +240,8 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
           keymap,
           tuiConfig: input.tuiConfig,
           backgroundSubagents: input.backgroundSubagents,
-          diffStyle: input.tuiConfig.diff_style ?? "auto",
+          keybinds: input.keybinds,
+          diffStyle: input.diffStyle,
           onPermissionReply: input.onPermissionReply,
           onQuestionReply: input.onQuestionReply,
           onQuestionReject: input.onQuestionReject,
@@ -303,7 +304,6 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
                 footer.close()
                 await footer.idle().catch(() => {})
                 footer.destroy()
-                unregisterKeymap?.()
                 shutdown(renderer)
                 source.cleanup?.()
               }
@@ -356,7 +356,6 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
           close,
         }
       } catch (error) {
-        unregisterKeymap?.()
         source.cleanup?.()
         throw error
       }

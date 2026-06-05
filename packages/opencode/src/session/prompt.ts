@@ -2,7 +2,7 @@ import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import path from "path"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import os from "os"
-import { SessionID, MessageID, PartID } from "./schema"
+import { SessionID, MessageID, PartID, QueueItemID } from "./schema"
 import { MessageV2 } from "./message-v2"
 import { Log } from "@opencode-ai/core/util/log"
 import { SessionRevert } from "./revert"
@@ -47,6 +47,8 @@ import * as EffectLogger from "@opencode-ai/core/effect/logger"
 import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
+import { SessionPromptQueue } from "./prompt-queue"
+import { materializeQueuedItem, queueDataFromMessage, type QueueItem, PromptQueue } from "@/queue/prompt-queue"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@opencode-ai/core/database/database"
@@ -96,9 +98,33 @@ export interface Interface {
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
+  readonly updateDeferredQueue: (
+    sessionID: SessionID,
+    queueID: QueueItemID,
+    message: MessageV2.WithParts,
+  ) => Effect.Effect<boolean>
+  readonly sendDeferredNow: (
+    sessionID: SessionID,
+    queueID: QueueItemID,
+    message?: MessageV2.WithParts,
+  ) => Effect.Effect<MessageV2.WithParts, QueueItemNotFoundError | Session.BusyError>
+  readonly queueEnqueue: (input: PromptInput) => Effect.Effect<QueueItem, Image.Error>
+  readonly queueUpdate: (input: PromptInput & { queueID: QueueItemID }) => Effect.Effect<boolean, Image.Error>
+  readonly queueSend: (input: { sessionID: SessionID; queueID: QueueItemID; prompt?: PromptInput }) => Effect.Effect<
+    MessageV2.WithParts,
+    Image.Error | QueueItemNotFoundError | Session.BusyError
+  >
+  readonly resumeQueueDrain: (sessionID: SessionID) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionPrompt") {}
+
+export class QueueItemNotFoundError extends Schema.TaggedErrorClass<QueueItemNotFoundError>()(
+  "SessionPrompt.QueueItemNotFound",
+  {
+    message: Schema.String,
+  },
+) {}
 
 export const layer = Layer.effect(
   Service,
@@ -123,6 +149,7 @@ export const layer = Layer.effect(
     const scope = yield* Scope.Scope
     const instruction = yield* Instruction.Service
     const state = yield* SessionRunState.Service
+    const promptQueue = yield* SessionPromptQueue.Service
     const revert = yield* SessionRevert.Service
     const summary = yield* SessionSummary.Service
     const sys = yield* SystemPrompt.Service
@@ -694,7 +721,135 @@ export const layer = Layer.effect(
       return yield* provider.defaultModel().pipe(Effect.orDie)
     })
 
-    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: PromptInput) {
+    const persistUserMessage = Effect.fn("SessionPrompt.persistUserMessage")(function* (message: MessageV2.WithParts) {
+      const info = message.info
+      const parts = message.parts
+      if (info.role !== "user") return
+
+      const parsed = decodeMessageInfo(info, { errors: "all", propertyOrder: "original" })
+      if (Exit.isFailure(parsed)) {
+        log.error("invalid user message before save", {
+          sessionID: info.sessionID,
+          messageID: info.id,
+          agent: info.agent,
+          model: info.model,
+          cause: Cause.pretty(parsed.cause),
+        })
+      }
+      parts.forEach((part, index) => {
+        const p = decodeMessagePart(part, { errors: "all", propertyOrder: "original" })
+        if (Exit.isSuccess(p)) return
+        log.error("invalid user part before save", {
+          sessionID: info.sessionID,
+          messageID: info.id,
+          partID: part.id,
+          partType: part.type,
+          index,
+          cause: Cause.pretty(p.cause),
+          part,
+        })
+      })
+
+      yield* sessions.updateMessage(info)
+      for (const part of parts) yield* sessions.updatePart(part)
+      const nextPrompt = parts.reduce(
+        (result, part) => {
+          if (part.type === "text") {
+            if (part.synthetic) result.synthetic.push(part.text)
+            else result.text.push(part.text)
+            const reference = referencePromptMetadata(part.metadata?.reference)
+            if (reference) {
+              result.references.push(
+                new ReferenceAttachment({
+                  name: reference.name,
+                  kind: reference.kind,
+                  uri: reference.path ? pathToFileURL(reference.path).href : undefined,
+                  repository: reference.repository,
+                  branch: reference.branch,
+                  target: reference.target,
+                  targetUri: reference.targetPath ? pathToFileURL(reference.targetPath).href : undefined,
+                  problem: reference.problem,
+                  source: new Source({
+                    start: reference.source.start,
+                    end: reference.source.end,
+                    text: reference.source.value,
+                  }),
+                }),
+              )
+            }
+          }
+          if (part.type === "file") {
+            result.files.push(
+              new FileAttachment({
+                uri: part.url,
+                mime: part.mime,
+                name: part.filename,
+                source: part.source
+                  ? new Source({
+                      start: part.source.text.start,
+                      end: part.source.text.end,
+                      text: part.source.text.value,
+                    })
+                  : undefined,
+              }),
+            )
+          }
+          if (part.type === "agent") {
+            result.agents.push(
+              new AgentAttachment({
+                name: part.name,
+                source: part.source
+                  ? new Source({
+                      start: part.source.start,
+                      end: part.source.end,
+                      text: part.source.value,
+                    })
+                  : undefined,
+              }),
+            )
+          }
+          return result
+        },
+        {
+          text: [] as string[],
+          files: [] as FileAttachment[],
+          agents: [] as AgentAttachment[],
+          references: [] as ReferenceAttachment[],
+          synthetic: [] as string[],
+        },
+      )
+      if (flags.experimentalEventSystem) {
+        const delivery =
+          "delivery" in info && info.delivery === "deferred" ? ("queue" as const) : ("steer" as const)
+        yield* events.publish(SessionEvent.Prompted, {
+          sessionID: info.sessionID,
+          messageID: SessionMessage.ID.make(info.id),
+          timestamp: DateTime.makeUnsafe(info.time.created),
+          delivery,
+          prompt: new Prompt({
+            text: nextPrompt.text.join("\n"),
+            files: nextPrompt.files,
+            agents: nextPrompt.agents,
+            references: nextPrompt.references,
+          }),
+        })
+      }
+      for (const text of nextPrompt.synthetic) {
+        if (flags.experimentalEventSystem) {
+          yield* events.publish(SessionEvent.Synthetic, {
+            sessionID: info.sessionID,
+            messageID: SessionMessage.ID.create(),
+            timestamp: DateTime.makeUnsafe(info.time.created),
+            text,
+          })
+        }
+      }
+    })
+
+    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (
+      input: PromptInput,
+      opts?: { persist?: boolean },
+    ) {
       const agentName = input.agent
       const ag = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
       if (!ag) {
@@ -735,6 +890,7 @@ export const layer = Layer.effect(
         },
         system: input.system,
         format: input.format,
+        ...(input.delivery === "deferred" ? { delivery: "deferred" as const } : {}),
       }
 
       if (current?.agent !== info.agent) {
@@ -1098,126 +1254,10 @@ export const layer = Layer.effect(
           : Effect.succeed(part),
       )
 
-      const parsed = decodeMessageInfo(info, { errors: "all", propertyOrder: "original" })
-      if (Exit.isFailure(parsed)) {
-        log.error("invalid user message before save", {
-          sessionID: input.sessionID,
-          messageID: info.id,
-          agent: info.agent,
-          model: info.model,
-          cause: Cause.pretty(parsed.cause),
-        })
-      }
-      parts.forEach((part, index) => {
-        const p = decodeMessagePart(part, { errors: "all", propertyOrder: "original" })
-        if (Exit.isSuccess(p)) return
-        log.error("invalid user part before save", {
-          sessionID: input.sessionID,
-          messageID: info.id,
-          partID: part.id,
-          partType: part.type,
-          index,
-          cause: Cause.pretty(p.cause),
-          part,
-        })
-      })
-
-      yield* sessions.updateMessage(info)
-      for (const part of parts) yield* sessions.updatePart(part)
-      const nextPrompt = parts.reduce(
-        (result, part) => {
-          if (part.type === "text") {
-            if (part.synthetic) result.synthetic.push(part.text)
-            else result.text.push(part.text)
-            const reference = referencePromptMetadata(part.metadata?.reference)
-            if (reference) {
-              result.references.push(
-                new ReferenceAttachment({
-                  name: reference.name,
-                  kind: reference.kind,
-                  uri: reference.path ? pathToFileURL(reference.path).href : undefined,
-                  repository: reference.repository,
-                  branch: reference.branch,
-                  target: reference.target,
-                  targetUri: reference.targetPath ? pathToFileURL(reference.targetPath).href : undefined,
-                  problem: reference.problem,
-                  source: new Source({
-                    start: reference.source.start,
-                    end: reference.source.end,
-                    text: reference.source.value,
-                  }),
-                }),
-              )
-            }
-          }
-          if (part.type === "file") {
-            result.files.push(
-              new FileAttachment({
-                uri: part.url,
-                mime: part.mime,
-                name: part.filename,
-                source: part.source
-                  ? new Source({
-                      start: part.source.text.start,
-                      end: part.source.text.end,
-                      text: part.source.text.value,
-                    })
-                  : undefined,
-              }),
-            )
-          }
-          if (part.type === "agent") {
-            result.agents.push(
-              new AgentAttachment({
-                name: part.name,
-                source: part.source
-                  ? new Source({
-                      start: part.source.start,
-                      end: part.source.end,
-                      text: part.source.value,
-                    })
-                  : undefined,
-              }),
-            )
-          }
-          return result
-        },
-        {
-          text: [] as string[],
-          files: [] as FileAttachment[],
-          agents: [] as AgentAttachment[],
-          references: [] as ReferenceAttachment[],
-          synthetic: [] as string[],
-        },
-      )
-      // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
-      if (flags.experimentalEventSystem) {
-        yield* events.publish(SessionEvent.Prompted, {
-          sessionID: input.sessionID,
-          messageID: SessionMessage.ID.create(),
-          timestamp: DateTime.makeUnsafe(info.time.created),
-          delivery: "steer",
-          prompt: new Prompt({
-            text: nextPrompt.text.join("\n"),
-            files: nextPrompt.files,
-            agents: nextPrompt.agents,
-            references: nextPrompt.references,
-          }),
-        })
-      }
-      for (const text of nextPrompt.synthetic) {
-        // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
-        if (flags.experimentalEventSystem) {
-          yield* events.publish(SessionEvent.Synthetic, {
-            sessionID: input.sessionID,
-            messageID: SessionMessage.ID.create(),
-            timestamp: DateTime.makeUnsafe(info.time.created),
-            text,
-          })
-        }
-      }
-
-      return { info, parts }
+      const message = { info, parts }
+      if (opts?.persist === false) return message
+      yield* persistUserMessage(message)
+      return message
     }, Effect.scoped)
 
     const prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error> = Effect.fn(
@@ -1225,8 +1265,6 @@ export const layer = Layer.effect(
     )(function* (input: PromptInput) {
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       yield* revert.cleanup(session)
-      const message = yield* createUserMessage(input)
-      yield* sessions.touch(input.sessionID)
 
       const permissions: PermissionV1.Rule[] = []
       for (const [t, enabled] of Object.entries(input.tools ?? {})) {
@@ -1237,8 +1275,56 @@ export const layer = Layer.effect(
         yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
       }
 
+      const message = yield* createUserMessage(input)
+      yield* sessions.touch(input.sessionID)
+
       if (input.noReply === true) return message
       return yield* loop({ sessionID: input.sessionID })
+    })
+
+    const queueEnqueue = Effect.fn("SessionPrompt.queueEnqueue")(function* (input: PromptInput) {
+      const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+      yield* revert.cleanup(session)
+
+      const message = yield* createUserMessage(input, { persist: false })
+      yield* sessions.touch(input.sessionID)
+      return yield* promptQueue.enqueue(input.sessionID, queueDataFromMessage(message))
+    })
+
+    const queueUpdate = Effect.fn("SessionPrompt.queueUpdate")(function* (input: PromptInput & { queueID: QueueItemID }) {
+      const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+      yield* revert.cleanup(session)
+      const message = yield* createUserMessage(input, { persist: false })
+      return yield* promptQueue.update(input.sessionID, input.queueID, queueDataFromMessage(message))
+    })
+
+    const queueSend = Effect.fn("SessionPrompt.queueSend")(function* (input: {
+      sessionID: SessionID
+      queueID: QueueItemID
+      prompt?: PromptInput
+    }) {
+      if (input.prompt) {
+        const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+        yield* revert.cleanup(session)
+        const message = yield* createUserMessage({ ...input.prompt, sessionID: input.sessionID }, { persist: false })
+        const ok = yield* promptQueue.update(input.sessionID, input.queueID, queueDataFromMessage(message))
+        if (!ok) return yield* new QueueItemNotFoundError({ message: "Queued message not found" })
+      }
+      return yield* sendDeferredNow(input.sessionID, input.queueID)
+    })
+
+    const persistQueuedItem = Effect.fn("SessionPrompt.persistQueuedItem")(function* (item: QueueItem) {
+      const exit = yield* persistUserMessage(materializeQueuedItem(item)).pipe(Effect.exit)
+      if (Exit.isSuccess(exit)) return
+      yield* promptQueue.enqueue(item.sessionID, item.data).pipe(Effect.ignore)
+      return yield* Effect.failCause(exit.cause)
+    })
+
+    const resumeQueueDrain = Effect.fn("SessionPrompt.resumeQueueDrain")(function* (sessionID: SessionID) {
+      yield* promptQueue.resumeDrain(sessionID)
+      const pending = yield* promptQueue.peek(sessionID)
+      if (!pending) return
+      yield* loop({ sessionID }).pipe(Effect.ignore, Effect.forkIn(scope))
     })
 
     const lastAssistant = Effect.fnUntraced(function* (sessionID: SessionID) {
@@ -1249,7 +1335,7 @@ export const layer = Layer.effect(
       throw new Error("Impossible")
     })
 
-    const runLoop: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.run")(
+    const runLoop = Effect.fn("SessionPrompt.run")(
       function* (sessionID: SessionID) {
         const ctx = yield* InstanceState.context
         const slog = elog.with({ sessionID })
@@ -1265,9 +1351,19 @@ export const layer = Layer.effect(
             Effect.provideService(Database.Service, database),
           )
 
+          const pendingQueued = !!(yield* promptQueue.peek(sessionID))
+          const queueDrainPaused = yield* promptQueue.drainPaused(sessionID)
           const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
-
-          if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
+          const openUser = MessageV2.latestActiveUser(msgs) ?? lastUser
+          const deferredUsers = MessageV2.unprocessedDeferredUsers(msgs)
+          const needsToolFollowup =
+            openUser !== undefined &&
+            MessageV2.assistantNeedsToolFollowup(
+              msgs,
+              openUser,
+              lastAssistant,
+              msgs.findLast((msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id),
+            )
 
           const lastAssistantMsg = msgs.findLast(
             (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
@@ -1280,12 +1376,57 @@ export const layer = Layer.effect(
               (part) => part.type === "tool" && !part.metadata?.providerExecuted && !isOrphanedInterruptedTool(part),
             ) ?? false
 
+          const openTurnComplete =
+            openUser !== undefined &&
+            lastAssistant !== undefined &&
+            lastAssistant.parentID === openUser.id &&
+            lastAssistant.finish &&
+            !["tool-calls"].includes(lastAssistant.finish) &&
+            !hasToolCalls &&
+            !needsToolFollowup &&
+            openUser.id < lastAssistant.id
+
+          const openTurnInProgress =
+            openUser !== undefined &&
+            (!lastAssistant || lastAssistant.parentID === openUser.id) &&
+            !openTurnComplete
+
+          const pinOpenUser = needsToolFollowup || openTurnInProgress
+
           if (
+            !queueDrainPaused &&
+            !MessageV2.immediateTurnUnsettled(msgs) &&
+            pendingQueued &&
+            MessageV2.unprocessedDeferredUsers(msgs).length === 0
+          ) {
+            const next = yield* promptQueue.dequeue(sessionID)
+            if (next) {
+              yield* persistQueuedItem(next)
+              continue
+            }
+          }
+
+          const activeUser = pinOpenUser ? openUser : MessageV2.firstUnprocessedDeferred(msgs) ?? openUser
+
+          if (!activeUser) throw new Error("No user message found in stream. This should never happen.")
+
+          const excludeDeferredFromModel =
+            pinOpenUser &&
+            openUser !== undefined &&
+            deferredUsers.some((user) => user.id > openUser.id)
+
+          const turnSettled =
             lastAssistant?.finish &&
             !["tool-calls"].includes(lastAssistant.finish) &&
             !hasToolCalls &&
-            lastUser.id < lastAssistant.id
-          ) {
+            !needsToolFollowup &&
+            lastUser !== undefined &&
+            lastAssistant !== undefined &&
+            lastUser.id < lastAssistant.id &&
+            deferredUsers.length === 0 &&
+            (!pendingQueued || queueDrainPaused)
+
+          if (turnSettled) {
             const orphan = lastAssistantMsg?.parts.find(
               (part): part is SessionV1.ToolPart => part.type === "tool" && isOrphanedInterruptedTool(part),
             )
@@ -1304,23 +1445,23 @@ export const layer = Layer.effect(
           if (step === 1)
             yield* title({
               session,
-              modelID: lastUser.model.modelID,
-              providerID: lastUser.model.providerID,
+              modelID: activeUser.model.modelID,
+              providerID: activeUser.model.providerID,
               history: msgs,
             }).pipe(Effect.ignore, Effect.forkIn(scope))
 
-          const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
+          const model = yield* getModel(activeUser.model.providerID, activeUser.model.modelID, sessionID)
           const task = tasks.pop()
 
           if (task?.type === "subtask") {
-            yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs })
+            yield* handleSubtask({ task, model, lastUser: activeUser, sessionID, session, msgs })
             continue
           }
 
           if (task?.type === "compaction") {
             const result = yield* compaction.process({
               messages: msgs,
-              parentID: lastUser.id,
+              parentID: activeUser.id,
               sessionID,
               auto: task.auto,
               overflow: task.overflow,
@@ -1334,15 +1475,15 @@ export const layer = Layer.effect(
             lastFinished.summary !== true &&
             (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
           ) {
-            yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
+            yield* compaction.create({ sessionID, agent: activeUser.agent, model: activeUser.model, auto: true })
             continue
           }
 
-          const agent = yield* agents.get(lastUser.agent)
+          const agent = yield* agents.get(activeUser.agent)
           if (!agent) {
             const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
             const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
-            const error = new NamedError.Unknown({ message: `Agent not found: "${lastUser.agent}".${hint}` })
+            const error = new NamedError.Unknown({ message: `Agent not found: "${activeUser.agent}".${hint}` })
             yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
             throw error
           }
@@ -1356,11 +1497,11 @@ export const layer = Layer.effect(
 
           const msg: SessionV1.Assistant = {
             id: MessageID.ascending(),
-            parentID: lastUser.id,
+            parentID: activeUser.id,
             role: "assistant",
             mode: agent.name,
             agent: agent.name,
-            variant: lastUser.model.variant,
+            variant: activeUser.model.variant,
             path: { cwd: ctx.directory, root: ctx.worktree },
             cost: 0,
             tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -1390,7 +1531,20 @@ export const layer = Layer.effect(
             .pipe(Effect.onInterrupt(() => finalizeInterruptedAssistant))
 
           const outcome: "break" | "continue" = yield* Effect.gen(function* () {
-            const lastUserMsg = msgs.findLast((m) => m.info.role === "user")
+            const history =
+              activeUser.delivery === "deferred"
+                ? msgs.filter(
+                    (m) =>
+                      !(
+                        m.info.role === "user" &&
+                        m.info.delivery === "deferred" &&
+                        m.info.id !== activeUser.id
+                      ),
+                  )
+                : excludeDeferredFromModel
+                  ? MessageV2.withoutDeferredUsers(msgs)
+                  : msgs
+            const lastUserMsg = history.findLast((m) => m.info.role === "user")
             const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
             const promptOps = yield* ops()
 
@@ -1400,7 +1554,7 @@ export const layer = Layer.effect(
               model,
               processor: handle,
               bypassAgentCheck,
-              messages: msgs,
+              messages: history,
               promptOps,
             }).pipe(
               Effect.provideService(Plugin.Service, plugin),
@@ -1410,9 +1564,9 @@ export const layer = Layer.effect(
               Effect.provideService(Truncate.Service, truncate),
             )
 
-            if (lastUser.format?.type === "json_schema") {
+            if (activeUser.format?.type === "json_schema") {
               tools["StructuredOutput"] = createStructuredOutputTool({
-                schema: lastUser.format.schema,
+                schema: activeUser.format.schema,
                 onSuccess(output) {
                   structured = output
                 },
@@ -1420,11 +1574,12 @@ export const layer = Layer.effect(
             }
 
             if (step === 1)
-              yield* summary.summarize({ sessionID, messageID: lastUser.id }).pipe(Effect.ignore, Effect.forkIn(scope))
+              yield* summary.summarize({ sessionID, messageID: activeUser.id }).pipe(Effect.ignore, Effect.forkIn(scope))
 
             if (step > 1 && lastFinished) {
-              for (const m of msgs) {
+              for (const m of history) {
                 if (m.info.role !== "user" || m.info.id <= lastFinished.id) continue
+                if (m.info.delivery === "deferred") continue
                 for (const p of m.parts) {
                   if (p.type !== "text" || p.ignored || p.synthetic) continue
                   if (!p.text.trim()) continue
@@ -1440,19 +1595,30 @@ export const layer = Layer.effect(
               }
             }
 
-            yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
+            yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: history })
 
             const [skills, env, instructions, modelMsgs] = yield* Effect.all([
               sys.skills(agent),
               sys.environment(model),
               instruction.system().pipe(Effect.orDie),
-              MessageV2.toModelMessagesEffect(msgs, model),
+              MessageV2.toModelMessagesEffect(history, model),
             ])
             const system = [...env, ...instructions, ...(skills ? [skills] : [])]
-            const format = lastUser.format ?? { type: "text" as const }
+            const format = activeUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
+            const providerPrompt = agent.prompt ? [agent.prompt] : SystemPrompt.provider(model)
+            const fullSystem = [...providerPrompt, ...system, ...(activeUser.system ? [activeUser.system] : [])]
+              .filter(Boolean)
+              .join("\n")
+            const defs = JSON.stringify(
+              Object.entries(tools).map(([name, item]) => ({
+                name,
+                description: item.description,
+                parameters: item.inputSchema,
+              })),
+            )
             const result = yield* handle.process({
-              user: lastUser,
+              user: activeUser,
               agent,
               permission: session.permission,
               sessionID,
@@ -1463,6 +1629,21 @@ export const layer = Layer.effect(
               model,
               toolChoice: format.type === "json_schema" ? "required" : undefined,
             })
+
+            const shouldStore = (() => {
+              for (let i = history.length - 1; i >= 0; i--) {
+                const msg = history[i]
+                if (msg.info.role !== "assistant") continue
+                if (msg.info.tool_defs === defs && msg.info.system_prompt === fullSystem) return false
+              }
+              return true
+            })()
+            if (shouldStore) {
+              const assistantMessage = handle.message as MessageV2.Assistant
+              assistantMessage.tool_defs = defs
+              assistantMessage.system_prompt = fullSystem
+              yield* sessions.updateMessage(assistantMessage)
+            }
 
             if (structured !== undefined) {
               handle.message.structured = structured
@@ -1483,12 +1664,23 @@ export const layer = Layer.effect(
               }
             }
 
-            if (result === "stop") return "break" as const
+            if (result === "stop") {
+              const handleParts = yield* MessageV2.parts(handle.message.id)
+              if (
+                MessageV2.assistantNeedsToolFollowup(msgs, activeUser, handle.message, {
+                  info: handle.message,
+                  parts: handleParts,
+                })
+              ) {
+                return "continue" as const
+              }
+              return "break" as const
+            }
             if (result === "compact") {
               yield* compaction.create({
                 sessionID,
-                agent: lastUser.agent,
-                model: lastUser.model,
+                agent: activeUser.agent,
+                model: activeUser.model,
                 auto: true,
                 overflow: !handle.message.finish,
               })
@@ -1498,7 +1690,25 @@ export const layer = Layer.effect(
             Effect.ensuring(instruction.clear(handle.message.id)),
             Effect.onInterrupt(() => finalizeInterruptedAssistant),
           )
-          if (outcome === "break") break
+          if (outcome === "break") {
+            const handleParts = yield* MessageV2.parts(handle.message.id)
+            if (
+              openUser !== undefined &&
+              MessageV2.assistantNeedsToolFollowup(msgs, openUser, handle.message, {
+                info: handle.message,
+                parts: handleParts,
+              })
+            ) {
+              continue
+            }
+
+            const remaining = MessageV2.unprocessedDeferredUsers(
+              yield* MessageV2.filterCompactedEffect(sessionID),
+            )
+            if (remaining.length > 0) continue
+
+            break
+          }
           continue
         }
 
@@ -1510,7 +1720,11 @@ export const layer = Layer.effect(
     const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
       input: LoopInput,
     ) {
-      return yield* state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), runLoop(input.sessionID))
+      return yield* state.ensureRunning(
+        input.sessionID,
+        lastAssistant(input.sessionID),
+        runLoop(input.sessionID) as Effect.Effect<SessionV1.WithParts>,
+      )
     })
 
     const shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError> = Effect.fn(
@@ -1637,6 +1851,32 @@ export const layer = Layer.effect(
       return result
     })
 
+    const updateDeferredQueue = Effect.fn("SessionPrompt.updateDeferredQueue")(function* (
+      sessionID: SessionID,
+      queueID: QueueItemID,
+      message: MessageV2.WithParts,
+    ) {
+      return yield* promptQueue.update(sessionID, queueID, queueDataFromMessage(message))
+    })
+
+    const sendDeferredNow = Effect.fn("SessionPrompt.sendDeferredNow")(function* (
+      sessionID: SessionID,
+      queueID: QueueItemID,
+      message?: MessageV2.WithParts,
+    ) {
+      if (message) {
+        const ok = yield* promptQueue.update(sessionID, queueID, queueDataFromMessage(message))
+        if (!ok) return yield* new QueueItemNotFoundError({ message: "Queued message not found" })
+      }
+      const items = yield* promptQueue.list(sessionID)
+      const item = items.find((entry) => entry.id === queueID)
+      if (!item) return yield* new QueueItemNotFoundError({ message: "Queued message not found" })
+      const removed = yield* promptQueue.remove(sessionID, queueID)
+      if (!removed) return yield* new QueueItemNotFoundError({ message: "Queued message not found" })
+      yield* persistQueuedItem(item)
+      return yield* loop({ sessionID })
+    })
+
     return Service.of({
       cancel,
       prompt,
@@ -1644,13 +1884,19 @@ export const layer = Layer.effect(
       shell,
       command,
       resolvePromptParts,
+      updateDeferredQueue,
+      sendDeferredNow,
+      queueEnqueue,
+      queueUpdate,
+      queueSend,
+      resumeQueueDrain,
     })
   }),
 )
 
 export const defaultLayer = Layer.suspend(() =>
   layer.pipe(
-    Layer.provide(SessionRunState.defaultLayer),
+    Layer.provide(Layer.mergeAll(SessionPromptQueue.defaultLayer, SessionRunState.defaultLayer)),
     Layer.provide(SessionStatus.defaultLayer),
     Layer.provide(SessionCompaction.defaultLayer),
     Layer.provide(SessionProcessor.defaultLayer),
@@ -1701,6 +1947,7 @@ export const PromptInput = Schema.Struct({
   format: Schema.optional(SessionV1.Format),
   system: Schema.optional(Schema.String),
   variant: Schema.optional(Schema.String),
+  delivery: Schema.optional(Schema.Literals(["immediate", "deferred", "queue", "steer"])),
   parts: Schema.Array(
     Schema.Union([
       SessionV1.TextPartInput,
