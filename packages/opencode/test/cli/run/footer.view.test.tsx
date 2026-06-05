@@ -1,39 +1,52 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import { testRender, useRenderer } from "@opentui/solid"
+import { testRender } from "@opentui/solid"
 import { createSignal } from "solid-js"
-import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
 import type { QuestionRequest } from "@opencode-ai/sdk/v2"
-import { OpencodeKeymapProvider, registerOpencodeKeymap } from "@/cli/cmd/tui/keymap"
 import {
   RUN_COMMAND_PANEL_ROWS,
   RUN_SUBAGENT_PANEL_ROWS,
   RunCommandMenuBody,
   RunModelSelectBody,
-  RunQueuedPromptSelectBody,
   RunSubagentSelectBody,
   RunVariantSelectBody,
 } from "@/cli/cmd/run/footer.command"
-import { RunFooterView } from "@/cli/cmd/run/footer.view"
+import { RunFooterView, queuedSendPlan } from "@/cli/cmd/run/footer.view"
 import { RunEntryContent } from "@/cli/cmd/run/scrollback.writer"
 import { RUN_THEME_FALLBACK } from "@/cli/cmd/run/theme"
 import type {
+  FooterKeybinds,
   FooterState,
   FooterSubagentState,
   FooterSubagentTab,
   FooterView,
   RunCommand,
   RunInput,
-  RunPrompt,
   RunProvider,
-  RunTuiConfig,
   StreamCommit,
 } from "@/cli/cmd/run/types"
 import { RunQuestionBody } from "@/cli/cmd/run/footer.question"
-import { RejectField } from "@/cli/cmd/run/footer.permission"
-import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 
-const tuiConfig = createTuiResolvedConfig()
+function bindings(...keys: string[]) {
+  return keys.map((key) => ({ key }))
+}
+
+const keybinds: FooterKeybinds = {
+  leader: "ctrl+x",
+  leaderTimeout: 2000,
+  commandList: bindings("ctrl+p"),
+  variantCycle: bindings("ctrl+t"),
+  interrupt: bindings("escape"),
+  historyPrevious: bindings("up"),
+  historyNext: bindings("down"),
+  inputClear: bindings("ctrl+c"),
+  inputSubmit: bindings("return"),
+  inputNewline: bindings("shift+return,ctrl+return,ctrl+j"),
+  inputQueue: bindings("ctrl+shift+return"),
+  inputEditQueue: bindings("alt+up"),
+  inputEditQueueNext: bindings("alt+down"),
+  inputEditQueueCancel: bindings("escape"),
+}
 
 function command(input: { name: string; description: string; source?: "command" | "mcp" | "skill" }) {
   return {
@@ -134,97 +147,43 @@ function subagent(input: {
   } satisfies FooterSubagentTab
 }
 
-function footerState(input: Partial<FooterState> = {}) {
-  return createSignal<FooterState>({
-    phase: "idle",
-    status: "",
-    queue: 0,
-    model: "gpt-5",
-    duration: "",
-    usage: "",
-    first: false,
-    interrupt: 0,
-    exit: 0,
-    ...input,
-  })[0]
-}
-
-async function renderFooter(
-  input: {
-    tuiConfig?: RunTuiConfig
-    commands?: RunCommand[]
-    onCycle?: () => void
-    onSubmit?: (prompt: RunPrompt) => boolean
-  } = {},
-) {
-  const [view] = createSignal<FooterView>({ type: "prompt" })
-  const [subagents] = createSignal<FooterSubagentState>({ tabs: [], details: {}, permissions: [], questions: [] })
-  const state = footerState()
-  const config = input.tuiConfig ?? tuiConfig
-  let offKeymap: (() => void) | undefined
-
-  function Harness() {
-    const renderer = useRenderer()
-    const keymap = createDefaultOpenTuiKeymap(renderer)
-    offKeymap = registerOpencodeKeymap(keymap, renderer, config)
-
-    return (
-      <OpencodeKeymapProvider keymap={keymap}>
-        <RunFooterView
-          directory="/tmp"
-          findFiles={async () => []}
-          agents={() => []}
-          resources={() => []}
-          commands={() => input.commands ?? []}
-          providers={() => undefined}
-          currentModel={() => undefined}
-          variants={() => []}
-          currentVariant={() => undefined}
-          state={state}
-          view={view}
-          subagent={subagents}
-          theme={RUN_THEME_FALLBACK}
-          tuiConfig={config}
-          agent="opencode"
-          onSubmit={input.onSubmit ?? (() => true)}
-          onPermissionReply={() => {}}
-          onQuestionReply={() => {}}
-          onQuestionReject={() => {}}
-          onCycle={input.onCycle ?? (() => {})}
-          onInterrupt={() => false}
-          onInputClear={() => {}}
-          onExit={() => {}}
-          onModelSelect={() => {}}
-          onVariantSelect={() => {}}
-          onRows={() => {}}
-          onLayout={() => {}}
-          onStatus={() => {}}
-          onQueuedRemove={async () => true}
-        />
-      </OpencodeKeymapProvider>
-    )
-  }
-
-  const app = await testRender(
-    () => (
-      <box width={100} height={8}>
-        <Harness />
-      </box>
+test("run queue send plan preserves the current edit when sending another row", () => {
+  expect(
+    queuedSendPlan(
+      [
+        { id: "pqu_a", text: "editing draft" },
+        { id: "pqu_b", text: "send this row" },
+      ],
+      "pqu_b",
+      "pqu_a",
     ),
-    { width: 100, height: 8, kittyKeyboard: true },
-  )
+  ).toEqual({
+    saveID: "pqu_a",
+    editID: "pqu_a",
+    clearEditor: false,
+    pauseDrain: true,
+    resumeDrain: false,
+  })
+})
 
-  return {
-    ...app,
-    cleanup() {
-      app.renderer.currentFocusedRenderable?.blur()
-      app.renderer.currentFocusedEditor?.blur()
-      offKeymap?.()
-      offKeymap = undefined
-      app.renderer.destroy()
-    },
-  }
-}
+test("run queue send plan advances after sending the active edit", () => {
+  expect(
+    queuedSendPlan(
+      [
+        { id: "pqu_a", text: "send this row" },
+        { id: "pqu_b", text: "next draft" },
+      ],
+      "pqu_a",
+      "pqu_a",
+    ),
+  ).toEqual({
+    saveID: "pqu_a",
+    editID: "pqu_b",
+    clearEditor: true,
+    pauseDrain: true,
+    resumeDrain: false,
+  })
+})
 
 test("run entry content updates when live commit text changes", async () => {
   const [commit, setCommit] = createSignal<StreamCommit>({
@@ -277,6 +236,7 @@ test("direct command panel renders grouped command palette", async () => {
     command({ name: "internal", description: "Skill command", source: "skill" }),
   ])
   const [subagents] = createSignal([])
+  const [queued] = createSignal([])
   const [variants] = createSignal(["high", "minimal"])
 
   const app = await testRender(
@@ -286,7 +246,7 @@ test("direct command panel renders grouped command palette", async () => {
           theme={() => RUN_THEME_FALLBACK.footer}
           commands={commands}
           subagents={subagents}
-          queued={() => []}
+          queued={queued}
           variants={variants}
           variantCycle="ctrl+t"
           onClose={() => {}}
@@ -337,6 +297,7 @@ test("direct command panel renders grouped command palette", async () => {
 test("direct command panel shows subagent entry when available", async () => {
   const [commands] = createSignal<RunCommand[] | undefined>([])
   const [subagents] = createSignal([subagent({ sessionID: "s-1", label: "Explore", description: "Inspect auth flow" })])
+  const [queued] = createSignal([])
   const [variants] = createSignal<string[]>([])
 
   const app = await testRender(
@@ -346,7 +307,7 @@ test("direct command panel shows subagent entry when available", async () => {
           theme={() => RUN_THEME_FALLBACK.footer}
           commands={commands}
           subagents={subagents}
-          queued={() => []}
+          queued={queued}
           variants={variants}
           variantCycle="ctrl+t"
           onClose={() => {}}
@@ -421,158 +382,12 @@ test("direct subagent panel renders active subagents", async () => {
   }
 })
 
-test("direct queued prompt panel renders pending prompt actions", async () => {
-  const [prompts] = createSignal([
-    { messageID: "m-1", partID: "p-1", prompt: { text: "fix the auth test", parts: [] } },
-  ])
-
-  const app = await testRender(
-    () => (
-      <box width={100} height={RUN_SUBAGENT_PANEL_ROWS}>
-        <RunQueuedPromptSelectBody
-          theme={() => RUN_THEME_FALLBACK.footer}
-          prompts={prompts}
-          onClose={() => {}}
-          onEdit={() => {}}
-          onDelete={() => {}}
-        />
-      </box>
-    ),
-    { width: 100, height: RUN_SUBAGENT_PANEL_ROWS },
-  )
-
-  try {
-    await app.renderOnce()
-    expect(app.captureCharFrame()).toContain("Queued prompts")
-    expect(app.captureCharFrame()).toContain("fix the auth test")
-    expect(app.captureCharFrame()).toContain("queued")
-  } finally {
-    app.renderer.destroy()
-  }
-})
-
-// OpenTUI currently segfaults when the full footer view suite creates several
-// keymap-backed test renderers in one process. Re-enable after the runtime fix.
-test.skip("direct footer opens command panel through keymap binding", async () => {
-  const app = await renderFooter()
-
-  try {
-    await app.renderOnce()
-    app.mockInput.pressKey("p", { ctrl: true })
-    await app.renderOnce()
-
-    expect(app.captureCharFrame()).toContain("Commands")
-  } finally {
-    app.cleanup()
-  }
-})
-
-test.skip("direct footer dispatches leader variant binding only when leader is registered", async () => {
-  const calls: string[] = []
-  const app = await renderFooter({
-    tuiConfig: createTuiResolvedConfig({ keybinds: { leader: "ctrl+x", variant_cycle: "<leader>t" } }),
-    onCycle: () => calls.push("cycle"),
-  })
-
-  try {
-    await app.renderOnce()
-    app.mockInput.pressKey("t")
-    expect(calls).toEqual([])
-
-    app.mockInput.pressKey("x", { ctrl: true })
-    app.mockInput.pressKey("t")
-    expect(calls).toEqual(["cycle"])
-  } finally {
-    app.cleanup()
-  }
-})
-
-test("direct footer keeps leader variant binding inactive when leader is disabled", async () => {
-  const calls: string[] = []
-  const app = await renderFooter({
-    tuiConfig: createTuiResolvedConfig({ keybinds: { leader: "none", variant_cycle: "<leader>t" } }),
-    onCycle: () => calls.push("cycle"),
-  })
-
-  try {
-    await app.renderOnce()
-    app.mockInput.pressKey("t")
-    app.mockInput.pressKey("x", { ctrl: true })
-    app.mockInput.pressKey("t")
-
-    expect(calls).toEqual([])
-  } finally {
-    app.cleanup()
-  }
-})
-
-test("direct footer submits slash autocomplete selections without dispatching shell completions", async () => {
-  const submits: RunPrompt[] = []
-  const app = await renderFooter({
-    commands: [command({ name: "review", description: "Review code" })],
-    onSubmit(prompt) {
-      submits.push(prompt)
-      return true
-    },
-  })
-
-  try {
-    await app.renderOnce()
-    "/rev".split("").forEach((key) => app.mockInput.pressKey(key))
-    await app.renderOnce()
-    app.mockInput.pressEnter()
-    await app.renderOnce()
-
-    "/rev".split("").forEach((key) => app.mockInput.pressKey(key))
-    await app.renderOnce()
-    app.mockInput.pressKey("TAB")
-    await app.renderOnce()
-
-    "/re branch".split("").forEach((key) => app.mockInput.pressKey(key))
-    Array.from({ length: 7 }).forEach(() => app.mockInput.pressKey("ARROW_LEFT"))
-    app.mockInput.pressKey("v")
-    await app.renderOnce()
-    app.mockInput.pressEnter()
-    await app.renderOnce()
-
-    "/nx".split("").forEach((key) => app.mockInput.pressKey(key))
-    app.mockInput.pressKey("ARROW_LEFT")
-    app.mockInput.pressKey("e")
-    await app.renderOnce()
-    app.mockInput.pressEnter()
-    await app.renderOnce()
-
-    "/n scratch".split("").forEach((key) => app.mockInput.pressKey(key))
-    Array.from({ length: 8 }).forEach(() => app.mockInput.pressKey("ARROW_LEFT"))
-    app.mockInput.pressKey("e")
-    await app.renderOnce()
-    app.mockInput.pressEnter()
-    await app.renderOnce()
-
-    app.mockInput.pressKey("!")
-    "/rev".split("").forEach((key) => app.mockInput.pressKey(key))
-    await app.renderOnce()
-    app.mockInput.pressEnter()
-    await app.renderOnce()
-
-    expect(submits).toEqual([
-      { text: "/review ", parts: [], command: { name: "review", arguments: "" } },
-      { text: "/review ", parts: [], command: { name: "review", arguments: "" } },
-      { text: "/review branch", parts: [], command: { name: "review", arguments: "branch" } },
-      { text: "/new ", parts: [] },
-      { text: "/new ", parts: [] },
-    ])
-    expect(app.captureCharFrame()).toContain("/review")
-  } finally {
-    app.cleanup()
-  }
-})
-
-test("direct footer shows editable prompts and additional queued work while running", async () => {
+test("direct footer shows subagent indicator while prompt is running", async () => {
   const [state] = createSignal<FooterState>({
     phase: "running",
     status: "",
-    queue: 3,
+    queue: 0,
+    queued: [],
     model: "gpt-5",
     duration: "",
     usage: "",
@@ -587,14 +402,10 @@ test("direct footer shows editable prompts and additional queued work while runn
     permissions: [],
     questions: [],
   })
-  let offKeymap: (() => void) | undefined
-  function Harness() {
-    const renderer = useRenderer()
-    const keymap = createDefaultOpenTuiKeymap(renderer)
-    offKeymap = registerOpencodeKeymap(keymap, renderer, tuiConfig)
 
-    return (
-      <OpencodeKeymapProvider keymap={keymap}>
+  const app = await testRender(
+    () => (
+      <box width={100} height={8}>
         <RunFooterView
           directory="/tmp"
           findFiles={async () => []}
@@ -608,13 +419,11 @@ test("direct footer shows editable prompts and additional queued work while runn
           state={state}
           view={view}
           subagent={subagents}
-          queuedPrompts={() => [
-            { messageID: "m-queued", partID: "p-queued", prompt: { text: "follow up", parts: [] } },
-          ]}
           theme={RUN_THEME_FALLBACK}
-          tuiConfig={tuiConfig}
+          keybinds={keybinds}
           agent="opencode"
           onSubmit={() => true}
+          onQueue={() => {}}
           onPermissionReply={() => {}}
           onQuestionReply={() => {}}
           onQuestionReject={() => {}}
@@ -627,34 +436,19 @@ test("direct footer shows editable prompts and additional queued work while runn
           onRows={() => {}}
           onLayout={() => {}}
           onStatus={() => {}}
-          onQueuedRemove={async () => true}
         />
-      </OpencodeKeymapProvider>
-    )
-  }
-
-  const app = await testRender(
-    () => (
-      <box width={160} height={8}>
-        <Harness />
       </box>
     ),
     {
-      width: 160,
+      width: 100,
       height: 8,
     },
   )
 
   try {
     await app.renderOnce()
-    expect(app.captureCharFrame()).toContain("interrupt • 1 agent ctrl+x down • 1 queued ctrl+x q")
-    expect(app.captureCharFrame()).toContain("2 queued")
-    expect(app.captureCharFrame()).not.toContain("to view")
-    expect(app.captureCharFrame()).not.toContain("edit/remove")
+    expect(app.captureCharFrame()).toContain("interrupt · 1 agent · ↓ to view")
   } finally {
-    app.renderer.currentFocusedRenderable?.blur()
-    app.renderer.currentFocusedEditor?.blur()
-    offKeymap?.()
     app.renderer.destroy()
   }
 })
@@ -702,122 +496,6 @@ test("direct question body separates single-select checkmark from label", async 
     expect(replies).toHaveLength(1)
     expect(app.captureCharFrame()).toContain("Product ✓")
   } finally {
-    app.renderer.destroy()
-  }
-})
-
-// OpenTUI currently segfaults while tearing down this textarea-backed keymap renderer.
-// Re-enable after the runtime fix.
-test.skip("direct custom answer submits through keymap return binding", async () => {
-  const question = {
-    id: "question-1",
-    sessionID: "session-1",
-    questions: [
-      {
-        question: "Which answer should I use?",
-        header: "Answer",
-        options: [{ label: "Provided", description: "Use the listed answer." }],
-        custom: true,
-      },
-    ],
-  } satisfies QuestionRequest
-  const questions: unknown[] = []
-  let off: (() => void) | undefined
-
-  function Harness() {
-    const renderer = useRenderer()
-    const keymap = createDefaultOpenTuiKeymap(renderer)
-    off = registerOpencodeKeymap(keymap, renderer, tuiConfig)
-
-    return (
-      <OpencodeKeymapProvider keymap={keymap}>
-        <RunQuestionBody
-          request={question}
-          theme={RUN_THEME_FALLBACK.footer}
-          onReply={(input) => {
-            questions.push(input)
-          }}
-          onReject={() => {}}
-        />
-      </OpencodeKeymapProvider>
-    )
-  }
-
-  const app = await testRender(
-    () => (
-      <box width={100} height={18}>
-        <Harness />
-      </box>
-    ),
-    { width: 100, height: 18, kittyKeyboard: true },
-  )
-
-  try {
-    await app.renderOnce()
-    app.mockInput.pressKey("2")
-    await app.renderOnce()
-    "typed".split("").forEach((key) => app.mockInput.pressKey(key))
-    await app.renderOnce()
-    app.mockInput.pressEnter()
-    await app.renderOnce()
-    expect(questions).toEqual([{ requestID: "question-1", answers: [["typed"]] }])
-  } finally {
-    app.renderer.currentFocusedRenderable?.blur()
-    app.renderer.currentFocusedEditor?.blur()
-    off?.()
-    app.renderer.destroy()
-  }
-})
-
-test("direct permission rejection submits through keymap return binding", async () => {
-  let text = ""
-  const submits: string[] = []
-  let off: (() => void) | undefined
-
-  function Harness() {
-    const renderer = useRenderer()
-    const keymap = createDefaultOpenTuiKeymap(renderer)
-    off = registerOpencodeKeymap(keymap, renderer, tuiConfig)
-
-    return (
-      <OpencodeKeymapProvider keymap={keymap}>
-        <RejectField
-          theme={RUN_THEME_FALLBACK.footer}
-          text=""
-          disabled={false}
-          onChange={(input) => {
-            text = input
-          }}
-          onConfirm={() => {
-            submits.push(text)
-          }}
-          onCancel={() => {}}
-        />
-      </OpencodeKeymapProvider>
-    )
-  }
-
-  const app = await testRender(
-    () => (
-      <box width={100} height={18}>
-        <Harness />
-      </box>
-    ),
-    { width: 100, height: 18, kittyKeyboard: true },
-  )
-
-  try {
-    await app.renderOnce()
-    "retry".split("").forEach((key) => app.mockInput.pressKey(key))
-    await app.renderOnce()
-    expect(app.captureCharFrame()).toContain("retry")
-    app.mockInput.pressEnter()
-    await app.renderOnce()
-    expect(submits).toEqual(["retry"])
-  } finally {
-    app.renderer.currentFocusedRenderable?.blur()
-    app.renderer.currentFocusedEditor?.blur()
-    off?.()
     app.renderer.destroy()
   }
 })

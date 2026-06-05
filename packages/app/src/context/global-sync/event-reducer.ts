@@ -166,6 +166,12 @@ export function applyDirectoryEvent(input: {
       input.setStore("sessionTotal", (value) => Math.max(0, value - 1))
       break
     }
+    case "session.queue.updated":
+    case "session.deferred.updated": {
+      const props = event.properties as { sessionID: string; items: { id: string; text: string }[] }
+      input.setStore("prompt_queue", props.sessionID, props.items)
+      break
+    }
     case "session.diff": {
       const props = event.properties as { sessionID: string; diff: SnapshotFileDiff[] }
       input.setStore("session_diff", props.sessionID, reconcile(list(props.diff), { key: "file" }))

@@ -24,6 +24,7 @@ import { Todo } from "@/session/todo"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
 import { SessionRunState } from "@/session/run-state"
+import { SessionPromptQueue } from "@/session/prompt-queue"
 import { SessionProcessor } from "@/session/processor"
 import { SessionCompaction } from "@/session/compaction"
 import { SessionRevert } from "@/session/revert"
@@ -79,6 +80,7 @@ export const AppLayer = Layer.mergeAll(
   BackgroundJob.defaultLayer,
   RuntimeFlags.defaultLayer,
   EventV2Bridge.defaultLayer,
+  SessionPromptQueue.defaultLayer,
   SessionRunState.defaultLayer,
   SessionProcessor.defaultLayer,
   SessionCompaction.defaultLayer,

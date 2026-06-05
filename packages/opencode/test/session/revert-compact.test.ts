@@ -6,6 +6,7 @@ import { Effect, Layer } from "effect"
 import { Session } from "@/session/session"
 
 import { SessionRevert } from "../../src/session/revert"
+import { SessionPromptQueue } from "../../src/session/prompt-queue"
 import { MessageV2 } from "../../src/session/message-v2"
 import { Snapshot } from "../../src/snapshot"
 import * as Log from "@opencode-ai/core/util/log"
@@ -21,6 +22,7 @@ void Log.init({ print: false })
 const env = Layer.mergeAll(
   Session.defaultLayer,
   SessionRevert.defaultLayer,
+  SessionPromptQueue.defaultLayer,
   Snapshot.defaultLayer,
   CrossSpawnSpawner.defaultLayer,
 )
@@ -100,6 +102,34 @@ const tokens = {
 }
 
 describe("revert + compact workflow", () => {
+  it.live(
+    "clears queued prompts after revert",
+    provideTmpdirInstance((dir) =>
+      Effect.gen(function* () {
+        const session = yield* Session.Service
+        const revert = yield* SessionRevert.Service
+        const promptQueue = yield* SessionPromptQueue.Service
+        const info = yield* session.create({})
+
+        const userMsg = yield* user(info.id)
+        yield* text(info.id, userMsg.id, "anchor")
+        const assistantMsg = yield* assistant(info.id, userMsg.id, dir)
+        yield* text(info.id, assistantMsg.id, "done")
+        yield* promptQueue.enqueue(info.id, {
+          version: 1,
+          agent: "build",
+          model: { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test-model") },
+          parts: [{ type: "text", text: "queued" }],
+        })
+        expect(yield* promptQueue.peek(info.id)).toBeDefined()
+
+        yield* revert.revert({ sessionID: info.id, messageID: userMsg.id })
+
+        expect(yield* promptQueue.peek(info.id)).toBeUndefined()
+      }),
+    ),
+  )
+
   it.live(
     "should properly handle compact command after revert",
     provideTmpdirInstance(

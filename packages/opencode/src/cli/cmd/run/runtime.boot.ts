@@ -1,21 +1,36 @@
 // Boot-time resolution for direct interactive mode.
 //
 // These functions run concurrently at startup to gather everything the runtime
-// needs before the first frame: TUI keymap config, diff display style,
+// needs before the first frame: keybinds from TUI config, diff display style,
 // model variant list with context limits, and session history for the prompt
 // history ring. All are async because they read config or hit the SDK, but
 // none block each other.
 import { Context, Effect, Layer } from "effect"
-import { createBindingLookup } from "@opentui/keymap/extras"
+import { stringifyKeyStroke } from "@opentui/keymap"
 import { TuiConfig } from "@/cli/cmd/tui/config/tui"
 import { TuiKeybind } from "@/cli/cmd/tui/config/keybind"
 import { makeRuntime } from "@/effect/run-service"
 import { reusePendingTask } from "./runtime.shared"
 import { resolveSession, sessionHistory } from "./session.shared"
-import type { RunDiffStyle, RunInput, RunPrompt, RunProvider, RunTuiConfig } from "./types"
+import type { FooterKeybinds, RunDiffStyle, RunInput, RunPrompt, RunProvider, RunTuiConfig } from "./types"
 import { pickVariant } from "./variant.shared"
 
-const DEFAULT_LEADER_TIMEOUT = 2000
+const DEFAULT_KEYBINDS: FooterKeybinds = {
+  leader: TuiKeybind.LeaderDefault,
+  leaderTimeout: 2000,
+  commandList: [{ key: "ctrl+p" }],
+  variantCycle: [{ key: "ctrl+t" }],
+  interrupt: [{ key: "escape" }],
+  historyPrevious: [{ key: "up" }],
+  historyNext: [{ key: "down" }],
+  inputClear: [{ key: "ctrl+c" }],
+  inputSubmit: [{ key: "return" }],
+  inputNewline: [{ key: "shift+return,ctrl+return,alt+return,ctrl+j" }],
+  inputQueue: [{ key: "ctrl+shift+return" }],
+  inputEditQueue: [{ key: "alt+up" }],
+  inputEditQueueNext: [{ key: "alt+down" }],
+  inputEditQueueCancel: [{ key: "escape" }],
+}
 
 export type ModelInfo = {
   providers: RunProvider[]
@@ -41,7 +56,7 @@ type BootService = {
     sessionID: string,
     model: RunInput["model"],
   ) => Effect.Effect<SessionInfo>
-  readonly resolveRunTuiConfig: () => Effect.Effect<RunTuiConfig>
+  readonly resolveFooterKeybinds: () => Effect.Effect<FooterKeybinds>
   readonly resolveDiffStyle: () => Effect.Effect<RunDiffStyle>
 }
 
@@ -69,27 +84,32 @@ function emptySessionInfo(): SessionInfo {
   }
 }
 
-function defaultRunTuiConfig(): RunTuiConfig {
-  const keybinds = TuiKeybind.parse({})
-  return {
-    keybinds: createBindingLookup(TuiKeybind.toBindingConfig(keybinds), {
-      commandMap: TuiKeybind.CommandMap,
-      bindingDefaults: TuiKeybind.bindingDefaults(),
-    }),
-    leader_timeout: DEFAULT_LEADER_TIMEOUT,
-    diff_style: "auto",
-  }
+function leaderKey(config: Config) {
+  const key = config.keybinds.get("leader")?.[0]?.key
+  if (!key) return TuiKeybind.LeaderDefault
+  return typeof key === "string" ? key : stringifyKeyStroke(key)
 }
 
-function runTuiConfig(config: Config | undefined): RunTuiConfig {
+function footerKeybinds(config: Config | undefined): FooterKeybinds {
   if (!config) {
-    return defaultRunTuiConfig()
+    return DEFAULT_KEYBINDS
   }
 
   return {
-    keybinds: config.keybinds,
-    leader_timeout: config.leader_timeout,
-    diff_style: config.diff_style ?? "auto",
+    leader: leaderKey(config),
+    leaderTimeout: config.leader_timeout,
+    commandList: config.keybinds.get("command.palette.show"),
+    variantCycle: config.keybinds.get("variant.cycle"),
+    interrupt: config.keybinds.get("session.interrupt"),
+    historyPrevious: config.keybinds.get("prompt.history.previous"),
+    historyNext: config.keybinds.get("prompt.history.next"),
+    inputClear: config.keybinds.get("prompt.clear"),
+    inputSubmit: config.keybinds.get("input.submit"),
+    inputNewline: config.keybinds.get("input.newline"),
+    inputQueue: config.keybinds.get("input.queue"),
+    inputEditQueue: config.keybinds.get("input.queue.edit"),
+    inputEditQueueNext: config.keybinds.get("input.queue.edit.next"),
+    inputEditQueueCancel: config.keybinds.get("input.queue.edit.cancel"),
   }
 }
 
@@ -163,24 +183,51 @@ const layer = Layer.effect(
       }
     })
 
-    const resolveRunTuiConfig = Effect.fn("RunBoot.resolveRunTuiConfig")(function* () {
-      return runTuiConfig(yield* config())
+    const resolveFooterKeybinds = Effect.fn("RunBoot.resolveFooterKeybinds")(function* () {
+      return footerKeybinds(yield* config())
     })
 
     const resolveDiffStyle = Effect.fn("RunBoot.resolveDiffStyle")(function* () {
-      return runTuiConfig(yield* config()).diff_style ?? "auto"
+      return (yield* config())?.diff_style ?? "auto"
     })
 
     return Service.of({
       resolveModelInfo,
       resolveSessionInfo,
-      resolveRunTuiConfig,
+      resolveFooterKeybinds,
       resolveDiffStyle,
     })
   }),
 )
 
 const runtime = makeRuntime(Service, layer)
+
+const DEFAULT_TUI_KEYBINDS = new Map<string, FooterKeybinds[keyof FooterKeybinds]>([
+  ["leader", [{ key: DEFAULT_KEYBINDS.leader }]],
+  ["command.palette.show", DEFAULT_KEYBINDS.commandList],
+  ["variant.cycle", DEFAULT_KEYBINDS.variantCycle],
+  ["session.interrupt", DEFAULT_KEYBINDS.interrupt],
+  ["prompt.history.previous", DEFAULT_KEYBINDS.historyPrevious],
+  ["prompt.history.next", DEFAULT_KEYBINDS.historyNext],
+  ["prompt.clear", DEFAULT_KEYBINDS.inputClear],
+  ["input.submit", DEFAULT_KEYBINDS.inputSubmit],
+  ["input.newline", DEFAULT_KEYBINDS.inputNewline],
+  ["input.queue", DEFAULT_KEYBINDS.inputQueue],
+  ["input.queue.edit", DEFAULT_KEYBINDS.inputEditQueue],
+  ["input.queue.edit.next", DEFAULT_KEYBINDS.inputEditQueueNext],
+  ["input.queue.edit.cancel", DEFAULT_KEYBINDS.inputEditQueueCancel],
+])
+
+export async function resolveRunTuiConfig(): Promise<RunTuiConfig> {
+  return loadConfig().catch(
+    () =>
+      ({
+        keybinds: DEFAULT_TUI_KEYBINDS,
+        leader_timeout: DEFAULT_KEYBINDS.leaderTimeout,
+        diff_style: "auto",
+      }) as unknown as RunTuiConfig,
+  )
+}
 
 // Fetches available variants and context limits for every provider/model pair.
 export async function resolveModelInfo(
@@ -200,9 +247,9 @@ export async function resolveSessionInfo(
   return runtime.runPromise((svc) => svc.resolveSessionInfo(sdk, sessionID, model)).catch(() => emptySessionInfo())
 }
 
-// Reads TUI config once for direct mode keymap setup and display preferences.
-export async function resolveRunTuiConfig(): Promise<RunTuiConfig> {
-  return runtime.runPromise((svc) => svc.resolveRunTuiConfig()).catch(() => defaultRunTuiConfig())
+// Reads keybind overrides from TUI config and merges them with defaults.
+export async function resolveFooterKeybinds(): Promise<FooterKeybinds> {
+  return runtime.runPromise((svc) => svc.resolveFooterKeybinds()).catch(() => DEFAULT_KEYBINDS)
 }
 
 export async function resolveDiffStyle(): Promise<RunDiffStyle> {

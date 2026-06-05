@@ -1,5 +1,5 @@
 import type { Message, Session } from "@opencode-ai/sdk/v2/client"
-import { showToast } from "@/utils/toast"
+import { showToast } from "@opencode-ai/ui/toast"
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import { Binary } from "@opencode-ai/core/util/binary"
 import { useNavigate, useParams } from "@solidjs/router"
@@ -34,6 +34,8 @@ export type FollowupDraft = {
   agent: string
   model: { providerID: string; modelID: string }
   variant?: string
+  /** When set, save replaces this queued item instead of appending. */
+  queueID?: string
 }
 
 type FollowupSendInput = {
@@ -42,6 +44,7 @@ type FollowupSendInput = {
   sync: ReturnType<typeof useSync>
   draft: FollowupDraft
   messageID?: string
+  delivery?: "immediate" | "deferred"
   optimisticBusy?: boolean
   before?: () => Promise<boolean> | boolean
 }
@@ -157,6 +160,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       agent: input.draft.agent,
       model: input.draft.model,
       messageID,
+      delivery: input.delivery,
       parts: requestParts,
       variant: input.draft.variant,
     })
@@ -187,6 +191,10 @@ type PromptSubmitInput = {
   newSessionWorktree?: Accessor<string | undefined>
   onNewSessionWorktreeReset?: () => void
   shouldQueue?: Accessor<boolean>
+  queueMode?: Accessor<boolean>
+  resetQueueMode?: () => void
+  editingQueueID?: Accessor<string | undefined>
+  resetEditingQueueID?: () => void
   onQueue?: (draft: FollowupDraft) => void
   onAbort?: () => void
   onSubmit?: () => void
@@ -293,6 +301,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     const text = currentPrompt.map((part) => ("content" in part ? part.content : "")).join("")
     const images = input.imageAttachments().slice()
     const mode = input.mode()
+    const queueMode = input.queueMode?.() ?? false
 
     if (text.trim().length === 0 && images.length === 0 && input.commentCount() === 0) {
       if (input.working()) void abort()
@@ -403,6 +412,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       agent,
       model,
       variant,
+      queueID: input.editingQueueID?.(),
     }
 
     const clearInput = () => {
@@ -424,12 +434,18 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       })
     }
 
-    if (!isNewSession && mode === "normal" && input.shouldQueue?.()) {
+    if (!isNewSession && mode === "normal" && (input.shouldQueue?.() || queueMode)) {
       input.onQueue?.(draft)
+      input.resetQueueMode?.()
+      if (draft.queueID) input.resetEditingQueueID?.()
       clearContext()
       clearInput()
       return
     }
+
+    input.resetQueueMode?.()
+
+    void client.session.queue?.drain?.resume?.({ sessionID: session.id }).catch(() => {})
 
     input.onSubmit?.()
 
