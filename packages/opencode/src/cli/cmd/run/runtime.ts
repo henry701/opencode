@@ -18,7 +18,7 @@ import { SessionID } from "@/session/schema"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { MessageID } from "@/session/schema"
 import { createRunDemo } from "./demo"
-import { resolveDiffStyle, resolveFooterKeybinds, resolveModelInfo, resolveSessionInfo } from "./runtime.boot"
+import { resolveDiffStyle, resolveFooterKeybinds, resolveModelInfo, resolveRunTuiConfig, resolveSessionInfo } from "./runtime.boot"
 import { createRuntimeLifecycle } from "./runtime.lifecycle"
 import { buildQueuePromptPayload, buildQueueSendPayload, runPromptFromQueueDetail } from "./runtime.queue-remote"
 import { recordRunSpanError, setRunSpanAttributes, withRunSpan } from "./otel"
@@ -212,6 +212,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput): Promise<void> {
     async (span) => {
       const start = performance.now()
       const log = trace()
+      const tuiConfigTask = resolveRunTuiConfig()
       const keybindsTask = resolveFooterKeybinds()
       const diffStyleTask = resolveDiffStyle()
       const ctx = await input.boot()
@@ -225,7 +226,8 @@ async function runInteractiveRuntime(input: RunRuntimeInput): Promise<void> {
               variant: undefined,
             })
       const savedTask = resolveSavedVariant(ctx.model)
-      const [keybinds, diffStyle, session, savedVariant] = await Promise.all([
+      const [tuiConfig, keybinds, diffStyle, session, savedVariant] = await Promise.all([
+        tuiConfigTask,
         keybindsTask,
         diffStyleTask,
         sessionTask,

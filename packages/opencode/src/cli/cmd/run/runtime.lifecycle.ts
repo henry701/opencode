@@ -177,6 +177,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     },
     async () => {
       const source = resolveInteractiveStdin()
+      let unregisterKeymap: (() => void) | undefined
       try {
         const renderer = await createCliRenderer({
           stdin: source.stdin,
@@ -195,6 +196,8 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
         })
         const theme = await resolveRunTheme(renderer)
         renderer.setBackgroundColor(theme.background)
+        const keymap = createDefaultOpenTuiKeymap(renderer)
+        unregisterKeymap = registerOpencodeKeymap(keymap, renderer, input.tuiConfig)
         const state: SplashState = {
           entry: false,
           exit: false,
@@ -304,6 +307,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
                 footer.close()
                 await footer.idle().catch(() => {})
                 footer.destroy()
+                unregisterKeymap?.()
                 shutdown(renderer)
                 source.cleanup?.()
               }
@@ -356,6 +360,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
           close,
         }
       } catch (error) {
+        unregisterKeymap?.()
         source.cleanup?.()
         throw error
       }

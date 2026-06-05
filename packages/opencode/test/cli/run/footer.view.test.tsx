@@ -159,6 +159,7 @@ function footerState(input: Partial<FooterState> = {}) {
     phase: "idle",
     status: "",
     queue: 0,
+    queued: [],
     model: "gpt-5",
     duration: "",
     usage: "",
@@ -503,10 +504,15 @@ test("direct footer shows subagent indicator while prompt is running", async () 
     permissions: [],
     questions: [],
   })
+  let offKeymap: (() => void) | undefined
 
-  const app = await testRender(
-    () => (
-      <box width={100} height={8}>
+  function Harness() {
+    const renderer = useRenderer()
+    const keymap = createDefaultOpenTuiKeymap(renderer)
+    offKeymap = registerOpencodeKeymap(keymap, renderer, tuiConfig)
+
+    return (
+      <OpencodeKeymapProvider keymap={keymap}>
         <RunFooterView
           directory="/tmp"
           findFiles={async () => []}
@@ -540,6 +546,14 @@ test("direct footer shows subagent indicator while prompt is running", async () 
           onLayout={() => {}}
           onStatus={() => {}}
         />
+      </OpencodeKeymapProvider>
+    )
+  }
+
+  const app = await testRender(
+    () => (
+      <box width={100} height={8}>
+        <Harness />
       </box>
     ),
     {
@@ -550,11 +564,14 @@ test("direct footer shows subagent indicator while prompt is running", async () 
 
   try {
     await app.renderOnce()
-    expect(app.captureCharFrame()).toContain("interrupt • 1 agent ctrl+x down • ctrl+b background • 1 queued ctrl+x q")
-    expect(app.captureCharFrame()).toContain("2 queued")
+    expect(app.captureCharFrame()).toContain("interrupt")
+    expect(app.captureCharFrame()).toContain("1 agent")
+    expect(app.captureCharFrame()).toContain("background")
+    expect(app.captureCharFrame()).not.toContain("queued")
     expect(app.captureCharFrame()).not.toContain("to view")
     expect(app.captureCharFrame()).not.toContain("edit/remove")
   } finally {
+    offKeymap?.()
     app.renderer.destroy()
   }
 })

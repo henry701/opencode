@@ -31,6 +31,7 @@ import type { QueueControl } from "./types"
 import { RunPermissionBody } from "./footer.permission"
 import { RunQuestionBody } from "./footer.question"
 import { promptBindings, promptHit, promptInfo } from "./prompt.shared"
+import { modelInfo } from "./variant.shared"
 import {
   OPENCODE_BASE_MODE,
   formatKeyBindings,
@@ -191,6 +192,7 @@ export function RunFooterView(props: RunFooterViewProps) {
   const foregroundSubagents = createMemo(
     () => props.backgroundSubagents && tabs().some((item) => item.status === "running" && !item.background),
   )
+  const queued = createMemo(() => props.state().queued)
   const queuedIndicator = createMemo(() => {
     const count = queued().length
     if (count === 0) return
@@ -261,7 +263,6 @@ export function RunFooterView(props: RunFooterViewProps) {
   const busy = createMemo(() => props.state().phase === "running")
   const armed = createMemo(() => props.state().interrupt > 0)
   const exiting = createMemo(() => props.state().exit > 0)
-  const queued = createMemo(() => props.state().queued)
   const [editingQueueID, setEditingQueueID] = createSignal<string | undefined>()
   const [queueEscapeGuard, setQueueEscapeGuard] = createSignal(false)
   const queueControl = () => props.queueControl?.()
