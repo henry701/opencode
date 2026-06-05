@@ -381,7 +381,7 @@ export function RunFooterView(props: RunFooterViewProps) {
     void Promise.resolve(queueControl()?.resumeDrain?.()).catch(() => {})
     setEditingQueueID(undefined)
     composer.restorePrompt({ text: "", parts: [] })
-    setQueueEscapeGuard(true)
+    if (props.state().phase === "running") props.onInterrupt()
     return true
   }
 

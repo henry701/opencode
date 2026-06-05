@@ -393,27 +393,7 @@ export function Prompt(props: PromptProps) {
             setQueueEscapeGuard(false)
             return
           }
-          // TODO: this should be its own command
-          if (store.mode === "shell") {
-            setStore("mode", "normal")
-            return
-          }
-          if (!props.sessionID) return
-
-          const next = store.interrupt + 1
-          setStore("interrupt", next)
-
-          setTimeout(() => {
-            setStore("interrupt", 0)
-          }, 5000)
-
-          if (next >= 2) {
-            void sdk.client.session.abort({
-              sessionID: props.sessionID,
-            })
-            setStore("interrupt", 0)
-          }
-          dialog.clear()
+          interruptSession()
         },
       },
       {
@@ -888,7 +868,7 @@ export function Prompt(props: PromptProps) {
         title: "Stash prompt",
         name: "prompt.stash",
         category: "Prompt",
-        enabled: !!store.prompt.input,
+        enabled: !!store.prompt.input && !editingQueuedMessageID(),
         run: () => {
           if (!store.prompt.input) return
           stash.push({
@@ -906,7 +886,7 @@ export function Prompt(props: PromptProps) {
         title: "Stash pop",
         name: "prompt.stash.pop",
         category: "Prompt",
-        enabled: stash.list().length > 0,
+        enabled: stash.list().length > 0 && !editingQueuedMessageID(),
         run: () => {
           const entry = stash.pop()
           if (entry) {
@@ -922,7 +902,7 @@ export function Prompt(props: PromptProps) {
         title: "Stash list",
         name: "prompt.stash.list",
         category: "Prompt",
-        enabled: stash.list().length > 0,
+        enabled: stash.list().length > 0 && !editingQueuedMessageID(),
         run: () => {
           dialog.replace(() => (
             <DialogStash
@@ -1013,7 +993,13 @@ export function Prompt(props: PromptProps) {
       target: inputTarget,
       enabled: (() => {
         cursorVersion()
-        return inputTarget() !== undefined && !props.disabled && !auto()?.visible && input !== undefined
+        return (
+          inputTarget() !== undefined &&
+          !props.disabled &&
+          !auto()?.visible &&
+          input !== undefined &&
+          !editingQueuedMessageID()
+        )
       })(),
       commands: [
         {
@@ -1045,7 +1031,13 @@ export function Prompt(props: PromptProps) {
       target: inputTarget,
       enabled: (() => {
         cursorVersion()
-        return inputTarget() !== undefined && !props.disabled && !auto()?.visible && input !== undefined
+        return (
+          inputTarget() !== undefined &&
+          !props.disabled &&
+          !auto()?.visible &&
+          input !== undefined &&
+          !editingQueuedMessageID()
+        )
       })(),
       commands: [
         {
@@ -1205,6 +1197,30 @@ export function Prompt(props: PromptProps) {
   async function resumeQueueDrain(sessionID = props.sessionID) {
     if (!sessionID) return
     await sdk.client.session.queue.drain.resume({ sessionID }).catch(() => {})
+  }
+
+  function interruptSession() {
+    // TODO: this should be its own command
+    if (store.mode === "shell") {
+      setStore("mode", "normal")
+      return
+    }
+    if (!props.sessionID) return
+
+    const next = store.interrupt + 1
+    setStore("interrupt", next)
+
+    setTimeout(() => {
+      setStore("interrupt", 0)
+    }, 5000)
+
+    if (next >= 2) {
+      void sdk.client.session.abort({
+        sessionID: props.sessionID,
+      })
+      setStore("interrupt", 0)
+    }
+    dialog.clear()
   }
 
   function resumeQueueDrainForCurrentEdit() {
@@ -1442,7 +1458,7 @@ export function Prompt(props: PromptProps) {
     const id = editingQueuedMessageID()
     if (!id || !props.sessionID) return false
     await exitQueueEditModeAndResume(props.sessionID)
-    setQueueEscapeGuard(true)
+    if (status().type !== "idle") interruptSession()
     if (input && !input.isDestroyed) input.focus()
     return true
   }

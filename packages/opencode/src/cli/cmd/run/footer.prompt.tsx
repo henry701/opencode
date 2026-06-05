@@ -770,6 +770,9 @@ export function createPromptState(input: PromptInput): PromptState {
     if (!area || area.isDestroyed) {
       return
     }
+    if (input.editingQueueID?.()) {
+      return
+    }
 
     if (history.index === null && dir === -1) {
       stash = clonePrompt(draft)
