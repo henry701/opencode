@@ -5,19 +5,49 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import {
   APIError,
   AbortedError,
-  Assistant,
+  Assistant as CoreAssistant,
   AuthError,
   CompactionPart,
   ContextOverflowError,
-  Info,
   OutputLengthError,
   Part,
   StructuredOutputError,
   SubtaskPart,
-  User,
-  WithParts,
+  User as CoreUser,
+  WithParts as CoreWithParts,
   type ToolPart,
 } from "@opencode-ai/core/v1/session"
+export {
+  AgentPartInput,
+  FilePartInput,
+  Format,
+  Part,
+  SubtaskPartInput,
+  TextPartInput,
+  type AgentPart,
+  type FilePart,
+  type TextPart,
+  type ToolPart,
+  type ToolStateCompleted,
+  type ToolStateError,
+} from "@opencode-ai/core/v1/session"
+
+export const Assistant = CoreAssistant
+export type Assistant = CoreAssistant & {
+  tool_defs?: string
+  system_prompt?: string
+}
+
+export const User = CoreUser
+export type User = CoreUser & { delivery?: "immediate" | "deferred" }
+
+export type Info = User | Assistant
+
+export const WithParts = CoreWithParts
+export type WithParts = {
+  info: Info
+  parts: Part[]
+}
 
 import { NamedError } from "@opencode-ai/core/util/error"
 import { APICallError, convertToModelMessages, LoadAPIKeyError, type ModelMessage, type UIMessage } from "ai"
@@ -610,6 +640,113 @@ export function latest(msgs: WithParts[]) {
       : m.parts.filter((p): p is CompactionPart | SubtaskPart => p.type === "compaction" || p.type === "subtask"),
   )
   return { user, assistant, finished, tasks }
+}
+
+type UserWithDelivery = User & { delivery?: "immediate" | "deferred" }
+
+const userDelivery = (user: User): UserWithDelivery["delivery"] => (user as UserWithDelivery).delivery
+
+/** Latest user message, skipping delivery="deferred" (queued for end of turn). */
+export function latestActiveUser(msgs: WithParts[]) {
+  let user: User | undefined
+  for (const msg of msgs) {
+    const info = msg.info
+    if (info.role !== "user" || userDelivery(info) === "deferred") continue
+    if (!user || info.id > user.id) user = info
+  }
+  return user
+}
+
+export function withoutDeferredUsers(msgs: WithParts[]) {
+  return msgs.filter((m) => !(m.info.role === "user" && userDelivery(m.info) === "deferred"))
+}
+
+/** Deferred user messages not yet fully handled by a completed assistant turn. */
+export function unprocessedDeferredUsers(msgs: WithParts[]) {
+  const items: User[] = []
+  for (const msg of msgs) {
+    const info = msg.info
+    if (info.role !== "user" || userDelivery(info) !== "deferred") continue
+    const assistantMsg = msgs.findLast((entry) => entry.info.role === "assistant" && entry.info.parentID === info.id)
+    if (!assistantMsg) {
+      items.push(info)
+      continue
+    }
+    if (assistantMsg.info.role !== "assistant") {
+      items.push(info)
+      continue
+    }
+    const assistant = assistantMsg.info
+    if (!assistant.finish || ["tool-calls", "unknown"].includes(assistant.finish)) {
+      items.push(info)
+      continue
+    }
+    if (assistantNeedsToolFollowup(msgs, info, assistant, assistantMsg)) items.push(info)
+  }
+  return items
+}
+
+/** Oldest deferred user message that still needs a completed assistant turn. */
+export function firstUnprocessedDeferred(msgs: WithParts[]) {
+  return unprocessedDeferredUsers(msgs)[0]
+}
+
+/** True while an immediate turn (including steer) still needs model follow-up. */
+export function immediateTurnUnsettled(msgs: WithParts[]) {
+  const { assistant: lastAssistant } = latest(msgs)
+  if (!lastAssistant) {
+    return msgs.some((msg) => msg.info.role === "user" && userDelivery(msg.info) !== "deferred")
+  }
+
+  const lastAssistantMsg = msgs.findLast((msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant.id)
+
+  if (!lastAssistant.finish || ["tool-calls", "unknown"].includes(lastAssistant.finish)) return true
+
+  const parent = msgs.find((msg) => msg.info.id === lastAssistant.parentID)?.info
+  if (parent?.role === "user") {
+    if (assistantNeedsToolFollowup(msgs, parent, lastAssistant, lastAssistantMsg)) return true
+  }
+
+  for (const msg of msgs) {
+    const info = msg.info
+    if (info.role !== "user" || userDelivery(info) === "deferred") continue
+    if (info.id <= lastAssistant.id) continue
+
+    const answer = msgs.findLast((entry) => entry.info.role === "assistant" && entry.info.parentID === info.id)
+    if (!answer || answer.info.role !== "assistant") return true
+    const assistant = answer.info
+    if (!assistant.finish || ["tool-calls", "unknown"].includes(assistant.finish)) return true
+    if (assistantNeedsToolFollowup(msgs, info, assistant, answer)) return true
+  }
+
+  return false
+}
+
+function orphanedInterruptedTool(part: ToolPart) {
+  return part.state.status === "error" && part.state.metadata?.interrupted === true
+}
+
+/** True while the latest assistant for this user still needs a follow-up step (e.g. after tool results). */
+export function assistantNeedsToolFollowup(
+  msgs: WithParts[],
+  user: User,
+  assistant: Assistant | undefined,
+  assistantMsg: WithParts | undefined,
+) {
+  if (!assistant || assistant.parentID !== user.id) return false
+  if (assistant.finish === "tool-calls") return true
+
+  const tools =
+    assistantMsg?.parts.filter(
+      (part): part is ToolPart =>
+        part.type === "tool" && !part.metadata?.providerExecuted && !orphanedInterruptedTool(part),
+    ) ?? []
+  if (tools.length === 0) return false
+
+  const responded = msgs.some(
+    (entry) => entry.info.role === "assistant" && entry.info.id > assistant.id && entry.info.parentID === user.id,
+  )
+  return !responded
 }
 
 export function fromError(

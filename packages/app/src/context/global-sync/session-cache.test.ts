@@ -36,6 +36,7 @@ describe("app session cache", () => {
       session_diff: Record<string, SnapshotFileDiff[] | undefined>
       todo: Record<string, Todo[] | undefined>
       message: Record<string, Message[] | undefined>
+      prompt_queue: Record<string, { id: string; text: string }[] | undefined>
       part: Record<string, Part[] | undefined>
       permission: Record<string, PermissionRequest[] | undefined>
       question: Record<string, QuestionRequest[] | undefined>
@@ -45,6 +46,7 @@ describe("app session cache", () => {
       session_diff: { ses_1: [] },
       todo: { ses_1: [] as Todo[] },
       message: {},
+      prompt_queue: {},
       part: { msg_1: [part("prt_1", "ses_1", "msg_1")] },
       permission: { ses_1: [] as PermissionRequest[] },
       question: { ses_1: [] as QuestionRequest[] },
@@ -70,6 +72,7 @@ describe("app session cache", () => {
       session_diff: Record<string, SnapshotFileDiff[] | undefined>
       todo: Record<string, Todo[] | undefined>
       message: Record<string, Message[] | undefined>
+      prompt_queue: Record<string, { id: string; text: string }[] | undefined>
       part: Record<string, Part[] | undefined>
       permission: Record<string, PermissionRequest[] | undefined>
       question: Record<string, QuestionRequest[] | undefined>
@@ -79,6 +82,7 @@ describe("app session cache", () => {
       session_diff: {},
       todo: {},
       message: { ses_1: [m] },
+      prompt_queue: {},
       part: { [m.id]: [part("prt_1", "ses_1", m.id)] },
       permission: {},
       question: {},

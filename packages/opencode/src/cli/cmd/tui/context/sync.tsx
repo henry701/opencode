@@ -66,6 +66,9 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       message: {
         [sessionID: string]: Message[]
       }
+      prompt_queue: {
+        [sessionID: string]: { id: string; text: string }[]
+      }
       part: {
         [messageID: string]: Part[]
       }
@@ -99,6 +102,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       session_diff: {},
       todo: {},
       message: {},
+      prompt_queue: {},
       part: {},
       lsp: [],
       mcp: {},
@@ -139,6 +143,15 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
     }
 
     event.subscribe((event, { workspace }) => {
+      if ((event as { type: string }).type === "session.queue.updated") {
+        const queued = event as unknown as {
+          type: string
+          properties: { sessionID: string; items: { id: string; text: string }[] }
+        }
+        setStore("prompt_queue", queued.properties.sessionID, queued.properties.items)
+        return
+      }
+
       switch (event.type) {
         case "server.instance.disposed":
           void bootstrap()
@@ -554,11 +567,12 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           const tracker = { messages: new Set<string>(), parts: new Set<string>() }
           hydratingSessions.set(sessionID, tracker)
           const task = (async () => {
-            const [session, messages, todo, diff] = await Promise.all([
+            const [session, messages, todo, diff, queue] = await Promise.all([
               sdk.client.session.get({ sessionID }, { throwOnError: true }),
               sdk.client.session.messages({ sessionID, limit: 100 }),
               sdk.client.session.todo({ sessionID }),
               sdk.client.session.diff({ sessionID }),
+              sdk.client.session.queue.list({ sessionID }).catch(() => undefined),
             ])
             setStore(
               produce((draft) => {
@@ -610,6 +624,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
                 for (const message of removed) delete draft.part[message.id]
                 draft.message[sessionID] = visible
                 draft.session_diff[sessionID] = diff.data ?? []
+                draft.prompt_queue[sessionID] = queue?.data ?? []
               }),
             )
             fullSyncedSessions.add(sessionID)

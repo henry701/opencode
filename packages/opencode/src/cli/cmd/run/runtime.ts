@@ -13,21 +13,53 @@
 //      local sessions,
 //   4. runs the prompt queue until the footer closes.
 import { createOpencodeClient } from "@opencode-ai/sdk/v2"
+import { MemoryPromptQueue } from "@/queue/prompt-queue"
+import { SessionID } from "@/session/schema"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { MessageID } from "@/session/schema"
 import { createRunDemo } from "./demo"
-import { resolveModelInfo, resolveRunTuiConfig, resolveSessionInfo } from "./runtime.boot"
+import { resolveDiffStyle, resolveFooterKeybinds, resolveModelInfo, resolveRunTuiConfig, resolveSessionInfo } from "./runtime.boot"
 import { createRuntimeLifecycle } from "./runtime.lifecycle"
+import { buildQueuePromptPayload, buildQueueSendPayload, runPromptFromQueueDetail } from "./runtime.queue-remote"
 import { recordRunSpanError, setRunSpanAttributes, withRunSpan } from "./otel"
 import { trace } from "./trace"
 import { cycleVariant, formatModelLabel, resolveSavedVariant, resolveVariant, saveVariant } from "./variant.shared"
-import type { LocalReplayAnchor, LocalReplayRow, RunInput, RunPrompt, RunProvider, StreamCommit } from "./types"
+import type {
+  FooterApi,
+  LocalReplayAnchor,
+  LocalReplayRow,
+  QueuedPromptPreview,
+  RunInput,
+  RunPrompt,
+  RunProvider,
+  StreamCommit,
+} from "./types"
 
 /** @internal Exported for testing */
 export { pickVariant, resolveVariant } from "./variant.shared"
 
 /** @internal Exported for testing */
 export { runPromptQueue } from "./runtime.queue"
+
+/** @internal Exported for testing */
+export async function hydrateRemoteQueue(input: {
+  sessionID: string | undefined
+  footer: Pick<FooterApi, "event" | "isClosed">
+  listQueue: (sessionID: string) => Promise<QueuedPromptPreview[] | undefined>
+}) {
+  if (!input.sessionID || input.footer.isClosed) return
+  try {
+    const queued = (await input.listQueue(input.sessionID)) ?? []
+    if (input.footer.isClosed) return
+    input.footer.event({
+      type: "queue",
+      queue: queued.length,
+      queued,
+    })
+  } catch {
+    // Older remote servers may not expose queue routes; attach should still boot.
+  }
+}
 
 type BootContext = Pick<
   RunInput,
@@ -181,6 +213,8 @@ async function runInteractiveRuntime(input: RunRuntimeInput): Promise<void> {
       const start = performance.now()
       const log = trace()
       const tuiConfigTask = resolveRunTuiConfig()
+      const keybindsTask = resolveFooterKeybinds()
+      const diffStyleTask = resolveDiffStyle()
       const ctx = await input.boot()
       const modelTask = resolveModelInfo(ctx.sdk, ctx.directory, ctx.model)
       const sessionTask =
@@ -192,7 +226,13 @@ async function runInteractiveRuntime(input: RunRuntimeInput): Promise<void> {
               variant: undefined,
             })
       const savedTask = resolveSavedVariant(ctx.model)
-      const [tuiConfig, session, savedVariant] = await Promise.all([tuiConfigTask, sessionTask, savedTask])
+      const [tuiConfig, keybinds, diffStyle, session, savedVariant] = await Promise.all([
+        tuiConfigTask,
+        keybindsTask,
+        diffStyleTask,
+        sessionTask,
+        savedTask,
+      ])
       const state: RuntimeState = {
         shown: !session.first,
         aborting: false,
@@ -257,6 +297,8 @@ async function runInteractiveRuntime(input: RunRuntimeInput): Promise<void> {
         variant: state.activeVariant,
         tuiConfig,
         backgroundSubagents: input.backgroundSubagents,
+        keybinds,
+        diffStyle,
         onPermissionReply: async (next) => {
           if (state.demo?.permission(next)) {
             return
@@ -566,10 +608,99 @@ async function runInteractiveRuntime(input: RunRuntimeInput): Promise<void> {
 
         const mod = await import("./runtime.queue")
         const createSession = input.createSession
+        const memoryQueue = new MemoryPromptQueue()
         await mod.runPromptQueue({
           footer,
           initialInput: input.initialInput,
           trace: log,
+          demo: !!state.demo,
+          sessionID: state.sessionID ? SessionID.make(state.sessionID) : undefined,
+          agent: state.agent,
+          model: state.model,
+          memoryQueue,
+          enqueueRemote: state.demo
+            ? undefined
+            : async (prompt) => {
+                await ensureStream()
+                if (!state.sessionID) return
+                await ctx.sdk.session.queue.enqueue({
+                  sessionID: state.sessionID,
+                  ...buildQueuePromptPayload({
+                    agent: state.agent,
+                    model: state.model,
+                    variant: state.activeVariant,
+                    prompt,
+                  }),
+                })
+              },
+          updateQueueRemote: state.demo
+            ? undefined
+            : async (queueID, prompt) => {
+                await ensureStream()
+                if (!state.sessionID) return
+                await ctx.sdk.session.queue.update({
+                  sessionID: state.sessionID,
+                  queueID,
+                  body: buildQueuePromptPayload({
+                    agent: state.agent,
+                    model: state.model,
+                    variant: state.activeVariant,
+                    prompt,
+                  }),
+                })
+              },
+          removeQueueRemote: state.demo
+            ? undefined
+            : async (queueID) => {
+                await ensureStream()
+                if (!state.sessionID) return
+                await ctx.sdk.session.queue.remove({
+                  sessionID: state.sessionID,
+                  queueID,
+                })
+              },
+          getQueueRemote: state.demo
+            ? undefined
+            : async (queueID) => {
+                await ensureStream()
+                if (!state.sessionID) return
+                const result = await ctx.sdk.session.queue.get({
+                  sessionID: state.sessionID,
+                  queueID,
+                })
+                if (!result.data) return
+                return runPromptFromQueueDetail(result.data)
+              },
+          sendQueueRemote: state.demo
+            ? undefined
+            : async (queueID, prompt) => {
+                await ensureStream()
+                if (!state.sessionID) return
+                await ctx.sdk.session.queue.send({
+                  sessionID: state.sessionID,
+                  queueID,
+                  body: buildQueueSendPayload({
+                    agent: state.agent,
+                    model: state.model,
+                    variant: state.activeVariant,
+                    prompt,
+                  }),
+                })
+              },
+          pauseQueueDrainRemote: state.demo
+            ? undefined
+            : async () => {
+                await ensureStream()
+                if (!state.sessionID) return
+                await ctx.sdk.session.queue.drain.pause({ sessionID: state.sessionID })
+              },
+          resumeQueueDrainRemote: state.demo
+            ? undefined
+            : async () => {
+                await ensureStream()
+                if (!state.sessionID) return
+                await ctx.sdk.session.queue.drain.resume({ sessionID: state.sessionID })
+              },
           onSend: (prompt) => {
             state.shown = true
             state.history.push(prompt)
@@ -781,8 +912,19 @@ async function runInteractiveRuntime(input: RunRuntimeInput): Promise<void> {
           })
         }
 
-            try {
-              await runQueue()
+        if (!state.demo) {
+          void hydrateRemoteQueue({
+            sessionID: state.sessionID,
+            footer,
+            listQueue: async (sessionID) =>
+              ctx.sdk.session.queue
+                .list({ sessionID })
+                .then((result) => result.data ?? []),
+          })
+        }
+
+        try {
+          await runQueue()
         } finally {
           if (replayResizeTimer) {
             clearTimeout(replayResizeTimer)

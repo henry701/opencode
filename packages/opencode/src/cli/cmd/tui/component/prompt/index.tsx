@@ -25,12 +25,15 @@ import { useSync } from "@tui/context/sync"
 import { useEvent } from "@tui/context/event"
 import { editorSelectionKey, useEditorContext, type EditorSelection } from "@tui/context/editor"
 import { MessageID, PartID } from "@/session/schema"
-import { promptOffsetWidth } from "@/cli/cmd/prompt-display"
 import { createStore, produce, unwrap } from "solid-js/store"
 import { usePromptHistory, type PromptInfo } from "./history"
 import { computePromptTraits } from "./traits"
-import { assign, expandPastedTextPlaceholders, expandTrackedPastedText } from "./part"
+import { assign, expandPastedTextPlaceholders } from "./part"
+import { queueEditCommitPlan, queueEditSwitchPlan } from "@/queue/edit"
+import { queueMutationError } from "./queue-actions"
 import { usePromptStash } from "./stash"
+import { partsToPromptInfo } from "./queue"
+import { PromptQueueDock } from "./queue-dock"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
@@ -82,6 +85,8 @@ export type PromptRef = {
   blur(): void
   focus(): void
   submit(): void
+  queue(): void
+  editQueue?(): void
 }
 
 const money = new Intl.NumberFormat("en-US", {
@@ -150,6 +155,7 @@ export function Prompt(props: PromptProps) {
   const keymap = useOpencodeKeymap()
   const agentShortcut = useCommandShortcut("agent.cycle")
   const paletteShortcut = useCommandShortcut("command.palette.show")
+  const submitShortcut = useCommandShortcut("prompt.submit")
   const renderer = useRenderer()
   const dimensions = useTerminalDimensions()
   const { theme, syntax } = useTheme()
@@ -159,6 +165,10 @@ export function Prompt(props: PromptProps) {
   const shell = createMemo(() => props.placeholders?.shell ?? [])
   const fileContextEnabled = createMemo(() => kv.get("file_context_enabled", true))
   const [dismissedEditorSelectionKey, setDismissedEditorSelectionKey] = createSignal<string>()
+  const [editingQueuedMessageID, setEditingQueuedMessageID] = createSignal<string | undefined>()
+  const [queueEscapeGuard, setQueueEscapeGuard] = createSignal(false)
+  let queueComposerBusy = false
+  let promptDisposed = false
   const editorContext = createMemo(() => {
     const selection = fileContextEnabled() ? editor.selection() : undefined
     if (!selection) return
@@ -217,8 +227,7 @@ export function Prompt(props: PromptProps) {
   let promptPartTypeId = 0
   const event = useEvent()
 
-  event.on(TuiEvent.PromptAppend.type, (evt, { workspace }) => {
-    if (workspace !== project.workspace.current()) return
+  event.on(TuiEvent.PromptAppend.type, (evt) => {
     if (!input || input.isDestroyed) return
     input.insertText(evt.properties.text)
     setTimeout(() => {
@@ -376,30 +385,15 @@ export function Prompt(props: PromptProps) {
         name: "session.interrupt",
         category: "Session",
         hidden: true,
-        enabled: status().type !== "idle",
+        enabled: status().type !== "idle" && !editingQueuedMessageID() && !queueEscapeGuard(),
         run: () => {
           if (auto()?.visible) return
           if (!input.focused) return
-          // TODO: this should be its own command
-          if (store.mode === "shell") {
-            setStore("mode", "normal")
+          if (queueEscapeGuard()) {
+            setQueueEscapeGuard(false)
             return
           }
-          if (!props.sessionID) return
-
-          setStore("interrupt", store.interrupt + 1)
-
-          setTimeout(() => {
-            setStore("interrupt", 0)
-          }, 5000)
-
-          if (store.interrupt >= 2) {
-            void sdk.client.session.abort({
-              sessionID: props.sessionID,
-            })
-            setStore("interrupt", 0)
-          }
-          dialog.clear()
+          interruptSession()
         },
       },
       {
@@ -559,6 +553,150 @@ export function Prompt(props: PromptProps) {
     ]),
   }))
 
+  const pendingAssistant = createMemo(() => {
+    if (!props.sessionID) return
+    const messages = sync.data.message[props.sessionID] ?? []
+    return messages.findLast((message) => message.role === "assistant" && !message.time.completed)?.id
+  })
+
+  const queueItems = createMemo(() => {
+    if (!props.sessionID) return []
+    return sync.data.prompt_queue[props.sessionID] ?? []
+  })
+
+  createEffect(() => {
+    const editingID = editingQueuedMessageID()
+    if (!editingID || !props.sessionID) return
+    if (queueItems().some((item) => item.id === editingID)) return
+    if (!input || input.isDestroyed) return
+    void exitQueueEditModeAndResume(props.sessionID, { force: true })
+  })
+
+  useBindings(() => ({
+    target: inputTarget,
+    enabled: (() => {
+      cursorVersion()
+      return (
+        inputTarget() !== undefined &&
+        !props.disabled &&
+        !auto()?.visible &&
+        input !== undefined
+      )
+    })(),
+    commands: [
+      {
+        name: "input.queue",
+        title: "Queue prompt",
+        category: "Prompt",
+        hidden: true,
+        run: async () => {
+          input.focus()
+          const handled = await queue()
+          if (!handled) return
+
+          dialog.clear()
+        },
+      },
+    ],
+    bindings: tuiConfig.keybinds.get("input.queue"),
+  }))
+
+  useBindings(() => ({
+    target: inputTarget,
+    enabled: (() => {
+      cursorVersion()
+      return (
+        inputTarget() !== undefined &&
+        !props.disabled &&
+        !auto()?.visible &&
+        input !== undefined &&
+        queueItems().length > 0
+      )
+    })(),
+    commands: [
+      {
+        name: "input.queue.edit",
+        title: "Edit queued prompt",
+        category: "Prompt",
+        hidden: true,
+        run: async () => {
+          input.focus()
+          const handled = await editQueue()
+          if (!handled) return
+
+          dialog.clear()
+        },
+      },
+    ],
+    bindings: tuiConfig.keybinds.get("input.queue.edit"),
+  }))
+
+  useBindings(() => ({
+    target: inputTarget,
+    enabled: (() => {
+      cursorVersion()
+      return (
+        inputTarget() !== undefined &&
+        !props.disabled &&
+        !auto()?.visible &&
+        input !== undefined &&
+        !!editingQueuedMessageID()
+      )
+    })(),
+    commands: [
+      {
+        name: "input.queue.edit.next",
+        title: "Next queued prompt",
+        category: "Prompt",
+        hidden: true,
+        run: async () => {
+          input.focus()
+          const handled = await editQueueNext()
+          if (!handled) return
+
+          dialog.clear()
+        },
+      },
+    ],
+    bindings: tuiConfig.keybinds.get("input.queue.edit.next"),
+  }))
+
+  useBindings(() => ({
+    target: inputTarget,
+    enabled: (() => {
+      cursorVersion()
+      return (
+        inputTarget() !== undefined &&
+        !props.disabled &&
+        !auto()?.visible &&
+        input !== undefined &&
+        (!!editingQueuedMessageID() || queueEscapeGuard())
+      )
+    })(),
+    commands: [
+      {
+        name: "input.queue.edit.cancel",
+        title: "Go back from queue edit",
+        category: "Prompt",
+        hidden: true,
+        run: async () => {
+          input.focus()
+          if (queueEscapeGuard()) {
+            setQueueEscapeGuard(false)
+            setCursorVersion((value) => value + 1)
+            dialog.clear()
+            return
+          }
+          const handled = await cancelQueueEdit()
+          if (!handled) return
+
+          dialog.clear()
+        },
+      },
+    ],
+    bindings: tuiConfig.keybinds.get("input.queue.edit.cancel"),
+  }))
+
   const ref: PromptRef = {
     get focused() {
       return input.focused
@@ -579,6 +717,7 @@ export function Prompt(props: PromptProps) {
       input.gotoBufferEnd()
     },
     reset() {
+      if (queueComposerBusy) return
       input.clear()
       input.extmarks.clear()
       setStore("prompt", {
@@ -586,9 +725,16 @@ export function Prompt(props: PromptProps) {
         parts: [],
       })
       setStore("extmarkToPartIndex", new Map())
+      void exitQueueEditModeAndResume()
     },
     submit() {
       void submit()
+    },
+    queue() {
+      void queue()
+    },
+    editQueue() {
+      void editQueue()
     },
   }
 
@@ -605,7 +751,10 @@ export function Prompt(props: PromptProps) {
   })
 
   onCleanup(() => {
-    if (store.prompt.input) {
+    promptDisposed = true
+    const editingQueue = !!editingQueuedMessageID()
+    if (!queueComposerBusy) resumeQueueDrainForCurrentEdit()
+    if (!editingQueue && store.prompt.input) {
       stashed = { prompt: unwrap(store.prompt), cursor: input.cursorOffset }
     }
     setInputTarget(undefined)
@@ -719,7 +868,7 @@ export function Prompt(props: PromptProps) {
         title: "Stash prompt",
         name: "prompt.stash",
         category: "Prompt",
-        enabled: !!store.prompt.input,
+        enabled: !!store.prompt.input && !editingQueuedMessageID(),
         run: () => {
           if (!store.prompt.input) return
           stash.push({
@@ -737,7 +886,7 @@ export function Prompt(props: PromptProps) {
         title: "Stash pop",
         name: "prompt.stash.pop",
         category: "Prompt",
-        enabled: stash.list().length > 0,
+        enabled: stash.list().length > 0 && !editingQueuedMessageID(),
         run: () => {
           const entry = stash.pop()
           if (entry) {
@@ -753,7 +902,7 @@ export function Prompt(props: PromptProps) {
         title: "Stash list",
         name: "prompt.stash.list",
         category: "Prompt",
-        enabled: stash.list().length > 0,
+        enabled: stash.list().length > 0 && !editingQueuedMessageID(),
         run: () => {
           dialog.replace(() => (
             <DialogStash
@@ -844,7 +993,13 @@ export function Prompt(props: PromptProps) {
       target: inputTarget,
       enabled: (() => {
         cursorVersion()
-        return inputTarget() !== undefined && !props.disabled && !auto()?.visible && input !== undefined
+        return (
+          inputTarget() !== undefined &&
+          !props.disabled &&
+          !auto()?.visible &&
+          input !== undefined &&
+          !editingQueuedMessageID()
+        )
       })(),
       commands: [
         {
@@ -876,7 +1031,13 @@ export function Prompt(props: PromptProps) {
       target: inputTarget,
       enabled: (() => {
         cursorVersion()
-        return inputTarget() !== undefined && !props.disabled && !auto()?.visible && input !== undefined
+        return (
+          inputTarget() !== undefined &&
+          !props.disabled &&
+          !auto()?.visible &&
+          input !== undefined &&
+          !editingQueuedMessageID()
+        )
       })(),
       commands: [
         {
@@ -907,7 +1068,7 @@ export function Prompt(props: PromptProps) {
     }
   })
 
-  let submitting = false
+  let promptInFlight = false
   async function submit() {
     // Prevent overlapping invocations (e.g. a double-pressed Enter, or the
     // input's native onSubmit racing another dispatch). Without this guard,
@@ -915,25 +1076,564 @@ export function Prompt(props: PromptProps) {
     // clears `store.prompt.input`, then awaits its own `session.create` and
     // ultimately reads the now-empty store — sending a phantom empty prompt
     // to a freshly created session.
-    if (submitting) return false
-    submitting = true
+    if (promptInFlight || queueComposerBusy) return false
+    promptInFlight = true
     try {
       return await submitInner()
     } finally {
-      submitting = false
+      promptInFlight = false
     }
+  }
+
+  async function queue() {
+    if (promptInFlight || queueComposerBusy) return false
+    promptInFlight = true
+    try {
+      return await queueInner()
+    } finally {
+      promptInFlight = false
+    }
+  }
+
+  function syncPromptInputFromTextarea() {
+    if (input && !input.isDestroyed && input.plainText !== store.prompt.input) {
+      setStore("prompt", "input", input.plainText)
+      syncExtmarksWithPromptParts()
+    }
+  }
+
+  function expandedInputText() {
+    let inputText = store.prompt.input
+    const allExtmarks = input.extmarks.getAllForTypeId(promptPartTypeId)
+    const sortedExtmarks = allExtmarks.sort((a: { start: number }, b: { start: number }) => b.start - a.start)
+
+    for (const extmark of sortedExtmarks) {
+      const partIndex = store.extmarkToPartIndex.get(extmark.id)
+      if (partIndex !== undefined) {
+        const part = store.prompt.parts[partIndex]
+        if (part?.type === "text" && part.text) {
+          const before = inputText.slice(0, extmark.start)
+          const after = inputText.slice(extmark.end)
+          inputText = before + part.text + after
+        }
+      }
+    }
+
+    return inputText
+  }
+
+  function editorContextParts() {
+    const editorSelection = editorContext()
+    if (!editorSelection || editor.labelState() !== "pending") return []
+
+    return [
+      {
+        id: PartID.ascending(),
+        type: "text" as const,
+        text: formatEditorContext(editorSelection),
+        synthetic: true,
+        metadata: {
+          kind: "editor_context",
+          source: editorSelection.source ?? "editor",
+          filePath: editorSelection.filePath,
+          ranges: editorSelection.ranges,
+        },
+      },
+    ]
+  }
+
+  function isRegisteredSlashCommand(inputText: string) {
+    if (!inputText.startsWith("/")) return false
+    const firstLine = inputText.split("\n")[0]
+    const command = firstLine.split(" ")[0].slice(1)
+    return sync.data.command.some((x) => x.name === command)
+  }
+
+  function resetPromptAfterSend(currentMode: typeof store.mode, sessionID: string, editorParts: ReturnType<typeof editorContextParts>) {
+    setEditingQueuedMessageID(undefined)
+    history.append({
+      ...store.prompt,
+      mode: currentMode,
+    })
+    input.extmarks.clear()
+    setStore("prompt", {
+      input: "",
+      parts: [],
+    })
+    setStore("extmarkToPartIndex", new Map())
+    props.onSubmit?.()
+
+    if (!props.sessionID) {
+      if (editorParts.length > 0) editor.preserveSelectionFromNewSession()
+      setTimeout(() => {
+        route.navigate({
+          type: "session",
+          sessionID,
+        })
+      }, 50)
+    }
+    input.clear()
+  }
+
+  function clearPromptDraft() {
+    input.extmarks.clear()
+    if (input && !input.isDestroyed) {
+      input.clear()
+    }
+    setStore("prompt", {
+      input: "",
+      parts: [],
+    })
+    setStore("extmarkToPartIndex", new Map())
+  }
+
+  function exitQueueEditMode() {
+    setEditingQueuedMessageID(undefined)
+    setQueueEscapeGuard(false)
+    clearPromptDraft()
+    setCursorVersion((value) => value + 1)
+  }
+
+  async function resumeQueueDrain(sessionID = props.sessionID) {
+    if (!sessionID) return
+    await sdk.client.session.queue.drain.resume({ sessionID }).catch(() => {})
+  }
+
+  function interruptSession() {
+    // TODO: this should be its own command
+    if (store.mode === "shell") {
+      setStore("mode", "normal")
+      return
+    }
+    if (!props.sessionID) return
+
+    const next = store.interrupt + 1
+    setStore("interrupt", next)
+
+    setTimeout(() => {
+      setStore("interrupt", 0)
+    }, 5000)
+
+    if (next >= 2) {
+      void sdk.client.session.abort({
+        sessionID: props.sessionID,
+      })
+      setStore("interrupt", 0)
+    }
+    dialog.clear()
+  }
+
+  function resumeQueueDrainForCurrentEdit() {
+    if (queueComposerBusy) return
+    if (!editingQueuedMessageID()) return
+    void resumeQueueDrain()
+  }
+
+  async function exitQueueEditModeAndResume(sessionID = props.sessionID, opts?: { force?: boolean }) {
+    const shouldResume = opts?.force || !!editingQueuedMessageID()
+    exitQueueEditMode()
+    if (shouldResume) await resumeQueueDrain(sessionID)
+  }
+
+  function queueEditBody() {
+    syncPromptInputFromTextarea()
+    const agent = local.agent.current()
+    if (!agent) return
+    const selectedModel = local.model.current()
+    if (!selectedModel) return
+    const inputText = expandedInputText()
+    const nonTextParts = store.prompt.parts.filter((part) => part.type !== "text")
+    const editorParts = editorContextParts()
+    return {
+      agent: agent.name,
+      model: selectedModel,
+      variant: local.model.variant.current(),
+      parts: [
+        ...editorParts,
+        {
+          id: PartID.ascending(),
+          type: "text" as const,
+          text: inputText,
+        },
+        ...nonTextParts.map(assign),
+      ],
+    }
+  }
+
+  async function saveQueuedEdit(messageID: string) {
+    if (!props.sessionID || props.disabled) return false
+    const body = queueEditBody()
+    if (!body) return false
+    if (queueEditCommitPlan({ text: body.parts.find((part) => part.type === "text")?.text ?? "" }).type === "remove") {
+      const result = await sdk.client.session.queue
+        .remove({
+          sessionID: props.sessionID,
+          queueID: messageID,
+        })
+        .catch((error: unknown) => ({ error }))
+      const error = queueMutationError({ result, fallback: "no response" })
+      if (error) {
+        toast.show({
+          message: `Removing queued prompt failed: ${errorMessage(error)}`,
+          variant: "error",
+        })
+        return false
+      }
+      if (editingQueuedMessageID() === messageID) {
+        await exitQueueEditModeAndResume(props.sessionID)
+      }
+      return true
+    }
+
+    const result = await sdk.client.session.queue
+      .update({
+        sessionID: props.sessionID,
+        queueID: messageID,
+        body,
+      })
+      .catch((error: unknown) => ({ error }))
+    const error = queueMutationError({ result, fallback: "no response" })
+    if (error) {
+      toast.show({
+        message: `Saving queued prompt failed: ${errorMessage(error)}`,
+        variant: "error",
+      })
+      return false
+    }
+    await sdk.client.session.queue.drain.pause({ sessionID: props.sessionID }).catch(() => {})
+    return true
+  }
+
+  async function sendQueuedNow(messageID: string) {
+    if (queueComposerBusy) return false
+    if (!props.sessionID || props.disabled) return false
+    const sessionID = props.sessionID
+    const items = sync.data.prompt_queue[sessionID] ?? []
+    const index = items.findIndex((item) => item.id === messageID)
+    if (index < 0) {
+      if (editingQueuedMessageID() === messageID) await exitQueueEditModeAndResume(sessionID)
+      return false
+    }
+    const nextID = items[index + 1]?.id
+
+    const activeEditID = editingQueuedMessageID()
+    const editing = activeEditID === messageID
+    const body = editing ? queueEditBody() : undefined
+    if (editing && !body) return false
+
+    queueComposerBusy = true
+    try {
+      if (
+        body &&
+        queueEditCommitPlan({ text: body.parts.find((part) => part.type === "text")?.text ?? "" }).type === "remove"
+      ) {
+        const result = await sdk.client.session.queue
+          .remove({
+            sessionID,
+            queueID: messageID,
+          })
+          .catch((error: unknown) => ({ error }))
+        const error = queueMutationError({ result, fallback: "no response" })
+        if (error) {
+          toast.show({
+            message: `Removing queued prompt failed: ${errorMessage(error)}`,
+            variant: "error",
+          })
+          return false
+        }
+
+        if (nextID) {
+          clearPromptDraft()
+          setEditingQueuedMessageID(undefined)
+          const advanced = await editQueuedMessage(nextID, { internal: true })
+          if (!advanced) {
+            await exitQueueEditModeAndResume(sessionID, { force: true })
+          }
+        } else {
+          await exitQueueEditModeAndResume(sessionID)
+        }
+        if (!promptDisposed && input && !input.isDestroyed) input.focus()
+        return true
+      }
+
+      if (activeEditID && activeEditID !== messageID) {
+        const saved = await saveQueuedEdit(activeEditID)
+        if (!saved) return false
+      }
+
+      const editorParts = editing ? editorContextParts() : []
+      const advanceAfterSend = editing && !!nextID
+      const keepEditingOther = !!activeEditID && activeEditID !== messageID && editingQueuedMessageID() === activeEditID
+      const pauseForSend = !!nextID || keepEditingOther
+
+      if (body) {
+        const updateRes = await sdk.client.session.queue
+          .update({
+            sessionID,
+            queueID: messageID,
+            body,
+          })
+          .catch((error: unknown) => ({ error }))
+        const updateError = queueMutationError({ result: updateRes, fallback: "no response" })
+        if (updateError) {
+          toast.show({
+            message: `Saving queued prompt failed: ${errorMessage(updateError)}`,
+            variant: "error",
+          })
+          return false
+        }
+      }
+
+      if (pauseForSend) await sdk.client.session.queue.drain.pause({ sessionID }).catch(() => {})
+
+      const sendRes = await sdk.client.session.queue
+        .send({
+          sessionID,
+          queueID: messageID,
+          ...(body ? { body } : {}),
+        })
+        .catch((error: unknown) => ({ error }))
+      const sendError = queueMutationError({ result: sendRes, fallback: "no response" })
+      if (sendError) {
+        toast.show({
+          message: `Sending queued prompt failed: ${errorMessage(sendError)}`,
+          variant: "error",
+        })
+        if (!editing) {
+          if (pauseForSend && !keepEditingOther) await resumeQueueDrain(sessionID)
+          return false
+        }
+        if (promptDisposed) {
+          await resumeQueueDrain(sessionID)
+          return false
+        }
+        await sdk.client.session.queue.drain.pause({ sessionID }).catch(() => {})
+        const listRes = await sdk.client.session.queue.list({ sessionID }).catch(() => undefined)
+        if (!listRes?.data?.some((item) => item.id === messageID)) {
+          await exitQueueEditModeAndResume(sessionID, { force: true })
+          return false
+        }
+        const restored = await editQueuedMessage(messageID, { internal: true })
+        if (restored) return false
+        await exitQueueEditModeAndResume(sessionID, { force: true })
+        return false
+      }
+
+      if (editorParts.length > 0) editor.markSelectionSent()
+      props.onSubmit?.()
+
+      if (promptDisposed) {
+        await resumeQueueDrain(sessionID)
+        return true
+      }
+
+      if (advanceAfterSend && nextID) {
+        clearPromptDraft()
+        setEditingQueuedMessageID(undefined)
+        const advanced = await editQueuedMessage(nextID, { internal: true })
+        if (!advanced) {
+          await exitQueueEditModeAndResume(sessionID, { force: true })
+        }
+      } else if (editing) {
+        await exitQueueEditModeAndResume(sessionID, { force: true })
+      } else if (pauseForSend && !keepEditingOther) {
+        await resumeQueueDrain(sessionID)
+      }
+
+      if (!promptDisposed && input && !input.isDestroyed) input.focus()
+      return true
+    } finally {
+      if (promptDisposed) {
+        queueComposerBusy = false
+      } else {
+        queueMicrotask(() => {
+          queueComposerBusy = false
+          setCursorVersion((value) => value + 1)
+        })
+      }
+    }
+  }
+
+  async function cancelQueueEdit() {
+    const id = editingQueuedMessageID()
+    if (!id || !props.sessionID) return false
+    await exitQueueEditModeAndResume(props.sessionID)
+    if (status().type !== "idle") interruptSession()
+    if (input && !input.isDestroyed) input.focus()
+    return true
+  }
+
+  async function cycleEditQueue(dir: -1 | 1) {
+    if (queueComposerBusy) return false
+    const items = queueItems()
+    if (!items.length) return false
+
+    const current = editingQueuedMessageID()
+    if (!current) {
+      const index = dir === 1 ? 0 : items.length - 1
+      const next = items[index]
+      if (!next) return false
+      return editQueuedMessage(next.id)
+    }
+
+    const index = items.findIndex((item) => item.id === current)
+    if (index < 0) {
+      const fallback = items[0]
+      if (!fallback) return false
+      return editQueuedMessage(fallback.id)
+    }
+
+    const next = items[(index + dir + items.length) % items.length]
+    if (!next) return false
+    return editQueuedMessage(queueEditSwitchPlan({ currentID: current, targetID: next.id }).editID)
+  }
+
+  async function editQueuedMessage(messageID: string, opts?: { internal?: boolean; submit?: boolean }) {
+    if (queueComposerBusy && !opts?.internal) return false
+    if (!props.sessionID || props.disabled) return false
+    const sessionID = props.sessionID
+    await sdk.client.session.queue.drain.pause({ sessionID }).catch(() => {})
+
+    const parts = sync.data.part[messageID] ?? []
+    const promptInfo =
+      parts.length > 0
+        ? partsToPromptInfo(parts)
+        : await (async () => {
+            const detail = await sdk.client.session.queue.get({ sessionID, queueID: messageID }).catch((error: unknown) => ({
+              error,
+            }))
+            const loadError = queueMutationError({ result: detail, fallback: "no response" })
+            const data = detail && typeof detail === "object" && "data" in detail ? detail.data : undefined
+            if (loadError || !data || typeof data !== "object" || !("parts" in data)) {
+              toast.show({
+                message: `Loading queued prompt failed: ${loadError ? errorMessage(loadError) : "invalid queue response"}`,
+                variant: "error",
+              })
+              await resumeQueueDrain(sessionID)
+              return
+            }
+            const queueParts = data.parts as Parameters<typeof partsToPromptInfo>[0]
+            return partsToPromptInfo(
+              queueParts.map((part) => {
+                const id = PartID.ascending()
+                if (part.type === "text") return { ...part, id, messageID, sessionID }
+                if (part.type === "file") return { ...part, id, messageID, sessionID }
+                if (part.type === "agent") return { ...part, id, messageID, sessionID }
+                return { ...part, id, messageID, sessionID }
+              }),
+            )
+          })()
+    if (!promptInfo) return false
+    if (!promptInfo.input.trim() && promptInfo.parts.length === 0) return false
+
+    setEditingQueuedMessageID(messageID)
+    input.setText(promptInfo.input)
+    setStore("prompt", promptInfo)
+    setStore("extmarkToPartIndex", new Map())
+    restoreExtmarksFromParts(promptInfo.parts)
+    input.gotoBufferEnd()
+    input.focus()
+
+    if (!opts?.submit) return true
+    return sendQueuedNow(messageID)
+  }
+
+  async function editQueue() {
+    if (editingQueuedMessageID()) return cycleEditQueue(-1)
+    const id = queueItems().at(0)?.id
+    if (!id) return false
+    return editQueuedMessage(id)
+  }
+
+  async function editQueueNext() {
+    if (!editingQueuedMessageID()) return false
+    return cycleEditQueue(1)
+  }
+
+  async function queueInner() {
+    const editingID = editingQueuedMessageID()
+    if (editingID) return saveQueuedEdit(editingID)
+
+    workspace.clearNotice()
+    syncPromptInputFromTextarea()
+    if (props.disabled) return false
+    if (workspace.creating() || move.creating()) return false
+    if (auto()?.visible) return false
+    if (!store.prompt.input.trim()) return false
+    if (store.mode === "shell") return false
+    if (isRegisteredSlashCommand(store.prompt.input)) return false
+    if (!props.sessionID) return submitInner()
+
+    const agent = local.agent.current()
+    if (!agent) return false
+    const trimmed = store.prompt.input.trim()
+    if (trimmed === "exit" || trimmed === "quit" || trimmed === ":q") return false
+    const selectedModel = local.model.current()
+    if (!selectedModel) {
+      void promptModelWarning()
+      return false
+    }
+
+    const workspaceSession = sync.session.get(props.sessionID)
+    const workspaceID = workspaceSession?.workspaceID
+    const workspaceStatus = workspaceID ? (project.workspace.status(workspaceID) ?? "error") : undefined
+    if (workspaceID && workspaceStatus !== "connected") {
+      dialog.replace(() => (
+        <DialogWorkspaceUnavailable
+          onRestore={() => {
+            workspace.open()
+            return false
+          }}
+        />
+      ))
+      return false
+    }
+
+    const sessionID = props.sessionID
+    const variant = local.model.variant.current()
+    const messageID = MessageID.ascending()
+    const inputText = expandedInputText()
+    const nonTextParts = store.prompt.parts.filter((part) => part.type !== "text")
+    const currentMode = store.mode
+    const editorParts = editorContextParts()
+
+    const result = await sdk.client.session.queue
+      .enqueue({
+        sessionID,
+        ...selectedModel,
+        agent: agent.name,
+        model: selectedModel,
+        variant,
+        parts: [
+          ...editorParts,
+          {
+            id: PartID.ascending(),
+            type: "text",
+            text: inputText,
+          },
+          ...nonTextParts.map(assign),
+        ],
+      })
+      .catch((error: unknown) => ({ error }))
+    const error = queueMutationError({ result, fallback: "no response" })
+    if (error) {
+      toast.show({
+        message: `Queueing prompt failed: ${errorMessage(error)}`,
+        variant: "error",
+      })
+      return false
+    }
+    if (editorParts.length > 0) editor.markSelectionSent()
+    resetPromptAfterSend(currentMode, sessionID, editorParts)
+    return true
   }
 
   async function submitInner() {
     workspace.clearNotice()
 
-    // IME: double-defer may fire before onContentChange flushes the last
-    // composed character (e.g. Korean hangul) to the store, so read
-    // plainText directly and sync before any downstream reads.
-    if (input && !input.isDestroyed && input.plainText !== store.prompt.input) {
-      setStore("prompt", "input", input.plainText)
-      syncExtmarksWithPromptParts()
-    }
+    syncPromptInputFromTextarea()
+    const editingID = editingQueuedMessageID()
+    if (editingID) return sendQueuedNow(editingID)
     if (props.disabled) return false
     if (workspace.creating() || move.creating()) return false
     if (auto()?.visible) return false
@@ -1009,39 +1709,14 @@ export function Prompt(props: PromptProps) {
     }
 
     const messageID = MessageID.ascending()
-    const inputText = expandTrackedPastedText(
-      store.prompt.input,
-      input.extmarks.getAllForTypeId(promptPartTypeId).flatMap((extmark) => {
-        const partIndex = store.extmarkToPartIndex.get(extmark.id)
-        const part = partIndex === undefined ? undefined : store.prompt.parts[partIndex]
-        if (part?.type !== "text") return []
-        return [{ start: extmark.start, end: extmark.end, text: part.text }]
-      }),
-    )
-
-    // Filter out text parts (pasted content) since they're now expanded inline
+    const inputText = expandedInputText()
     const nonTextParts = store.prompt.parts.filter((part) => part.type !== "text")
-
-    // Capture mode before it gets reset
     const currentMode = store.mode
-    const editorSelection = editorContext()
-    const editorParts =
-      editorSelection && editor.labelState() === "pending"
-        ? [
-            {
-              id: PartID.ascending(),
-              type: "text" as const,
-              text: formatEditorContext(editorSelection),
-              synthetic: true,
-              metadata: {
-                kind: "editor_context",
-                source: editorSelection.source ?? "editor",
-                filePath: editorSelection.filePath,
-                ranges: editorSelection.ranges,
-              },
-            },
-          ]
-        : []
+    const editorParts = editorContextParts()
+
+    if (props.sessionID) {
+      await sdk.client.session.queue.drain.resume({ sessionID: props.sessionID }).catch(() => {})
+    }
 
     if (store.mode === "shell") {
       move.startSubmit()
@@ -1055,14 +1730,7 @@ export function Prompt(props: PromptProps) {
         command: inputText,
       })
       setStore("mode", "normal")
-    } else if (
-      inputText.startsWith("/") &&
-      iife(() => {
-        const firstLine = inputText.split("\n")[0]
-        const command = firstLine.split(" ")[0].slice(1)
-        return sync.data.command.some((x) => x.name === command)
-      })
-    ) {
+    } else if (isRegisteredSlashCommand(inputText)) {
       move.startSubmit()
       // Parse command from first line, preserve multi-line content in arguments
       const firstLineEnd = inputText.indexOf("\n")
@@ -1109,38 +1777,16 @@ export function Prompt(props: PromptProps) {
         .catch(() => {})
       if (editorParts.length > 0) editor.markSelectionSent()
     }
-    history.append({
-      ...store.prompt,
-      mode: currentMode,
-    })
-    input.extmarks.clear()
-    setStore("prompt", {
-      input: "",
-      parts: [],
-    })
-    setStore("extmarkToPartIndex", new Map())
-    props.onSubmit?.()
-
-    // temporary hack to make sure the message is sent
-    if (!props.sessionID) {
-      if (editorParts.length > 0) editor.preserveSelectionFromNewSession()
-      setTimeout(() => {
-        route.navigate({
-          type: "session",
-          sessionID,
-        })
-      }, 50)
-    }
-    input.clear()
+    resetPromptAfterSend(currentMode, sessionID, editorParts)
     if (finishMoveProgress) move.finishSubmit()
     return true
   }
   const exit = useExit()
 
   function pasteText(text: string, virtualText: string) {
-    const currentOffset = input.cursorOffset
+    const currentOffset = input.visualCursor.offset
     const extmarkStart = currentOffset
-    const extmarkEnd = extmarkStart + promptOffsetWidth(virtualText)
+    const extmarkEnd = extmarkStart + virtualText.length
 
     input.insertText(virtualText + " ")
 
@@ -1232,7 +1878,7 @@ export function Prompt(props: PromptProps) {
   }
 
   async function pasteAttachment(file: { filename?: string; filepath?: string; content: string; mime: string }) {
-    const currentOffset = input.cursorOffset
+    const currentOffset = input.visualCursor.offset
     const extmarkStart = currentOffset
     const pdf = file.mime === "application/pdf"
     const count = store.prompt.parts.filter((x) => {
@@ -1280,6 +1926,11 @@ export function Prompt(props: PromptProps) {
   }
 
   function clearPrompt() {
+    if (queueComposerBusy) return
+    if (editingQueuedMessageID()) {
+      void exitQueueEditModeAndResume()
+      return
+    }
     if (store.prompt.input.trim().length >= DRAFT_RETENTION_MIN_CHARS || store.prompt.parts.length > 0) {
       history.append({
         ...store.prompt,
@@ -1316,10 +1967,18 @@ export function Prompt(props: PromptProps) {
     () => !!local.agent.current() && store.mode === "normal" && showVariant(),
     animationsEnabled,
   )
-  const borderHighlight = createMemo(() => tint(theme.border, highlight(), agentMetaAlpha()))
+  const borderHighlight = createMemo(() => {
+    if (editingQueuedMessageID()) return theme.primary
+    return tint(theme.border, highlight(), agentMetaAlpha())
+  })
 
   const placeholderText = createMemo(() => {
     if (props.showPlaceholder === false) return undefined
+    if (editingQueuedMessageID()) {
+      const submit = submitShortcut()
+      if (!submit) return "Press Return to send now"
+      return `Press ${submit} to send now`
+    }
     if (store.mode === "shell") {
       if (!shell().length) return undefined
       const example = shell()[store.placeholder % shell().length]
@@ -1375,15 +2034,32 @@ export function Prompt(props: PromptProps) {
             backgroundColor={theme.backgroundElement}
             flexGrow={1}
             width="100%"
+            flexDirection="column"
+            minHeight={0}
           >
+            <Show when={queueItems().length > 0 || editingQueuedMessageID()}>
+              <PromptQueueDock
+                items={queueItems}
+                editing={() => !!editingQueuedMessageID()}
+                editingMessageID={editingQueuedMessageID}
+                disabled={props.disabled}
+                onEdit={(id: string) => {
+                  void editQueuedMessage(id)
+                }}
+                onSendNow={(id: string) => {
+                  void sendQueuedNow(id)
+                }}
+              />
+            </Show>
+            <box width="100%" flexGrow={1} flexShrink={1} minHeight={0}>
             <textarea
               width="100%"
+              minHeight={1}
+              maxHeight={maxHeight()}
               placeholder={placeholderText()}
               placeholderColor={theme.textMuted}
               textColor={leader() ? theme.textMuted : theme.text}
               focusedTextColor={leader() ? theme.textMuted : theme.text}
-              minHeight={1}
-              maxHeight={maxHeight()}
               onContentChange={() => {
                 const value = input.plainText
                 setStore("prompt", "input", value)
@@ -1392,13 +2068,20 @@ export function Prompt(props: PromptProps) {
                 setCursorVersion((value) => value + 1)
               }}
               onCursorChange={() => setCursorVersion((value) => value + 1)}
-              onKeyDown={(e: { preventDefault(): void }) => {
+              onKeyDown={(e: KeyEvent) => {
                 if (props.disabled) {
                   e.preventDefault()
                   return
                 }
               }}
               onSubmit={() => {
+                if (queueComposerBusy) return
+                const editingID = editingQueuedMessageID()
+                if (editingID) {
+                  void sendQueuedNow(editingID)
+                  return
+                }
+
                 // IME: double-defer so the last composed character (e.g. Korean
                 // hangul) is flushed to plainText before we read it for submission.
                 setTimeout(() => setTimeout(() => submit(), 0), 0)
@@ -1449,6 +2132,7 @@ export function Prompt(props: PromptProps) {
               cursorColor={props.disabled ? theme.backgroundElement : theme.text}
               syntaxStyle={syntax()}
             />
+            </box>
             <box flexDirection="row" flexShrink={0} paddingTop={1} gap={1} justifyContent="space-between">
               <box flexDirection="row" gap={1}>
                 <Show when={local.agent.current()} fallback={<box height={1} />}>
