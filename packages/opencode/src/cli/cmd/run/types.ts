@@ -59,7 +59,7 @@ export type QueueControl = {
   load?: (id: string) => Promise<RunPrompt | undefined>
   update: (id: string, prompt: RunPrompt) => boolean
   remove: (id: string) => RunPrompt | undefined | Promise<RunPrompt | undefined>
-  sendNow: (id: string) => void | Promise<void>
+  sendNow: (id: string) => boolean | void | Promise<boolean | void>
   pauseDrain?: () => void | Promise<void>
   resumeDrain?: () => void | Promise<void>
 }

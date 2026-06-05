@@ -584,6 +584,14 @@ export function Prompt(props: PromptProps) {
     return sync.data.prompt_queue[props.sessionID] ?? []
   })
 
+  createEffect(() => {
+    const editingID = editingQueuedMessageID()
+    if (!editingID || !props.sessionID) return
+    if (queueItems().some((item) => item.id === editingID)) return
+    if (!input || input.isDestroyed) return
+    void exitQueueEditModeAndResume(props.sessionID, { force: true })
+  })
+
   useBindings(() => ({
     target: inputTarget,
     enabled: (() => {
@@ -1497,9 +1505,6 @@ export function Prompt(props: PromptProps) {
           })()
     if (!promptInfo.input.trim() && promptInfo.parts.length === 0) return false
 
-    if (!messageID.startsWith("pqu_")) {
-      await sdk.client.session.revert({ sessionID, messageID }).catch(() => {})
-    }
     setEditingQueuedMessageID(messageID)
     input.setText(promptInfo.input)
     setStore("prompt", promptInfo)

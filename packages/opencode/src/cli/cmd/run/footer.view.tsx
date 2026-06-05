@@ -411,7 +411,12 @@ export function RunFooterView(props: RunFooterViewProps) {
       return
     }
     if (plan.pauseDrain) await queueControl()?.pauseDrain?.()
-    await queueControl()?.sendNow(id)
+    const sendResult = await queueControl()?.sendNow(id)
+    if (sendResult === false) {
+      if (plan.pauseDrain && !plan.resumeDrain) await queueControl()?.resumeDrain?.()
+      composer.focus()
+      return
+    }
     if (plan.resumeDrain) await queueControl()?.resumeDrain?.()
     if (plan.clearEditor) {
       setEditingQueueID(undefined)

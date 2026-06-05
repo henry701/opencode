@@ -15,6 +15,7 @@ import { runPromptPreview } from "@/queue/preview"
 import { ModelID, ProviderID } from "@/provider/schema"
 import type { SessionID } from "@/session/schema"
 import { isExitCommand, isNewCommand } from "./prompt.shared"
+import { formatUnknownError } from "./stream.transport"
 import type { FooterApi, FooterEvent, QueueControl, QueuedPromptPreview, RunPrompt } from "./types"
 
 type Trace = {
@@ -145,6 +146,22 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
     )
   }
 
+  const emitQueueError = (action: string, error: unknown) => {
+    const message = formatUnknownError(error)
+    const status = `${action} failed: ${message}`
+    input.trace?.write("queue.remote.error", {
+      action,
+      error: message,
+    })
+    emit(
+      {
+        type: "stream.patch",
+        patch: { status },
+      },
+      { status },
+    )
+  }
+
   const remoteDrafts = new Map<string, RunPrompt>()
 
   const findQueued = (id: string) => {
@@ -173,7 +190,7 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
     remoteDrafts.set(id, { ...withQueueID(prompt, state), queueID: id })
     if (!input.updateQueueRemote) return true
     void input.updateQueueRemote(id, prompt).catch((error) => {
-      done.reject(error)
+      emitQueueError("Saving queued prompt", error)
     })
     return true
   }
@@ -181,9 +198,13 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
   const removeRemote = async (id: string) => {
     const prompt = findQueued(id)
     remoteDrafts.delete(id)
-    await input.removeQueueRemote?.(id).catch((error) => {
-      done.reject(error)
-    })
+    try {
+      await input.removeQueueRemote?.(id)
+    } catch (error) {
+      if (prompt) remoteDrafts.set(id, prompt)
+      emitQueueError("Removing queued prompt", error)
+      return undefined
+    }
     return prompt
   }
 
@@ -222,19 +243,20 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
             remoteDrafts.delete(id)
           },
           (error) => {
-            done.reject(error)
+            emitQueueError("Sending queued prompt", error)
           },
         )
-        return
+        return true
       }
       const prompt = removeQueued(id)
-      if (!prompt) return
+      if (!prompt) return false
       const next = { ...prompt, delivery: "immediate" as const }
       if (busy()) {
         steer(next)
-        return
+        return true
       }
       submitPrompt(next)
+      return true
     },
   }
 
@@ -503,7 +525,7 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
 
     if (input.enqueueRemote) {
       void input.enqueueRemote(prompt).catch((error) => {
-        done.reject(error)
+        emitQueueError("Queueing prompt", error)
       })
       emit(
         { type: "first", first: false },
