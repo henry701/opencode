@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { APICallError } from "ai"
+import { Schema } from "effect"
 import { MessageV2 } from "../../src/session/message-v2"
 import { ProviderTransform } from "@/provider/transform"
 import type { Provider } from "@/provider/provider"
@@ -60,6 +61,17 @@ const model: Provider.Model = {
   headers: {},
   release_date: "2026-01-01",
 }
+
+test("Assistant schema exposes persisted context metadata", () => {
+  const decoded = Schema.decodeUnknownSync(MessageV2.Assistant)({
+    ...assistantInfo(MessageID.ascending(), MessageID.ascending()),
+    system_prompt: "system",
+    tool_defs: "tools",
+  })
+
+  expect(decoded.system_prompt).toBe("system")
+  expect(decoded.tool_defs).toBe("tools")
+})
 
 function userInfo(id: string): SessionV1.User {
   return {

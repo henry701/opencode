@@ -260,6 +260,10 @@ function applyLegacySchemaOverrides(spec: OpenApiSpec) {
   if (!schemas) return
   if (schemas.AgentConfig) schemas.AgentConfig.additionalProperties = {}
   if (schemas.Command?.properties?.template) schemas.Command.properties.template = { type: "string" }
+  if (schemas.AssistantMessage?.properties) {
+    schemas.AssistantMessage.properties.tool_defs = { type: "string" }
+    schemas.AssistantMessage.properties.system_prompt = { type: "string" }
+  }
   if (schemas.Workspace?.properties) {
     schemas.Workspace.properties.branch = nullable(schemas.Workspace.properties.branch)
     schemas.Workspace.properties.directory = nullable(schemas.Workspace.properties.directory)

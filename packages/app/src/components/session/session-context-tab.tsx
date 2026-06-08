@@ -2,7 +2,6 @@ import { createMemo, createEffect, on, onCleanup, For, Show } from "solid-js"
 import type { JSX } from "solid-js"
 import { useSync } from "@/context/sync"
 import { checksum } from "@opencode-ai/core/util/encode"
-import { findLast } from "@opencode-ai/core/util/array"
 import { same } from "@/utils/same"
 import { Icon } from "@opencode-ai/ui/icon"
 import { Accordion } from "@opencode-ai/ui/accordion"
@@ -10,19 +9,21 @@ import { StickyAccordionHeader } from "@opencode-ai/ui/sticky-accordion-header"
 import { File } from "@opencode-ai/ui/file"
 import { Markdown } from "@opencode-ai/ui/markdown"
 import { ScrollView } from "@opencode-ai/ui/scroll-view"
-import type { Message, Part, UserMessage } from "@opencode-ai/sdk/v2/client"
+import type { Message, Part } from "@opencode-ai/sdk/v2/client"
 import { useLanguage } from "@/context/language"
 import { useProviders } from "@/hooks/use-providers"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { getSessionContextMetrics } from "./session-context-metrics"
 import { estimateSessionContextBreakdown, type SessionContextBreakdownKey } from "./session-context-breakdown"
 import { createSessionContextFormatter } from "./session-context-format"
+import { getSessionSystemPrompt } from "./session-context-system"
 
 const BREAKDOWN_COLOR: Record<SessionContextBreakdownKey, string> = {
   system: "var(--syntax-info)",
   user: "var(--syntax-success)",
   assistant: "var(--syntax-property)",
   tool: "var(--syntax-warning)",
+  toolDefs: "var(--syntax-keyword)",
   other: "var(--syntax-comment)",
 }
 
@@ -88,7 +89,6 @@ function RawMessage(props: {
 }
 
 const emptyMessages: Message[] = []
-const emptyUserMessages: UserMessage[] = []
 
 export function SessionContextTab() {
   const sync = useSync()
@@ -105,22 +105,6 @@ export function SessionContextTab() {
       return (sync.data.message[id] ?? []) as Message[]
     },
     emptyMessages,
-    { equals: same },
-  )
-
-  const userMessages = createMemo(
-    () => messages().filter((m) => m.role === "user") as UserMessage[],
-    emptyUserMessages,
-    { equals: same },
-  )
-
-  const visibleUserMessages = createMemo(
-    () => {
-      const revert = info()?.revert?.messageID
-      if (!revert) return userMessages()
-      return userMessages().filter((m) => m.id < revert)
-    },
-    emptyUserMessages,
     { equals: same },
   )
 
@@ -151,14 +135,7 @@ export function SessionContextTab() {
     }
   })
 
-  const systemPrompt = createMemo(() => {
-    const msg = findLast(visibleUserMessages(), (m) => !!m.system)
-    const system = msg?.system
-    if (!system) return
-    const trimmed = system.trim()
-    if (!trimmed) return
-    return trimmed
-  })
+  const systemPrompt = createMemo(() => getSessionSystemPrompt(messages()))
 
   const providerLabel = createMemo(() => {
     const c = ctx()
@@ -190,6 +167,7 @@ export function SessionContextTab() {
 
   const breakdownLabel = (key: SessionContextBreakdownKey) => {
     if (key === "system") return language.t("context.breakdown.system")
+    if (key === "toolDefs") return language.t("context.breakdown.toolDefs")
     if (key === "user") return language.t("context.breakdown.user")
     if (key === "assistant") return language.t("context.breakdown.assistant")
     if (key === "tool") return language.t("context.breakdown.tool")

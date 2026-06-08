@@ -2,6 +2,7 @@ import { EventV2 } from "@opencode-ai/core/event"
 import { SessionID, MessageID, PartID } from "./schema"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { ProviderV2 } from "@opencode-ai/core/provider"
+import { Effect, Schema } from "effect"
 import {
   APIError,
   AbortedError,
@@ -14,7 +15,6 @@ import {
   StructuredOutputError,
   SubtaskPart,
   User as CoreUser,
-  WithParts as CoreWithParts,
   type ToolPart,
 } from "@opencode-ai/core/v1/session"
 export {
@@ -32,7 +32,11 @@ export {
   type ToolStateError,
 } from "@opencode-ai/core/v1/session"
 
-export const Assistant = CoreAssistant
+export const Assistant = Schema.Struct({
+  ...CoreAssistant.fields,
+  tool_defs: Schema.optional(Schema.String),
+  system_prompt: Schema.optional(Schema.String),
+}).annotate({ identifier: "AssistantMessage" })
 export type Assistant = CoreAssistant & {
   tool_defs?: string
   system_prompt?: string
@@ -41,9 +45,13 @@ export type Assistant = CoreAssistant & {
 export const User = CoreUser
 export type User = CoreUser & { delivery?: "immediate" | "deferred" }
 
+export const Info = Schema.Union([User, Assistant]).annotate({ discriminator: "role", identifier: "Message" })
 export type Info = User | Assistant
 
-export const WithParts = CoreWithParts
+export const WithParts = Schema.Struct({
+  info: Info,
+  parts: Schema.Array(Part),
+})
 export type WithParts = {
   info: Info
   parts: Part[]
@@ -66,7 +74,6 @@ import { errorMessage } from "@/util/error"
 import { isMedia } from "@/util/media"
 import type { SystemError } from "bun"
 import type { Provider } from "@/provider/provider"
-import { Effect, Schema } from "effect"
 import * as EffectLogger from "@opencode-ai/core/effect/logger"
 
 /** Error shape thrown by Bun's fetch() when gzip/br decompression fails mid-stream */
