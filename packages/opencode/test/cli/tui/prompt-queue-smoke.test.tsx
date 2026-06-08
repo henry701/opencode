@@ -77,7 +77,7 @@ test("queue dock lists deferred messages in fifo order with screencap artifact",
   expect(items.map((item) => item.text)).toEqual(["first queued", "second queued", "third queued"])
 
   const frame = await renderFrame(() => (
-    <PromptQueueDock items={() => items} onEdit={() => {}} onSendNow={() => {}} />
+    <PromptQueueDock items={() => items} onEdit={() => {}} onSendNow={() => {}} onRemove={() => {}} />
   ))
 
   await writeFile(path.join(capDir, "queue-dock.txt"), frame)
@@ -88,6 +88,7 @@ test("queue dock lists deferred messages in fifo order with screencap artifact",
   expect(frame).toContain("+1 more queued")
   expect(frame).toContain("[edit]")
   expect(frame).toContain("[send now]")
+  expect(frame).toContain("[remove]")
   expect(frame).toContain("1. first queued")
 })
 
@@ -99,6 +100,7 @@ test("queue dock keeps active queued edit preview to one line", async () => {
       editingMessageID={() => "pqu_1"}
       onEdit={() => {}}
       onSendNow={() => {}}
+      onRemove={() => {}}
     />
   ))
 
@@ -123,6 +125,7 @@ test("queue dock edit mode renders only a three item window around the active qu
       editingMessageID={() => "pqu_3"}
       onEdit={() => {}}
       onSendNow={() => {}}
+      onRemove={() => {}}
     />
   ))
 

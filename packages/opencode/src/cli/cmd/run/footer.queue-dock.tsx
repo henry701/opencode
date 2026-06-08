@@ -14,6 +14,7 @@ export function RunQueueDock(props: {
   editingMessageID?: () => string | undefined
   onEdit: (id: string) => void
   onSendNow: (id: string) => void
+  onRemove: (id: string) => void
 }) {
   const hints = createMemo(() => ({
     submit: printableBinding(props.keybinds.inputSubmit, props.keybinds.leader) || "return",
@@ -38,6 +39,7 @@ export function RunQueueDock(props: {
       editingMessageID={props.editingMessageID}
       onEdit={props.onEdit}
       onSendNow={props.onSendNow}
+      onRemove={props.onRemove}
     />
   )
 }

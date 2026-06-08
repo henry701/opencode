@@ -73,6 +73,10 @@ export function patchFile(raw: unknown): ApplyPatchFile | undefined {
 }
 
 export function patchFiles(raw: unknown) {
-  if (!Array.isArray(raw)) return []
-  return raw.map(patchFile).filter((file): file is ApplyPatchFile => !!file)
+  const list = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === "object"
+      ? Object.values(raw as Record<string, unknown>)
+      : []
+  return list.map(patchFile).filter((file): file is ApplyPatchFile => !!file)
 }

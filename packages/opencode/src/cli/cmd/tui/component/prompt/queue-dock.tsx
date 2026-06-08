@@ -11,6 +11,7 @@ export function PromptQueueDock(props: {
   editingMessageID?: () => string | undefined
   onEdit: (id: string) => void
   onSendNow: (id: string) => void
+  onRemove: (id: string) => void
 }) {
   const { theme } = useTheme()
   const submitShortcut = useCommandShortcut("prompt.submit")
@@ -41,6 +42,7 @@ export function PromptQueueDock(props: {
       editingMessageID={props.editingMessageID}
       onEdit={props.onEdit}
       onSendNow={props.onSendNow}
+      onRemove={props.onRemove}
     />
   )
 }

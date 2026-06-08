@@ -40,4 +40,23 @@ describe("apply patch file", () => {
     expect(text(file!.view, "deletions")).toBe("one\n")
     expect(text(file!.view, "additions")).toBe("two\n")
   })
+
+  test("accepts keyed file metadata from older tool results", () => {
+    const file = patchFiles({
+      "src/a.ts": {
+        filePath: "/tmp/src/a.ts",
+        relativePath: "src/a.ts",
+        type: "update",
+        patch:
+          "Index: src/a.ts\n===================================================================\n--- src/a.ts\t\n+++ src/a.ts\t\n@@ -1 +1 @@\n-old\n+new\n",
+        additions: 1,
+        deletions: 1,
+      },
+    })[0]
+
+    expect(file).toBeDefined()
+    expect(file?.relativePath).toBe("src/a.ts")
+    expect(text(file!.view, "deletions")).toBe("old\n")
+    expect(text(file!.view, "additions")).toBe("new\n")
+  })
 })

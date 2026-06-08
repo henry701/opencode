@@ -14,3 +14,8 @@ export function applyQueueSaveSuccess(input: {
   input.stopEditing()
   input.resumeDrain(input.sessionID)
 }
+
+export function removeQueuedFollowup<T extends { id: string }>(items: T[], id: string): T[] {
+  const next = items.filter((item) => item.id !== id)
+  return next.length === items.length ? items : next
+}

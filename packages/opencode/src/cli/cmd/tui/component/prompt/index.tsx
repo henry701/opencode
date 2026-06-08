@@ -588,12 +588,7 @@ export function Prompt(props: PromptProps) {
     target: inputTarget,
     enabled: (() => {
       cursorVersion()
-      return (
-        inputTarget() !== undefined &&
-        !props.disabled &&
-        !auto()?.visible &&
-        input !== undefined
-      )
+      return inputTarget() !== undefined && !props.disabled && !auto()?.visible && input !== undefined
     })(),
     commands: [
       {
@@ -1149,7 +1144,11 @@ export function Prompt(props: PromptProps) {
     return sync.data.command.some((x) => x.name === command)
   }
 
-  function resetPromptAfterSend(currentMode: typeof store.mode, sessionID: string, editorParts: ReturnType<typeof editorContextParts>) {
+  function resetPromptAfterSend(
+    currentMode: typeof store.mode,
+    sessionID: string,
+    editorParts: ReturnType<typeof editorContextParts>,
+  ) {
     setEditingQueuedMessageID(undefined)
     history.append({
       ...store.prompt,
@@ -1436,6 +1435,31 @@ export function Prompt(props: PromptProps) {
     await exitQueueEditModeAndResume(props.sessionID)
     setQueueEscapeGuard(true)
     if (input && !input.isDestroyed) input.focus()
+    return true
+  }
+
+  async function removeQueuedMessage(messageID: string) {
+    if (queueComposerBusy) return false
+    if (!props.sessionID || props.disabled) return false
+    const sessionID = props.sessionID
+    const result = await sdk.client.session.queue
+      .remove({
+        sessionID,
+        queueID: messageID,
+      })
+      .catch((error: unknown) => ({ error }))
+    const error = queueMutationError({ result, fallback: "no response" })
+    if (error) {
+      toast.show({
+        message: `Removing queued prompt failed: ${errorMessage(error)}`,
+        variant: "error",
+      })
+      return false
+    }
+    if (editingQueuedMessageID() === messageID) {
+      await exitQueueEditModeAndResume(sessionID)
+    }
+    if (!promptDisposed && input && !input.isDestroyed) input.focus()
     return true
   }
 
@@ -2023,89 +2047,92 @@ export function Prompt(props: PromptProps) {
                 onSendNow={(id: string) => {
                   void sendQueuedNow(id)
                 }}
+                onRemove={(id: string) => {
+                  void removeQueuedMessage(id)
+                }}
               />
             </Show>
             <box width="100%" flexGrow={1} flexShrink={1} minHeight={0}>
-            <textarea
-              width="100%"
-              minHeight={1}
-              maxHeight={maxHeight()}
-              placeholder={placeholderText()}
-              placeholderColor={theme.textMuted}
-              textColor={leader() ? theme.textMuted : theme.text}
-              focusedTextColor={leader() ? theme.textMuted : theme.text}
-              onContentChange={() => {
-                const value = input.plainText
-                setStore("prompt", "input", value)
-                auto()?.onInput(value)
-                syncExtmarksWithPromptParts()
-                setCursorVersion((value) => value + 1)
-              }}
-              onCursorChange={() => setCursorVersion((value) => value + 1)}
-              onKeyDown={(e: KeyEvent) => {
-                if (props.disabled) {
-                  e.preventDefault()
-                  return
-                }
-              }}
-              onSubmit={() => {
-                if (queueComposerBusy) return
-                const editingID = editingQueuedMessageID()
-                if (editingID) {
-                  void sendQueuedNow(editingID)
-                  return
-                }
+              <textarea
+                width="100%"
+                minHeight={1}
+                maxHeight={maxHeight()}
+                placeholder={placeholderText()}
+                placeholderColor={theme.textMuted}
+                textColor={leader() ? theme.textMuted : theme.text}
+                focusedTextColor={leader() ? theme.textMuted : theme.text}
+                onContentChange={() => {
+                  const value = input.plainText
+                  setStore("prompt", "input", value)
+                  auto()?.onInput(value)
+                  syncExtmarksWithPromptParts()
+                  setCursorVersion((value) => value + 1)
+                }}
+                onCursorChange={() => setCursorVersion((value) => value + 1)}
+                onKeyDown={(e: KeyEvent) => {
+                  if (props.disabled) {
+                    e.preventDefault()
+                    return
+                  }
+                }}
+                onSubmit={() => {
+                  if (queueComposerBusy) return
+                  const editingID = editingQueuedMessageID()
+                  if (editingID) {
+                    void sendQueuedNow(editingID)
+                    return
+                  }
 
-                // IME: double-defer so the last composed character (e.g. Korean
-                // hangul) is flushed to plainText before we read it for submission.
-                setTimeout(() => setTimeout(() => submit(), 0), 0)
-              }}
-              onPaste={async (event: PasteEvent) => {
-                if (props.disabled) {
+                  // IME: double-defer so the last composed character (e.g. Korean
+                  // hangul) is flushed to plainText before we read it for submission.
+                  setTimeout(() => setTimeout(() => submit(), 0), 0)
+                }}
+                onPaste={async (event: PasteEvent) => {
+                  if (props.disabled) {
+                    event.preventDefault()
+                    return
+                  }
+
+                  // Normalize line endings at the boundary
+                  // Windows ConPTY/Terminal often sends CR-only newlines in bracketed paste
+                  // Replace CRLF first, then any remaining CR
+                  const normalizedText = decodePasteBytes(event.bytes).replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+                  const pastedContent = normalizedText.trim()
+
+                  // Windows Terminal <1.25 can surface image-only clipboard as an
+                  // empty bracketed paste. Windows Terminal 1.25+ does not.
+                  if (!pastedContent) {
+                    keymap.dispatchCommand("prompt.paste")
+                    return
+                  }
+
+                  // Once we cross an async boundary below, the terminal may perform its
+                  // default paste unless we suppress it first and handle insertion ourselves.
                   event.preventDefault()
-                  return
-                }
 
-                // Normalize line endings at the boundary
-                // Windows ConPTY/Terminal often sends CR-only newlines in bracketed paste
-                // Replace CRLF first, then any remaining CR
-                const normalizedText = decodePasteBytes(event.bytes).replace(/\r\n/g, "\n").replace(/\r/g, "\n")
-                const pastedContent = normalizedText.trim()
-
-                // Windows Terminal <1.25 can surface image-only clipboard as an
-                // empty bracketed paste. Windows Terminal 1.25+ does not.
-                if (!pastedContent) {
-                  keymap.dispatchCommand("prompt.paste")
-                  return
-                }
-
-                // Once we cross an async boundary below, the terminal may perform its
-                // default paste unless we suppress it first and handle insertion ourselves.
-                event.preventDefault()
-
-                await pasteInputText(normalizedText)
-              }}
-              ref={(r: TextareaRenderable) => {
-                input = r
-                Object.assign(r, {
-                  getClipboardText: (text: string) => expandPastedTextPlaceholders(text, store.prompt.parts),
-                })
-                setInputTarget(r)
-                if (promptPartTypeId === 0) {
-                  promptPartTypeId = input.extmarks.registerType("prompt-part")
-                }
-                props.ref?.(ref)
-                setTimeout(() => {
-                  // setTimeout is a workaround and needs to be addressed properly
-                  if (!input || input.isDestroyed) return
-                  input.cursorColor = theme.text
-                }, 0)
-              }}
-              onMouseDown={(r: MouseEvent) => r.target?.focus()}
-              focusedBackgroundColor={theme.backgroundElement}
-              cursorColor={props.disabled ? theme.backgroundElement : theme.text}
-              syntaxStyle={syntax()}
-            />
+                  await pasteInputText(normalizedText)
+                }}
+                ref={(r: TextareaRenderable) => {
+                  input = r
+                  Object.assign(r, {
+                    getClipboardText: (text: string) => expandPastedTextPlaceholders(text, store.prompt.parts),
+                  })
+                  setInputTarget(r)
+                  if (promptPartTypeId === 0) {
+                    promptPartTypeId = input.extmarks.registerType("prompt-part")
+                  }
+                  props.ref?.(ref)
+                  setTimeout(() => {
+                    // setTimeout is a workaround and needs to be addressed properly
+                    if (!input || input.isDestroyed) return
+                    input.cursorColor = theme.text
+                  }, 0)
+                }}
+                onMouseDown={(r: MouseEvent) => r.target?.focus()}
+                focusedBackgroundColor={theme.backgroundElement}
+                cursorColor={props.disabled ? theme.backgroundElement : theme.text}
+                syntaxStyle={syntax()}
+              />
             </box>
             <box flexDirection="row" flexShrink={0} paddingTop={1} gap={1} justifyContent="space-between">
               <box flexDirection="row" gap={1}>

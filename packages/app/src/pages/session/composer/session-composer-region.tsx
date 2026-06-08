@@ -39,6 +39,7 @@ export function SessionComposerRegion(props: {
     onAbort: () => void
     onSend: (id: string) => void
     onEdit: (id: string) => void
+    onRemove: (id: string) => void
     onEditLoaded: () => void
     onCancelQueueEdit?: () => void
     onEditingQueueMessageID?: (id: string | undefined) => void
@@ -260,6 +261,7 @@ export function SessionComposerRegion(props: {
                   editingMessageID={props.followup!.editingMessageID}
                   onSend={props.followup!.onSend}
                   onEdit={props.followup!.onEdit}
+                  onRemove={props.followup!.onRemove}
                 />
               </Show>
               <Show

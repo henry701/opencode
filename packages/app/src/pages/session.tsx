@@ -70,7 +70,7 @@ import { extractPromptFromParts } from "@/utils/prompt"
 import { same } from "@/utils/same"
 import { formatServerError } from "@/utils/server-errors"
 import { useUsageExceededDialogs } from "./session/usage-exceeded-dialogs"
-import { applyQueueSaveSuccess } from "./session.queue-save"
+import { applyQueueSaveSuccess, removeQueuedFollowup } from "./session.queue-save"
 
 const emptyUserMessages: UserMessage[] = []
 type QueuePreview = { id: string; text: string }
@@ -1431,15 +1431,14 @@ export default function Page() {
       if (input.manual) setFollowup("paused", input.sessionID, undefined)
       setFollowup("failed", input.sessionID, undefined)
 
-      await sdk.client.session.queue
-        .send({ sessionID: input.sessionID, queueID: input.id })
-        .catch((err) => {
-          setFollowup("failed", input.sessionID, input.id)
-          fail(err)
-          throw err
-        })
+      await sdk.client.session.queue.send({ sessionID: input.sessionID, queueID: input.id }).catch((err) => {
+        setFollowup("failed", input.sessionID, input.id)
+        fail(err)
+        throw err
+      })
 
       resumeQueueDrain(input.sessionID)
+      sync.set("prompt_queue", input.sessionID, (items = emptyQueue) => removeQueuedFollowup(items, input.id))
 
       if (input.manual) resumeScroll()
     },
@@ -1524,6 +1523,26 @@ export default function Page() {
     if (followupBusy(sessionID)) return Promise.resolve()
 
     return followupMutation.mutateAsync({ sessionID, id, manual: opts?.manual })
+  }
+
+  const removeFollowup = (id: string) => {
+    const sessionID = params.id
+    if (!sessionID) return
+    if (followupBusy(sessionID)) return
+    if (!queuedFollowups().find((entry) => entry.id === id)) return
+
+    void sdk.client.session.queue
+      .remove({ sessionID, queueID: id })
+      .then(() => {
+        sync.set("prompt_queue", sessionID, (items = emptyQueue) => removeQueuedFollowup(items, id))
+        setFollowup("failed", sessionID, (value) => (value === id ? undefined : value))
+        if (editingQueueMessageID() !== id) return
+        stopEditingQueueMessage()
+        clearFollowupEdit()
+        prompt.reset()
+        resumeQueueDrain(sessionID)
+      })
+      .catch(fail)
   }
 
   const editFollowup = (id: string) => {
@@ -1771,6 +1790,7 @@ export default function Page() {
                 void sendFollowup(params.id!, id, { manual: true })
               },
               onEdit: editFollowup,
+              onRemove: removeFollowup,
               onEditLoaded: clearFollowupEdit,
               onCancelQueueEdit: cancelQueueEdit,
             }

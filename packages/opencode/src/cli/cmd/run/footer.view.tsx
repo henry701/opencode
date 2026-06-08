@@ -183,7 +183,9 @@ export function RunFooterView(props: RunFooterViewProps) {
   })
   const command = createMemo(() => printableBinding(props.keybinds.commandList, props.keybinds.leader))
   const interrupt = createMemo(() => printableBinding(props.keybinds.interrupt, props.keybinds.leader))
-  const variantCycle = createMemo(() => printableBinding(props.keybinds.variantCycle, props.keybinds.leader) || "ctrl+t")
+  const variantCycle = createMemo(
+    () => printableBinding(props.keybinds.variantCycle, props.keybinds.leader) || "ctrl+t",
+  )
   const commandKeys = createMemo(() => promptBindings(props.keybinds.commandList, props.keybinds.leader))
   const hints = createMemo(() => hintFlags(term().width))
   const busy = createMemo(() => props.state().phase === "running")
@@ -346,6 +348,18 @@ export function RunFooterView(props: RunFooterViewProps) {
     }
     if (plan.editID) await beginEditQueue(plan.editID)
     else composer.focus()
+  }
+
+  const removeQueuedAndMaybeClear = async (id: string) => {
+    await queueControl()?.remove(id)
+    if (editingQueueID() !== id) {
+      composer.focus()
+      return
+    }
+    setEditingQueueID(undefined)
+    composer.restorePrompt({ text: "", parts: [] })
+    await queueControl()?.resumeDrain?.()
+    composer.focus()
   }
 
   const cycleEditQueue = async (dir: -1 | 1) => {
@@ -566,31 +580,34 @@ export function RunFooterView(props: RunFooterViewProps) {
                   <Switch>
                     <Match when={active().type === "prompt" && route().type === "composer"}>
                       <box id="run-direct-footer-queue-slot" width="100%" flexShrink={0} flexDirection="column">
-                      <RunQueueDock
-                        items={queued}
-                        theme={theme}
-                        keybinds={props.keybinds}
-                        disabled={busy()}
-                        editing={() => !!editingQueueID()}
-                        editingMessageID={editingQueueID}
-                        onEdit={(id) => {
-                          void beginEditQueue(id).catch(() => {})
-                        }}
-                        onSendNow={(id) => {
-                          void sendQueuedAndMaybeEditNext(id).catch(() => {})
-                        }}
-                      />
+                        <RunQueueDock
+                          items={queued}
+                          theme={theme}
+                          keybinds={props.keybinds}
+                          disabled={busy()}
+                          editing={() => !!editingQueueID()}
+                          editingMessageID={editingQueueID}
+                          onEdit={(id) => {
+                            void beginEditQueue(id).catch(() => {})
+                          }}
+                          onSendNow={(id) => {
+                            void sendQueuedAndMaybeEditNext(id).catch(() => {})
+                          }}
+                          onRemove={(id) => {
+                            void removeQueuedAndMaybeClear(id).catch(() => {})
+                          }}
+                        />
                       </box>
                       <box id="run-direct-footer-prompt-slot" width="100%" flexGrow={1} flexShrink={1} minHeight={0}>
-                      <RunPromptBody
-                        theme={theme}
-                        placeholder={composer.placeholder}
-                        bindings={composer.bindings}
-                        onSubmit={composer.onSubmit}
-                        onKeyDown={composer.onKeyDown}
-                        onContentChange={composer.onContentChange}
-                        bind={composer.bind}
-                      />
+                        <RunPromptBody
+                          theme={theme}
+                          placeholder={composer.placeholder}
+                          bindings={composer.bindings}
+                          onSubmit={composer.onSubmit}
+                          onKeyDown={composer.onKeyDown}
+                          onContentChange={composer.onContentChange}
+                          bind={composer.bind}
+                        />
                       </box>
                     </Match>
                     <Match when={selectingSubagent()}>
