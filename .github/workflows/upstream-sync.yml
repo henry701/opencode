@@ -1,0 +1,138 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force merge even if already up-to-date'
+        type: boolean
+        default: false
+
+jobs:
+  sync:
+    name: Sync ${{ matrix.branch }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    strategy:
+      fail-fast: false
+      matrix:
+        branch:
+          - production
+          - dev
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4.2.2
+        with:
+          ref: ${{ matrix.branch }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream and fetch
+        shell: bash
+        run: |
+          if ! git remote get-url upstream >/dev/null 2>&1; then
+            git remote add upstream https://github.com/anomalyco/opencode.git
+          fi
+          git fetch upstream ${{ matrix.branch }}
+
+      - name: Check if up-to-date
+        id: check
+        shell: bash
+        env:
+          FORCE_INPUT: ${{ inputs.force }}
+        run: |
+          if git merge-base --is-ancestor upstream/${{ matrix.branch }} HEAD && [[ "$FORCE_INPUT" != "true" ]]; then
+            echo "status=up-to-date" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=pending" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Attempt merge
+        id: merge
+        if: steps.check.outputs.status == 'pending'
+        shell: bash
+        run: |
+          upstream_hash=$(git rev-parse upstream/${{ matrix.branch }})
+          upstream_short=$(git rev-parse --short upstream/${{ matrix.branch }})
+          upstream_log=$(git log HEAD..upstream/${{ matrix.branch }} --oneline | head -20 || true)
+
+          if git merge --no-edit upstream/${{ matrix.branch }}; then
+            echo "status=merged" >> "$GITHUB_OUTPUT"
+            echo "upstream_hash=${upstream_hash}" >> "$GITHUB_OUTPUT"
+            echo "upstream_short=${upstream_short}" >> "$GITHUB_OUTPUT"
+            {
+              echo "upstream_log<<EOF"
+              echo "$upstream_log"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            conflicted=$(git diff --name-only --diff-filter=U | paste -sd ',' - || echo "")
+            git merge --abort
+            echo "status=conflict" >> "$GITHUB_OUTPUT"
+            echo "upstream_hash=${upstream_hash}" >> "$GITHUB_OUTPUT"
+            echo "upstream_short=${upstream_short}" >> "$GITHUB_OUTPUT"
+            echo "conflicted_files=${conflicted}" >> "$GITHUB_OUTPUT"
+            {
+              echo "upstream_log<<EOF"
+              echo "$upstream_log"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push merged changes
+        if: steps.merge.outputs.status == 'merged'
+        shell: bash
+        run: git push origin ${{ matrix.branch }}
+
+      - name: Report conflict to job summary
+        if: steps.merge.outputs.status == 'conflict'
+        shell: bash
+        env:
+          TARGET_BRANCH: ${{ matrix.branch }}
+          UPSTREAM_HASH: ${{ steps.merge.outputs.upstream_hash }}
+          UPSTREAM_SHORT: ${{ steps.merge.outputs.upstream_short }}
+          CONFLICTED_FILES: ${{ steps.merge.outputs.conflicted_files }}
+          UPSTREAM_LOG: ${{ steps.merge.outputs.upstream_log }}
+        run: |
+          conflicted_files_nl="${CONFLICTED_FILES//,/$'\n'}"
+          cat >> "$GITHUB_STEP_SUMMARY" << SUMMARY_EOF
+          ## Upstream sync conflict on ${TARGET_BRANCH} - manual merge required
+
+          **Date:** $(date -u +"%Y-%m-%d %H:%M UTC")
+          **Branch:** \`${TARGET_BRANCH}\`
+          **Upstream commit:** \`${UPSTREAM_SHORT}\` (${UPSTREAM_HASH})
+
+          ### Conflicting files
+          \`\`\`
+          ${conflicted_files_nl}
+          \`\`\`
+
+          ### Incoming upstream commits
+          \`\`\`
+          ${UPSTREAM_LOG}
+          \`\`\`
+
+          ### Resolve locally
+          \`\`\`bash
+          git fetch upstream ${TARGET_BRANCH}
+          git checkout ${TARGET_BRANCH}
+          git merge upstream/${TARGET_BRANCH}
+          # fix conflicts, then:
+          git add .
+          git commit
+          git push origin ${TARGET_BRANCH}
+          \`\`\`
+          SUMMARY_EOF
+          exit 1
