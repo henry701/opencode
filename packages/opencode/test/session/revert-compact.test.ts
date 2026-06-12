@@ -103,7 +103,7 @@ const tokens = {
 
 describe("revert + compact workflow", () => {
   it.live(
-    "clears queued prompts after revert",
+    "preserves queued prompts after revert",
     provideTmpdirInstance((dir) =>
       Effect.gen(function* () {
         const session = yield* Session.Service
@@ -121,11 +121,14 @@ describe("revert + compact workflow", () => {
           model: { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test-model") },
           parts: [{ type: "text", text: "queued" }],
         })
-        expect(yield* promptQueue.peek(info.id)).toBeDefined()
+        const before = yield* promptQueue.peek(info.id)
+        expect(before?.data.parts).toEqual([{ type: "text", text: "queued" }])
 
         yield* revert.revert({ sessionID: info.id, messageID: userMsg.id })
 
-        expect(yield* promptQueue.peek(info.id)).toBeUndefined()
+        const after = yield* promptQueue.peek(info.id)
+        expect(after?.id).toBe(before?.id)
+        expect(after?.data.parts).toEqual([{ type: "text", text: "queued" }])
       }),
     ),
   )

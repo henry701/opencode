@@ -73,6 +73,7 @@ const baseState = (input: Partial<State> = {}) =>
     session_status: {},
     session_diff: {},
     todo: {},
+    prompt_queue: {},
     permission: {},
     question: {},
     mcp: {},
@@ -200,6 +201,36 @@ describe("applyDirectoryEvent", () => {
     expect(store.permission.ses_1).toBeUndefined()
     expect(store.question.ses_1).toBeUndefined()
     expect(store.session_status.ses_1).toBeUndefined()
+  })
+
+  test("preserves prompt queue when rollback updates session metadata", () => {
+    const [store, setStore] = createStore(
+      baseState({
+        session: [rootSession({ id: "ses_1" })],
+        prompt_queue: {
+          ses_1: [{ id: "pqu_1", text: "stay queued after rollback" }],
+        },
+      }),
+    )
+
+    applyDirectoryEvent({
+      event: {
+        type: "session.updated",
+        properties: {
+          info: {
+            ...rootSession({ id: "ses_1" }),
+            revert: { messageID: "msg_1" },
+          } as Session,
+        },
+      },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.prompt_queue.ses_1).toEqual([{ id: "pqu_1", text: "stay queued after rollback" }])
   })
 
   test("cleans session caches when deleted and decrements only root totals", () => {
