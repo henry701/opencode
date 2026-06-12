@@ -374,6 +374,7 @@ export const dict = {
   "context.breakdown.user": "User",
   "context.breakdown.assistant": "Assistant",
   "context.breakdown.tool": "Tool Calls",
+  "context.breakdown.toolDefs": "Tool Definitions",
   "context.breakdown.other": "Other",
 
   "context.systemPrompt.title": "System Prompt",

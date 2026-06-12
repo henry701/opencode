@@ -105,6 +105,15 @@ describe("PublicApi OpenAPI v2 errors", () => {
     }
   })
 
+  test("documents assistant context metadata for generated clients", () => {
+    const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
+
+    expect(spec.components.schemas.AssistantMessage?.properties).toMatchObject({
+      tool_defs: { type: "string" },
+      system_prompt: { type: "string" },
+    })
+  })
+
   test("preserves required request bodies for v2 mutations", () => {
     const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
 

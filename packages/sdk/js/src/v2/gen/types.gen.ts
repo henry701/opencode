@@ -362,6 +362,8 @@ export type AssistantMessage = {
   structured?: unknown
   variant?: string
   finish?: string
+  tool_defs?: string
+  system_prompt?: string
 }
 
 export type Message = UserMessage | AssistantMessage

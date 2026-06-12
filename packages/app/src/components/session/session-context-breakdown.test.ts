@@ -10,11 +10,12 @@ const user = (id: string) => {
   } as unknown as Message
 }
 
-const assistant = (id: string) => {
+const assistant = (id: string, toolDefs?: string) => {
   return {
     id,
     role: "assistant",
     time: { created: 1 },
+    tool_defs: toolDefs,
   } as unknown as Message
 }
 
@@ -57,5 +58,26 @@ describe("estimateSessionContextBreakdown", () => {
     const total = output.reduce((sum, segment) => sum + segment.tokens, 0)
     expect(total).toBeLessThanOrEqual(10)
     expect(output.every((segment) => segment.width <= 100)).toBeTrue()
+  })
+
+  test("counts the latest assistant tool definitions separately", () => {
+    const firstToolDefs = "old tool definitions"
+    const latestToolDefs = "new tool definitions"
+    const messages = [user("u1"), assistant("a1", firstToolDefs), assistant("a2", latestToolDefs)]
+    const parts = {
+      u1: [{ type: "text", text: "hello" }] as unknown as Part[],
+      a1: [{ type: "text", text: "first response" }] as unknown as Part[],
+      a2: [{ type: "text", text: "latest response" }] as unknown as Part[],
+    }
+
+    const output = estimateSessionContextBreakdown({
+      messages,
+      parts,
+      input: 100,
+      systemPrompt: "system",
+    })
+
+    const map = Object.fromEntries(output.map((segment) => [segment.key, segment.tokens]))
+    expect(map.toolDefs).toBe(Math.ceil(latestToolDefs.length / 4))
   })
 })

@@ -49,6 +49,9 @@ export PATH="$PATH:$REPO_ROOT/node_modules/.bin"
 echo "==> Installing dependencies..."
 bun install --minimum-release-age 0 --frozen-lockfile
 
+echo "==> Regenerating JavaScript SDK..."
+bun "$REPO_ROOT/packages/sdk/js/script/build.ts"
+
 echo "==> Building opencode (native linux-x64, --single)..."
 cd "$PKG_DIR"
 bun run script/build.ts --single --skip-install
