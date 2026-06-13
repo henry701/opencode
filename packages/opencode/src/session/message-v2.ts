@@ -2,60 +2,22 @@ import { EventV2 } from "@opencode-ai/core/event"
 import { SessionID, MessageID, PartID } from "./schema"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { ProviderV2 } from "@opencode-ai/core/provider"
-import { Effect, Schema } from "effect"
 import {
   APIError,
   AbortedError,
-  Assistant as CoreAssistant,
+  Assistant,
   AuthError,
   CompactionPart,
   ContextOverflowError,
+  Info,
   OutputLengthError,
   Part,
   StructuredOutputError,
   SubtaskPart,
-  User as CoreUser,
+  User,
+  WithParts,
   type ToolPart,
 } from "@opencode-ai/core/v1/session"
-export {
-  AgentPartInput,
-  FilePartInput,
-  Format,
-  Part,
-  SubtaskPartInput,
-  TextPartInput,
-  type AgentPart,
-  type FilePart,
-  type TextPart,
-  type ToolPart,
-  type ToolStateCompleted,
-  type ToolStateError,
-} from "@opencode-ai/core/v1/session"
-
-export const Assistant = Schema.Struct({
-  ...CoreAssistant.fields,
-  tool_defs: Schema.optional(Schema.String),
-  system_prompt: Schema.optional(Schema.String),
-}).annotate({ identifier: "AssistantMessage" })
-export type Assistant = CoreAssistant & {
-  tool_defs?: string
-  system_prompt?: string
-}
-
-export const User = CoreUser
-export type User = CoreUser & { delivery?: "immediate" | "deferred" }
-
-export const Info = Schema.Union([User, Assistant]).annotate({ discriminator: "role", identifier: "Message" })
-export type Info = User | Assistant
-
-export const WithParts = Schema.Struct({
-  info: Info,
-  parts: Schema.Array(Part),
-})
-export type WithParts = {
-  info: Info
-  parts: Part[]
-}
 
 import { NamedError } from "@opencode-ai/core/util/error"
 import { APICallError, convertToModelMessages, LoadAPIKeyError, type ModelMessage, type UIMessage } from "ai"
@@ -74,7 +36,7 @@ import { errorMessage } from "@/util/error"
 import { isMedia } from "@/util/media"
 import type { SystemError } from "bun"
 import type { Provider } from "@/provider/provider"
-import * as EffectLogger from "@opencode-ai/core/effect/logger"
+import { Effect, Schema } from "effect"
 
 /** Error shape thrown by Bun's fetch() when gzip/br decompression fails mid-stream */
 interface FetchDecompressionError extends Error {
@@ -85,6 +47,7 @@ interface FetchDecompressionError extends Error {
 
 export const SYNTHETIC_ATTACHMENT_PROMPT = "Attached media from tool result:"
 export { isMedia }
+export { Assistant, User, WithParts }
 
 function truncateToolOutput(text: string, maxChars?: number) {
   if (!maxChars || text.length <= maxChars) return text
@@ -468,7 +431,7 @@ export function toModelMessages(
   model: Provider.Model,
   options?: { stripMedia?: boolean; toolOutputMaxChars?: number },
 ): Promise<ModelMessage[]> {
-  return Effect.runPromise(toModelMessagesEffect(input, model, options).pipe(Effect.provide(EffectLogger.layer)))
+  return Effect.runPromise(toModelMessagesEffect(input, model, options))
 }
 
 export const page = Effect.fn("MessageV2.page")(function* (input: {
@@ -653,7 +616,6 @@ type UserWithDelivery = User & { delivery?: "immediate" | "deferred" }
 
 const userDelivery = (user: User): UserWithDelivery["delivery"] => (user as UserWithDelivery).delivery
 
-/** Latest user message, skipping delivery="deferred" (queued for end of turn). */
 export function latestActiveUser(msgs: WithParts[]) {
   let user: User | undefined
   for (const msg of msgs) {
@@ -668,7 +630,6 @@ export function withoutDeferredUsers(msgs: WithParts[]) {
   return msgs.filter((m) => !(m.info.role === "user" && userDelivery(m.info) === "deferred"))
 }
 
-/** Deferred user messages not yet fully handled by a completed assistant turn. */
 export function unprocessedDeferredUsers(msgs: WithParts[]) {
   const items: User[] = []
   for (const msg of msgs) {
@@ -693,12 +654,10 @@ export function unprocessedDeferredUsers(msgs: WithParts[]) {
   return items
 }
 
-/** Oldest deferred user message that still needs a completed assistant turn. */
 export function firstUnprocessedDeferred(msgs: WithParts[]) {
   return unprocessedDeferredUsers(msgs)[0]
 }
 
-/** True while an immediate turn (including steer) still needs model follow-up. */
 export function immediateTurnUnsettled(msgs: WithParts[]) {
   const { assistant: lastAssistant } = latest(msgs)
   if (!lastAssistant) {
@@ -733,7 +692,6 @@ function orphanedInterruptedTool(part: ToolPart) {
   return part.state.status === "error" && part.state.metadata?.interrupted === true
 }
 
-/** True while the latest assistant for this user still needs a follow-up step (e.g. after tool results). */
 export function assistantNeedsToolFollowup(
   msgs: WithParts[],
   user: User,

@@ -74,11 +74,6 @@ function footer() {
         fn(next)
       }
     },
-    submitPrompt(prompt: RunPrompt) {
-      for (const fn of [...prompts]) {
-        fn(prompt)
-      }
-    },
   }
 }
 
@@ -245,6 +240,22 @@ describe("run runtime queue", () => {
 
     ui.submit("ls", { mode: "shell" })
     await task
+  })
+
+  test("shell mode does not emit a turn duration summary", async () => {
+    const ui = footer()
+
+    const task = runPromptQueue({
+      footer: ui.api,
+      run: async () => {
+        ui.api.close()
+      },
+    })
+
+    ui.submit("ls", { mode: "shell" })
+    await task
+
+    expect(ui.events.some((event) => event.type === "turn.duration")).toBe(false)
   })
 
   test("preserves whitespace for initial input", async () => {
@@ -702,74 +713,6 @@ describe("run runtime queue", () => {
     await sendFinished
     ui.api.close()
     await task
-  })
-
-  test("remote queue control keeps runner alive when send now fails", async () => {
-    const ui = footer()
-    let control: import("@/cli/cmd/run/types").QueueControl | undefined
-    const seen: string[] = []
-
-    const task = runPromptQueue({
-      footer: {
-        ...ui.api,
-        setQueueControl(next) {
-          control = next
-        },
-      },
-      updateQueueRemote: async () => {},
-      sendQueueRemote: async () => {
-        throw new Error("remote send unavailable")
-      },
-      run: async (prompt) => {
-        seen.push(prompt.text)
-        ui.api.close()
-      },
-    })
-
-    expect(control?.update("pqu_test", { text: "edited", parts: [], queueID: "pqu_test" })).toBe(true)
-    expect(control?.sendNow("pqu_test")).toBe(true)
-    await Promise.resolve()
-    expect(
-      ui.events.some((event) => event.type === "stream.patch" && event.patch.status?.includes("remote send unavailable")),
-    ).toBe(true)
-
-    ui.submit("after failure")
-    await task
-
-    expect(seen).toEqual(["after failure"])
-  })
-
-  test("remote queue control reports update failures without closing", async () => {
-    const ui = footer()
-    let control: import("@/cli/cmd/run/types").QueueControl | undefined
-    const seen: string[] = []
-
-    const task = runPromptQueue({
-      footer: {
-        ...ui.api,
-        setQueueControl(next) {
-          control = next
-        },
-      },
-      updateQueueRemote: async () => {
-        throw new Error("remote update unavailable")
-      },
-      run: async (prompt) => {
-        seen.push(prompt.text)
-        ui.api.close()
-      },
-    })
-
-    expect(control?.update("pqu_test", { text: "draft", parts: [], queueID: "pqu_test" })).toBe(true)
-    await Promise.resolve()
-    expect(
-      ui.events.some((event) => event.type === "stream.patch" && event.patch.status?.includes("remote update unavailable")),
-    ).toBe(true)
-
-    ui.submit("after update failure")
-    await task
-
-    expect(seen).toEqual(["after update failure"])
   })
 
   test("demo mode does not enqueue prompts", async () => {

@@ -31,9 +31,10 @@ import {
   FileAttachmentPart,
 } from "@/context/prompt"
 import { useLayout } from "@/context/layout"
-import { useNavigate } from "@solidjs/router"
+import { useNavigate, useSearchParams } from "@solidjs/router"
 import { useSDK } from "@/context/sdk"
 import { useServer } from "@/context/server"
+import { useTabs } from "@/context/tabs"
 import { useSync } from "@/context/sync"
 import { useComments } from "@/context/comments"
 import { Button } from "@opencode-ai/ui/button"
@@ -56,7 +57,7 @@ import { useSessionLayout } from "@/pages/session/session-layout"
 import { createSessionTabs } from "@/pages/session/helpers"
 import { createTextFragment, getCursorPosition, setCursorPosition, setRangeEdge } from "./prompt-input/editor-dom"
 import { createPromptAttachments } from "./prompt-input/attachments"
-import { ACCEPTED_FILE_TYPES } from "./prompt-input/files"
+import { ACCEPTED_FILE_TYPES, pickAttachmentFiles } from "./prompt-input/files"
 import {
   canNavigateHistoryAtCursor,
   navigatePromptHistory,
@@ -72,6 +73,8 @@ import { PromptContextItems } from "./prompt-input/context-items"
 import { PromptImageAttachments } from "./prompt-input/image-attachments"
 import { PromptDragOverlay } from "./prompt-input/drag-overlay"
 import { promptPlaceholder } from "./prompt-input/placeholder"
+import { useDirectoryPicker } from "./directory-picker"
+import { showToast } from "@/utils/toast"
 import { ImagePreview } from "@opencode-ai/ui/image-preview"
 import { useQueries } from "@tanstack/solid-query"
 import { useQueryOptions } from "@/context/server-sync"
@@ -142,7 +145,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const permission = usePermission()
   const language = useLanguage()
   const platform = usePlatform()
+  const pickDirectory = useDirectoryPicker()
   const settings = useSettings()
+  const tabsStore = useTabs()
+  const [search] = useSearchParams<{ draftId?: string }>()
   const { params, tabs, view } = useSessionLayout()
   let editorRef!: HTMLDivElement
   let fileInputRef: HTMLInputElement | undefined
@@ -271,16 +277,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const imageAttachments = createMemo(() =>
     prompt.current().filter((part): part is ImageAttachmentPart => part.type === "image"),
   )
-  // Per-message queue override toggled by the composer button or Alt+Enter. It
-  // makes the next submit go to the server prompt queue even
-  // when the followup setting is not "queue", and resets after each submit.
-  const [queueMode, setQueueMode] = createSignal(false)
-  const [localEditingQueueID, setLocalEditingQueueID] = createSignal<string | undefined>()
-  const editingQueueID = () => props.editingQueueID ?? localEditingQueueID()
-  const setEditingQueueID = (id: string | undefined) => {
-    props.onEditingQueueMessageID?.(id)
-    if (props.onEditingQueueMessageID === undefined) setLocalEditingQueueID(id)
-  }
 
   const [store, setStore] = createStore<{
     popover: "at" | "slash" | null
@@ -290,6 +286,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     draggingType: "image" | "@mention" | null
     mode: "normal" | "shell"
     applyingHistory: boolean
+    variantOpen: boolean
   }>({
     popover: null,
     historyIndex: -1,
@@ -298,6 +295,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     draggingType: null,
     mode: "normal",
     applyingHistory: false,
+    variantOpen: false,
   })
   const [picker, setPicker] = createStore({
     projectOpen: false,
@@ -344,31 +342,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       </div>
     )
   }
-
-  // Per-message queue toggle. Only meaningful for existing sessions in normal
-  // mode (shell commands always run now, and new sessions have nothing to queue
-  // against). Clicking flips queueMode; the send icon and submit path follow.
-  const queueToggle = () => (
-    <Show when={store.mode === "normal" && !!params.id}>
-      <Tooltip
-        placement="top"
-        value={queueMode() ? language.t("prompt.action.sendDirect") : language.t("prompt.action.queue")}
-      >
-        <IconButton
-          data-action="prompt-queue-toggle"
-          type="button"
-          icon="bullet-list"
-          variant={queueMode() ? "secondary" : "ghost"}
-          class="size-7 rounded-md p-[6px] text-v2-icon-icon-muted"
-          style={buttons()}
-          onClick={() => setQueueMode((value) => !value)}
-          tabIndex={store.mode === "normal" ? undefined : -1}
-          aria-pressed={queueMode()}
-          aria-label={queueMode() ? language.t("prompt.action.sendDirect") : language.t("prompt.action.queue")}
-        />
-      </Tooltip>
-    </Show>
-  )
 
   const contextItems = createMemo(() => {
     const items = prompt.context.items()
@@ -501,7 +474,20 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
   const escBlur = () => platform.platform === "desktop" && platform.os === "macos"
 
-  const pick = () => fileInputRef?.click()
+  const pick = () => {
+    pickAttachmentFiles({
+      picker: platform.openAttachmentPickerDialog,
+      directory: () => sdk.directory,
+      fallback: () => fileInputRef?.click(),
+      onFile: addAttachment,
+      onError: (error) =>
+        showToast({
+          variant: "error",
+          title: language.t("common.requestFailed"),
+          description: error instanceof Error ? error.message : String(error),
+        }),
+    })
+  }
 
   const setMode = (mode: "normal" | "shell") => {
     setStore("mode", mode)
@@ -661,6 +647,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     },
     key: atKey,
     filterKeys: ["display"],
+    skipFilter: (item) => item.type === "file" && !item.recent,
     groupBy: (item) => {
       if (item.type === "agent") return "agent"
       if (item.recent) return "recent"
@@ -1063,8 +1050,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         const edit = props.edit
         if (!id || !edit) return
 
-        setEditingQueueID(edit.id)
-
         for (const item of prompt.context.items()) {
           prompt.context.remove(item.key)
         }
@@ -1113,7 +1098,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     return true
   }
 
-  const { addAttachments, removeAttachment, handlePaste } = createPromptAttachments({
+  const { addAttachment, addAttachments, removeAttachment, handlePaste } = createPromptAttachments({
     editor: () => editorRef,
     isDialogActive: () => !!dialog.active,
     setDraggingType: (type) => setStore("draggingType", type),
@@ -1141,6 +1126,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   )
 
   const variants = createMemo(() => ["default", ...local.model.variant.list()])
+  // Check provider variants directly: `variants` also includes the UI-only default option.
+  const showVariantControl = createMemo(() => local.model.variant.list().length > 0)
   const accepting = createMemo(() => {
     const id = params.id
     if (!id) return permission.isAutoAcceptingDirectory(sdk.directory)
@@ -1166,10 +1153,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     newSessionWorktree: () => props.newSessionWorktree,
     onNewSessionWorktreeReset: props.onNewSessionWorktreeReset,
     shouldQueue: props.shouldQueue,
-    queueMode,
-    resetQueueMode: () => setQueueMode(false),
-    editingQueueID: () => editingQueueID(),
-    resetEditingQueueID: () => setEditingQueueID(undefined),
+    editingQueueID: () => props.editingQueueID,
+    resetEditingQueueID: () => props.onEditingQueueMessageID?.(undefined),
     onQueue: props.onQueue,
     onAbort: props.onAbort,
     onSubmit: props.onSubmit,
@@ -1214,13 +1199,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     if (event.key === "Escape") {
       if (store.popover) {
         closePopover()
-        event.preventDefault()
-        event.stopPropagation()
-        return
-      }
-
-      if (editingQueueID()) {
-        props.onCancelQueueEdit?.()
         event.preventDefault()
         event.stopPropagation()
         return
@@ -1324,14 +1302,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       return
     }
 
-    if (event.altKey && event.key === "Enter" && store.mode !== "shell") {
-      event.preventDefault()
-      if (event.repeat) return
-      setQueueMode(true)
-      void handleSubmit(event)
-      return
-    }
-
     // Note: Shift+Enter is handled earlier, before IME check
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault()
@@ -1407,7 +1377,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     if (!search) return projects()
     return projects().filter((project) => displayName(project).toLowerCase().includes(search))
   })
-  const showAgentControl = createMemo(() => settings.general.showCustomAgents() && agentNames().length > 0)
+  const showAgentControl = createMemo(() => settings.visibility.customAgents() && agentNames().length > 0)
   const selectProject = (worktree: string) => {
     setPicker({
       projectOpen: false,
@@ -1419,25 +1389,30 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     }
     layout.projects.open(worktree)
     server.projects.touch(worktree)
+
+    // On the draft route, retarget the existing draft in place so we keep the same
+    // draft id (and its tab/prompt) instead of spawning a new draft for the new directory.
+    const draftID = search.draftId
+    if (draftID) {
+      tabsStore.updateDraft(draftID, { server: server.key, directory: worktree })
+      restoreFocus()
+      return
+    }
+
     navigate(`/${base64Encode(worktree)}/session`)
   }
-  const addProject = async () => {
+  const addProject = () => {
+    const conn = server.current
+    if (!conn) return
     const select = (result: string | string[] | null) => {
       const directory = Array.isArray(result) ? result[0] : result
       if (!directory) return
       selectProject(directory)
     }
-    const conn = server.current
-    if (!conn) return
-    if (platform.openDirectoryPickerDialog && server.isLocal()) {
-      select(await platform.openDirectoryPickerDialog({ title: language.t("command.project.open") }))
-      return
-    }
-    void import("@/components/dialog-select-directory").then((x) => {
-      dialog.show(
-        () => <x.DialogSelectDirectory onSelect={select} server={conn} />,
-        () => select(null),
-      )
+    pickDirectory({
+      server: conn,
+      title: language.t("command.project.open"),
+      onSelect: select,
     })
   }
 
@@ -1630,23 +1605,47 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     <ComposerPickerTrigger state={newProjectTriggerState()} />
                   </Show>
                   <ComposerModelControl state={modelControlState()} />
+                  <Show when={store.mode !== "shell" && showVariantControl()}>
+                    <div
+                      data-component="prompt-variant-control"
+                      classList={{
+                        "hidden group-hover/prompt-input:block group-focus-within/prompt-input:block":
+                          !local.model.variant.current() && !store.variantOpen,
+                      }}
+                    >
+                      <TooltipKeybind
+                        placement="top"
+                        gutter={4}
+                        title={language.t("command.model.variant.cycle")}
+                        keybind={command.keybind("model.variant.cycle")}
+                      >
+                        <Select
+                          size="normal"
+                          options={variants()}
+                          current={local.model.variant.current() ?? "default"}
+                          label={(x) => (x === "default" ? language.t("common.default") : x)}
+                          onOpenChange={(open) => setStore("variantOpen", open)}
+                          onSelect={(value) => {
+                            local.model.variant.set(value === "default" ? undefined : value)
+                            restoreFocus()
+                          }}
+                          class="capitalize max-w-[160px] justify-start text-v2-text-text-faint"
+                          valueClass="truncate text-[13px] font-[440] leading-5 text-v2-text-text-faint"
+                          triggerStyle={control()}
+                          triggerProps={{ "data-action": "prompt-model-variant" }}
+                          variant="ghost"
+                        />
+                      </TooltipKeybind>
+                    </div>
+                  </Show>
                 </div>
-                {queueToggle()}
                 <Tooltip placement="top" inactive={!working() && blank()} value={tip()}>
                   <IconButton
                     data-action="prompt-submit"
                     type="submit"
                     disabled={!working() && blank()}
                     tabIndex={store.mode === "normal" ? undefined : -1}
-                    icon={
-                      stopping()
-                        ? "stop"
-                        : queueMode() && store.mode === "normal"
-                          ? "bullet-list"
-                          : store.mode === "shell"
-                            ? "arrow-undo-down"
-                            : "arrow-up"
-                    }
+                    icon={stopping() ? "stop" : store.mode === "shell" ? "arrow-undo-down" : "arrow-up"}
                     variant="primary"
                     class="size-7 rounded-md p-[6px] text-v2-icon-icon-muted shadow-[var(--v2-elevation-button-contrast)] disabled:opacity-50"
                     style={{
@@ -1783,22 +1782,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 />
 
                 <div class="flex items-center gap-1 pointer-events-auto">
-                  {queueToggle()}
                   <Tooltip placement="top" inactive={!working() && blank()} value={tip()}>
                     <IconButton
                       data-action="prompt-submit"
                       type="submit"
                       disabled={!working() && blank()}
                       tabIndex={store.mode === "normal" ? undefined : -1}
-                      icon={
-                        stopping()
-                          ? "stop"
-                          : queueMode() && store.mode === "normal"
-                            ? "bullet-list"
-                            : store.mode === "shell"
-                              ? "arrow-undo-down"
-                              : "arrow-up"
-                      }
+                      icon={stopping() ? "stop" : store.mode === "shell" ? "arrow-undo-down" : "arrow-up"}
                       variant="primary"
                       class="size-8"
                       aria-label={stopping() ? language.t("prompt.action.stop") : language.t("prompt.action.send")}
@@ -1967,7 +1957,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                             </TooltipKeybind>
                           </Show>
                         </div>
-                        <Show when={variants().length > 2}>
+                        <Show when={showVariantControl()}>
                           <div
                             data-component="prompt-variant-control"
                             style={providersShouldFadeIn() ? { animation: "fade-in 0.3s" } : undefined}

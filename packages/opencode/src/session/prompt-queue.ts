@@ -17,6 +17,7 @@ import { Effect, Layer, Context } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 
 export interface Interface {
   readonly list: (sessionID: SessionID) => Effect.Effect<QueueItem[]>
@@ -161,5 +162,7 @@ export const layer = Layer.effect(
 )
 
 export const defaultLayer = layer.pipe(Layer.provide(Layer.mergeAll(EventV2Bridge.defaultLayer, Database.defaultLayer)))
+
+export const node = LayerNode.make(layer, [EventV2Bridge.node, Database.node])
 
 export * as SessionPromptQueue from "./prompt-queue"

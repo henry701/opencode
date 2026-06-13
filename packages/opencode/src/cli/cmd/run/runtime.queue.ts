@@ -15,7 +15,6 @@ import { runPromptPreview } from "@/queue/preview"
 import { ModelID, ProviderID } from "@/provider/schema"
 import type { SessionID } from "@/session/schema"
 import { isExitCommand, isNewCommand } from "./prompt.shared"
-import { formatUnknownError } from "./stream.transport"
 import type { FooterApi, FooterEvent, QueueControl, QueuedPromptPreview, RunPrompt } from "./types"
 
 type Trace = {
@@ -46,8 +45,6 @@ export type QueueInput = {
   sendQueueRemote?: (queueID: string, prompt?: RunPrompt) => Promise<void>
   onSend?: (prompt: RunPrompt) => void
   onNewSession?: () => void | Promise<void>
-  onAbortSteers?: (abort: () => void) => () => void
-  steer?: (prompt: RunPrompt, signal: AbortSignal) => Promise<void>
   run: (prompt: RunPrompt, signal: AbortSignal) => Promise<void>
 }
 
@@ -72,7 +69,6 @@ function queueDataFromRunPrompt(
 type State = {
   queue: RunPrompt[]
   ctrl?: AbortController
-  steerCtrls: Set<AbortController>
   closed: boolean
   nextQueueID: number
 }
@@ -112,7 +108,6 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
   const done = defer()
   const state: State = {
     queue: [],
-    steerCtrls: new Set(),
     closed: input.footer.isClosed,
     nextQueueID: 0,
   }
@@ -146,22 +141,6 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
     )
   }
 
-  const emitQueueError = (action: string, error: unknown) => {
-    const message = formatUnknownError(error)
-    const status = `${action} failed: ${message}`
-    input.trace?.write("queue.remote.error", {
-      action,
-      error: message,
-    })
-    emit(
-      {
-        type: "stream.patch",
-        patch: { status },
-      },
-      { status },
-    )
-  }
-
   const remoteDrafts = new Map<string, RunPrompt>()
 
   const findQueued = (id: string) => {
@@ -190,7 +169,7 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
     remoteDrafts.set(id, { ...withQueueID(prompt, state), queueID: id })
     if (!input.updateQueueRemote) return true
     void input.updateQueueRemote(id, prompt).catch((error) => {
-      emitQueueError("Saving queued prompt", error)
+      done.reject(error)
     })
     return true
   }
@@ -198,13 +177,9 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
   const removeRemote = async (id: string) => {
     const prompt = findQueued(id)
     remoteDrafts.delete(id)
-    try {
-      await input.removeQueueRemote?.(id)
-    } catch (error) {
-      if (prompt) remoteDrafts.set(id, prompt)
-      emitQueueError("Removing queued prompt", error)
-      return undefined
-    }
+    await input.removeQueueRemote?.(id).catch((error) => {
+      done.reject(error)
+    })
     return prompt
   }
 
@@ -243,20 +218,19 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
             remoteDrafts.delete(id)
           },
           (error) => {
-            emitQueueError("Sending queued prompt", error)
+            done.reject(error)
           },
         )
-        return true
+        return
       }
       const prompt = removeQueued(id)
-      if (!prompt) return false
+      if (!prompt) return
       const next = { ...prompt, delivery: "immediate" as const }
       if (busy()) {
         steer(next)
-        return true
+        return
       }
       submitPrompt(next)
-      return true
     },
   }
 
@@ -301,12 +275,6 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
     })
   }
 
-  const abortSteers = () => {
-    for (const ctrl of state.steerCtrls) {
-      ctrl.abort()
-    }
-  }
-
   const finish = () => {
     if (!state.closed || draining) {
       return
@@ -323,7 +291,6 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
     state.closed = true
     state.queue.length = 0
     state.ctrl?.abort()
-    abortSteers()
     input.footer.setQueueControl?.(undefined)
     emitQueue()
     stop.resolve({ type: "closed" })
@@ -431,16 +398,18 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
               state.ctrl = undefined
             }
 
-            const duration = Locale.duration(Math.max(0, Date.now() - start))
-            emit(
-              {
-                type: "turn.duration",
-                duration,
-              },
-              {
-                duration,
-              },
-            )
+            if (prompt.mode !== "shell") {
+              const duration = Locale.duration(Math.max(0, Date.now() - start))
+              emit(
+                {
+                  type: "turn.duration",
+                  duration,
+                },
+                {
+                  duration,
+                },
+              )
+            }
           }
         }
       } catch (error) {
@@ -525,7 +494,7 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
 
     if (input.enqueueRemote) {
       void input.enqueueRemote(prompt).catch((error) => {
-        emitQueueError("Queueing prompt", error)
+        done.reject(error)
       })
       emit(
         { type: "first", first: false },
@@ -566,7 +535,6 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
   const offClose = input.footer.onClose(() => {
     close()
   })
-  const offAbortSteers = input.onAbortSteers?.(abortSteers) ?? (() => {})
 
   try {
     if (state.closed) {
@@ -582,7 +550,6 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
   } finally {
     offPrompt()
     offClose()
-    offAbortSteers()
     close()
     input.footer.setQueueControl?.(undefined)
     await draining?.catch(() => {})

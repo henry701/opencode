@@ -14,6 +14,7 @@ import { same } from "@/utils/same"
 import { createScrollPersistence, type SessionScroll } from "./layout-scroll"
 import { createPathHelpers } from "./file/path"
 import type { ProjectAvatarVariant } from "@opencode-ai/ui/v2/project-avatar-v2"
+import { migrateLegacySessionStateKeys, ServerScope, SessionStateKey } from "@/utils/server-scope"
 import { createSessionKeyReader, ensureSessionKey, pruneSessionKeys } from "./layout-helpers"
 
 export { createSessionKeyReader, ensureSessionKey, pruneSessionKeys }
@@ -64,6 +65,7 @@ type SessionView = {
 }
 
 type TabHandoff = {
+  scope: ServerScope
   dir: string
   id: string
   at: number
@@ -75,6 +77,7 @@ export type ReviewDiffStyle = "unified" | "split"
 
 export type LayoutRoute =
   | { type: "home" }
+  | { type: "draft"; draftID: string; server?: ServerConnection.Key }
   | { type: "dir-new-sesssion"; dir: string; dirBase64: string; server?: ServerConnection.Key }
   | { type: "session"; dir: string; dirBase64: string; sessionId: string; server?: ServerConnection.Key }
 
@@ -87,7 +90,7 @@ function nextSessionTabsForOpen(current: SessionTabs | undefined, tab: string): 
 }
 
 const sessionPath = (key: string) => {
-  const dir = key.split("/")[0]
+  const dir = SessionStateKey.route(key).split("/")[0]
   if (!dir) return
   const root = decode64(dir)
   if (!root) return
@@ -118,9 +121,15 @@ const normalizeStoredSessionTabs = (key: string, tabs: SessionTabs) => {
   }
 }
 
-const currentRoute = (pathname: string): LayoutRoute => {
+const currentRoute = (pathname: string, search: string): LayoutRoute => {
   const parts = pathname.split("/").filter(Boolean)
   if (parts.length === 0) return { type: "home" }
+
+  if (parts[0] === "new-session") {
+    const draftID = new URLSearchParams(search).get("draftId")
+    if (!draftID) return { type: "home" }
+    return { type: "draft", draftID }
+  }
 
   const dirBase64 = parts[0]
   const dir = decode64(dirBase64)
@@ -135,13 +144,18 @@ const currentRoute = (pathname: string): LayoutRoute => {
 
 export const { use: useLayout, provider: LayoutProvider } = createSimpleContext({
   name: "Layout",
+  gate: false,
   init: () => {
-    const globalSdk = useServerSDK()
+    const serverSdk = useServerSDK()
     const serverSync = useServerSync()
     const server = useServer()
     const platform = usePlatform()
     const location = useLocation()
-    const route = createMemo(() => currentRoute(location.pathname))
+    const route = createMemo(() => {
+      const value = currentRoute(location.pathname, location.search)
+      if (value.type === "home") return value
+      return { ...value, server: server.key }
+    })
 
     const isRecord = (value: unknown): value is Record<string, unknown> =>
       typeof value === "object" && value !== null && !Array.isArray(value)
@@ -186,7 +200,8 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         }
       })()
 
-      const sessionTabs = value.sessionTabs
+      const sessionTabs = migrateLegacySessionStateKeys(value.sessionTabs)
+      const sessionView = migrateLegacySessionStateKeys(value.sessionView)
       const migratedSessionTabs = (() => {
         if (!isRecord(sessionTabs)) return sessionTabs
 
@@ -215,7 +230,8 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         migratedSidebar === sidebar &&
         migratedReview === review &&
         migratedFileTree === fileTree &&
-        migratedSessionTabs === sessionTabs
+        migratedSessionTabs === value.sessionTabs &&
+        sessionView === value.sessionView
       ) {
         return value
       }
@@ -226,10 +242,11 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         review: migratedReview,
         fileTree: migratedFileTree,
         sessionTabs: migratedSessionTabs,
+        sessionView,
       }
     }
 
-    const target = Persist.global("layout", ["layout.v6"])
+    const target = Persist.serverGlobal(serverSdk.scope, "layout", ["layout.v6"])
     const [store, setStore, _, ready] = persisted(
       { ...target, migrate },
       createStore({
@@ -282,15 +299,19 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
 
     const dropSessionState = (keys: string[]) => {
       for (const key of keys) {
-        const parts = key.split("/")
+        const scope = SessionStateKey.scope(key)
+        const parts = SessionStateKey.route(key).split("/")
         const dir = parts[0]
         const session = parts[1]
         if (!dir) continue
 
         for (const entry of SESSION_STATE_KEYS) {
-          const target = session ? Persist.session(dir, session, entry.key) : Persist.workspace(dir, entry.key)
+          const target = session
+            ? Persist.serverSession(scope, dir, session, entry.key)
+            : Persist.serverWorkspace(scope, dir, entry.key)
           void removePersisted(target, platform)
 
+          if (scope !== ServerScope.local) continue
           const legacyKey = `${dir}/${entry.legacy}${session ? "/" + session : ""}.${entry.version}`
           void removePersisted({ key: legacyKey }, platform)
         }
@@ -515,7 +536,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           continue
         }
 
-        void globalSdk.client.project
+        void serverSdk.client.project
           .update({ projectID: project.id, directory: worktree, icon: { color } })
           .catch(() => {
             if (colorRequested.get(worktree) === color) colorRequested.delete(worktree)
@@ -551,7 +572,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
       handoff: {
         tabs: createMemo(() => store.handoff?.tabs),
         setTabs(dir: string, id: string) {
-          setStore("handoff", "tabs", { dir, id, at: Date.now() })
+          setStore("handoff", "tabs", { scope: server.scope(), dir, id, at: Date.now() })
         },
         clearTabs() {
           if (!store.handoff?.tabs) return
