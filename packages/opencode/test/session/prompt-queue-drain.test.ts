@@ -3,13 +3,10 @@ import { Effect, Layer } from "effect"
 import { Session as SessionNs } from "@/session/session"
 import { SessionPromptQueue } from "@/session/prompt-queue"
 import { ModelID, ProviderID } from "@/provider/schema"
-import * as Log from "@opencode-ai/core/util/log"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { Session } from "@/session/session"
 import { httpApiLayer, requestInDirectory } from "../server/httpapi-layer"
-
-void Log.init({ print: false })
 
 const ref = {
   providerID: ProviderID.make("test"),

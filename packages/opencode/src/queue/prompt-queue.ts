@@ -1,5 +1,4 @@
 import { partsPreview } from "@/queue/preview"
-import { MessageV2 } from "@/session/message-v2"
 import { MessageID, PartID, QueueItemID, SessionID } from "@/session/schema"
 import { ModelID, ProviderID } from "@/provider/schema"
 import { and, asc, eq, isNull } from "drizzle-orm"
@@ -11,12 +10,13 @@ import { Prompt } from "@opencode-ai/core/session/prompt"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionInputTable } from "@opencode-ai/core/session/sql"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { SessionV1 } from "@opencode-ai/core/v1/session"
 
 export const PromptQueuePart = Schema.Union([
-  MessageV2.TextPartInput,
-  MessageV2.FilePartInput,
-  MessageV2.AgentPartInput,
-  MessageV2.SubtaskPartInput,
+  SessionV1.TextPartInput,
+  SessionV1.FilePartInput,
+  SessionV1.AgentPartInput,
+  SessionV1.SubtaskPartInput,
 ]).annotate({ discriminator: "type" })
 export type PromptQueuePart = Schema.Schema.Type<typeof PromptQueuePart>
 
@@ -30,7 +30,7 @@ const promptQueueDataFields = {
   }),
   tools: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
   system: Schema.optional(Schema.String),
-  format: Schema.optional(MessageV2.Format),
+  format: Schema.optional(SessionV1.Format),
   parts: Schema.Array(PromptQueuePart),
   permissions: Schema.optional(Schema.Array(PermissionV1.Rule)),
 } as const
@@ -64,7 +64,7 @@ export function queueItemPreview(item: QueueItem): QueueItemPreview {
   }
 }
 
-function queuePartsForPreview(parts: readonly PromptQueuePart[]): MessageV2.Part[] {
+function queuePartsForPreview(parts: readonly PromptQueuePart[]): SessionV1.Part[] {
   return [...parts].map((part) => {
     const id = PartID.ascending()
     const messageID = MessageID.ascending()
@@ -317,10 +317,10 @@ export const sqliteClear = Effect.fn("PromptQueue.sqliteClear")(function* (sessi
   yield* db.delete(SessionInputTable).where(pendingQueue(sessionID)).run().pipe(Effect.orDie)
 })
 
-export function materializeQueuedItem(item: QueueItem): MessageV2.WithParts {
+export function materializeQueuedItem(item: QueueItem): SessionV1.WithParts {
   const id = MessageID.ascending()
   const created = Date.now()
-  const info: MessageV2.User = {
+  const info: SessionV1.User = {
     id,
     role: "user",
     sessionID: item.sessionID,
@@ -330,7 +330,6 @@ export function materializeQueuedItem(item: QueueItem): MessageV2.WithParts {
     tools: item.data.tools,
     system: item.data.system,
     format: item.data.format,
-    delivery: "immediate",
   }
   const parts = item.data.parts.map((part) => {
     const partID = part.id ? PartID.make(part.id) : PartID.ascending()
@@ -348,7 +347,7 @@ export function materializeQueuedItem(item: QueueItem): MessageV2.WithParts {
   return { info, parts }
 }
 
-export function queueDataFromMessage(message: MessageV2.WithParts): PromptQueueData {
+export function queueDataFromMessage(message: SessionV1.WithParts): PromptQueueData {
   if (message.info.role !== "user") {
     throw new Error("Only user messages can be queued")
   }
@@ -403,7 +402,7 @@ export function queueDataFromMessage(message: MessageV2.WithParts): PromptQueueD
 }
 
 export function queueDataFromMessageWithPermissions(
-  message: MessageV2.WithParts,
+  message: SessionV1.WithParts,
   permissions?: PermissionV1.Ruleset,
 ): PromptQueueData {
   const data = queueDataFromMessage(message)

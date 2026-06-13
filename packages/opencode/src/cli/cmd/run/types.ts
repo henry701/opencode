@@ -14,7 +14,7 @@
 import type { KeyEvent, Renderable } from "@opentui/core"
 import type { Binding } from "@opentui/keymap"
 import type { OpencodeClient, PermissionRequest, QuestionRequest, ToolPart } from "@opencode-ai/sdk/v2"
-import type { TuiConfig } from "@/cli/cmd/tui/config/tui"
+import type { TuiConfig } from "@opencode-ai/tui/config"
 
 export type RunFilePart = {
   type: "file"
@@ -84,6 +84,7 @@ export type RunInput = {
   files: RunFilePart[]
   initialInput?: string
   thinking: boolean
+  backgroundSubagents: boolean
   demo?: boolean
 }
 
@@ -99,7 +100,7 @@ export type FooterState = {
   phase: FooterPhase
   status: string
   queue: number
-  queued: QueuedPromptPreview[]
+  queued?: QueuedPromptPreview[]
   model: string
   duration: string
   usage: string
@@ -112,6 +113,12 @@ export type FooterState = {
 export type FooterPatch = Partial<FooterState>
 
 export type RunDiffStyle = "auto" | "stacked"
+
+export type TurnSummary = {
+  agent: string
+  model: string
+  duration: string
+}
 
 export type ScrollbackOptions = {
   diffStyle?: RunDiffStyle
@@ -190,8 +197,10 @@ export type FooterPromptRoute =
   | { type: "subagent-menu" }
   | { type: "subagent"; sessionID: string }
   | { type: "command" }
+  | { type: "skill" }
   | { type: "model" }
   | { type: "variant" }
+  | { type: "queued-menu" }
 
 export type FooterSubagentTab = {
   sessionID: string
@@ -199,7 +208,8 @@ export type FooterSubagentTab = {
   callID: string
   label: string
   description: string
-  status: "running" | "completed" | "error"
+  status: "running" | "completed" | "cancelled" | "error"
+  background?: boolean
   title?: string
   toolCalls?: number
   lastUpdatedAt: number
@@ -246,7 +256,11 @@ export type FooterEvent =
   | {
       type: "queue"
       queue: number
-      queued: QueuedPromptPreview[]
+      queued: FooterQueuedPrompt[]
+    }
+  | {
+      type: "queued.prompts"
+      prompts: FooterQueuedPrompt[]
     }
   | {
       type: "first"
@@ -328,6 +342,7 @@ export type StreamCommit = {
   text: string
   phase: StreamPhase
   source: StreamSource
+  summary?: TurnSummary
   messageID?: string
   partID?: string
   tool?: string
@@ -362,6 +377,7 @@ export type LocalReplayRow = {
 export type FooterApi = {
   readonly isClosed: boolean
   onPrompt(fn: (input: RunPrompt) => void): () => void
+  onQueuedRemove?(fn: (messageID: string) => boolean | Promise<boolean>): () => void
   onClose(fn: () => void): () => void
   setQueueControl?(control: QueueControl | undefined): void
   event(next: FooterEvent): void

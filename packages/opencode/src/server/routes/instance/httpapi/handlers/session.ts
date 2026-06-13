@@ -340,9 +340,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       yield* promptSvc.prompt({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
-            yield* Effect.logError("prompt_async failed").pipe(
-              Effect.annotateLogs({ sessionID: ctx.params.sessionID, cause }),
-            )
+            yield* Effect.logError("prompt_async failed", { sessionID: ctx.params.sessionID, cause })
             yield* events.publish(Session.Event.Error, {
               sessionID: ctx.params.sessionID,
               error: new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
@@ -441,7 +439,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: unknown
     }) {
       yield* requireSession(ctx.params.sessionID)
-      const message = ctx.payload as MessageV2.WithParts
+      const message = ctx.payload as SessionV1.WithParts
       const ok = yield* promptSvc.updateDeferredQueue(ctx.params.sessionID, ctx.params.queueID, message)
       if (!ok) return yield* Effect.fail(ApiError.notFound("Queued message not found"))
       return true
@@ -452,7 +450,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: unknown
     }) {
       yield* requireSession(ctx.params.sessionID)
-      const message = ctx.payload as MessageV2.WithParts | undefined
+      const message = ctx.payload as SessionV1.WithParts | undefined
       return yield* promptSvc
         .sendDeferredNow(ctx.params.sessionID, ctx.params.queueID, message)
         .pipe(Effect.mapError(mapQueuePromptError))
