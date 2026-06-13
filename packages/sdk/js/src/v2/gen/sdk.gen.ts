@@ -3511,7 +3511,6 @@ export class Queue extends HeyApiClient {
       format?: OutputFormat
       system?: string
       variant?: string
-      delivery?: "immediate" | "deferred" | "queue" | "steer"
       parts?: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
     },
     options?: Options<never, ThrowOnError>,
@@ -3532,7 +3531,6 @@ export class Queue extends HeyApiClient {
             { in: "body", key: "format" },
             { in: "body", key: "system" },
             { in: "body", key: "variant" },
-            { in: "body", key: "delivery" },
             { in: "body", key: "parts" },
           ],
         },
@@ -4100,7 +4098,6 @@ export class Session2 extends HeyApiClient {
       format?: OutputFormat
       system?: string
       variant?: string
-      delivery?: "immediate" | "deferred" | "queue" | "steer"
       parts?: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
     },
     options?: Options<never, ThrowOnError>,
@@ -4121,7 +4118,6 @@ export class Session2 extends HeyApiClient {
             { in: "body", key: "format" },
             { in: "body", key: "system" },
             { in: "body", key: "variant" },
-            { in: "body", key: "delivery" },
             { in: "body", key: "parts" },
           ],
         },
@@ -4455,7 +4451,6 @@ export class Session2 extends HeyApiClient {
       format?: OutputFormat
       system?: string
       variant?: string
-      delivery?: "immediate" | "deferred" | "queue" | "steer"
       parts?: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
     },
     options?: Options<never, ThrowOnError>,
@@ -4476,7 +4471,6 @@ export class Session2 extends HeyApiClient {
             { in: "body", key: "format" },
             { in: "body", key: "system" },
             { in: "body", key: "variant" },
-            { in: "body", key: "delivery" },
             { in: "body", key: "parts" },
           ],
         },

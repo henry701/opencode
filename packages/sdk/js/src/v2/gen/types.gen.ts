@@ -258,6 +258,7 @@ export type UserMessage = {
   tools?: {
     [key: string]: boolean
   }
+  delivery?: "immediate" | "deferred"
 }
 
 export type ProviderAuthError = {
@@ -370,8 +371,8 @@ export type AssistantMessage = {
   structured?: unknown
   variant?: string
   finish?: string
-  tool_defs?: string
   system_prompt?: string
+  tool_defs?: string
 }
 
 export type Message = UserMessage | AssistantMessage
@@ -7993,7 +7994,6 @@ export type SessionPromptData = {
     format?: OutputFormat
     system?: string
     variant?: string
-    delivery?: "immediate" | "deferred" | "queue" | "steer"
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
   path: {
@@ -8341,7 +8341,6 @@ export type SessionPromptAsyncData = {
     format?: OutputFormat
     system?: string
     variant?: string
-    delivery?: "immediate" | "deferred" | "queue" | "steer"
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
   path: {
@@ -8789,7 +8788,6 @@ export type SessionQueueEnqueueData = {
     format?: OutputFormat
     system?: string
     variant?: string
-    delivery?: "immediate" | "deferred" | "queue" | "steer"
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
   path: {
