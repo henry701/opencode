@@ -34,7 +34,13 @@ import { usePromptHistory, type PromptInfo } from "../../prompt/history"
 import { computePromptTraits } from "../../prompt/traits"
 import { expandPastedTextPlaceholders, expandTrackedPastedText } from "../../prompt/part"
 import { usePromptStash } from "../../prompt/stash"
-import { queueEditCommitPlan, queueEditSwitchPlan, queueSendNowTransitionPlan } from "../../queue/edit"
+import {
+  queueEditCommitPlan,
+  queueEditSwitchPlan,
+  queueSendNowEmptyEditPlan,
+  queueSendNowDispatch,
+  queueSendNowTransitionPlan,
+} from "../../queue/edit"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { queueMutationError } from "./queue-actions"
@@ -1276,7 +1282,6 @@ export function Prompt(props: PromptProps) {
       if (editingQueuedMessageID() === messageID) await exitQueueEditModeAndResume(sessionID)
       return false
     }
-    const nextID = items[index + 1]?.id
 
     const activeEditID = editingQueuedMessageID()
     const editing = activeEditID === messageID
@@ -1308,10 +1313,11 @@ export function Prompt(props: PromptProps) {
           return false
         }
 
-        if (nextID) {
+        const emptyTransition = queueSendNowEmptyEditPlan({ items, messageID })
+        if (emptyTransition.type === "advance") {
           clearPromptDraft()
           setEditingQueuedMessageID(undefined)
-          const advanced = await editQueuedMessage(nextID, { internal: true })
+          const advanced = await editQueuedMessage(emptyTransition.editID, { internal: true })
           if (!advanced) await exitQueueEditModeAndResume(sessionID, { force: true })
         } else {
           await exitQueueEditModeAndResume(sessionID)
@@ -1358,29 +1364,31 @@ export function Prompt(props: PromptProps) {
         await exitQueueEditModeAndResume(sessionID, { force: true })
       }
 
-      const sendTask = sdk.client.session.queue
-        .send({
-          sessionID,
-          queueID: messageID,
-          ...(body ? { body } : {}),
-        })
-        .then((result) => {
-          const sendError = queueMutationError({ result, fallback: "no response" })
-          if (sendError) throw sendError
-        })
-        .catch(async (sendError: unknown) => {
+      const sendTask = queueSendNowDispatch({
+        send: () =>
+          sdk.client.session.queue
+            .send({
+              sessionID,
+              queueID: messageID,
+              ...(body ? { body } : {}),
+            })
+            .then((result) => {
+              const sendError = queueMutationError({ result, fallback: "no response" })
+              if (sendError) throw sendError
+            }),
+        onError: async (sendError: unknown) => {
           toast.show({
             message: `Sending queued prompt failed: ${errorMessage(sendError)}`,
             variant: "error",
           })
           if (!editing && pauseForSend && !keepEditingOther) await resumeQueueDrain(sessionID)
           await restoreFailedSendEdit()
-        })
+        },
+        releaseControls: releaseQueueComposer,
+      })
 
       if (editorParts.length > 0) editor.markSelectionSent()
       props.onSubmit?.()
-
-      releaseQueueComposer()
 
       if (promptDisposed) {
         await resumeQueueDrain(sessionID)

@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import { queueMutationError } from "../../../src/component/prompt/queue-actions"
-import { queueEditCommitPlan, queueEditSwitchPlan, queueSendNowTransitionPlan } from "../../../src/queue/edit"
+import {
+  queueEditCommitPlan,
+  queueEditSwitchPlan,
+  queueSendNowEmptyEditPlan,
+  queueSendNowDispatch,
+  queueSendNowTransitionPlan,
+} from "../../../src/queue/edit"
 
 describe("main TUI prompt queue actions", () => {
   test("treats missing queue mutation results as failures", () => {
@@ -48,6 +54,22 @@ describe("main TUI prompt queue actions", () => {
     })
   })
 
+  test("send-now keeps the current edit when sending a different queued message", () => {
+    expect(
+      queueSendNowTransitionPlan({
+        items: [
+          { id: "pqu_1", text: "first" },
+          { id: "pqu_2", text: "second" },
+        ],
+        messageID: "pqu_1",
+        editingID: "pqu_2",
+      }),
+    ).toEqual({
+      type: "keep",
+      releaseControlsBeforeSendSettles: true,
+    })
+  })
+
   test("send-now selects the queued edit above when the sent item has no item below", () => {
     expect(
       queueSendNowTransitionPlan({
@@ -76,5 +98,44 @@ describe("main TUI prompt queue actions", () => {
       type: "exit",
       releaseControlsBeforeSendSettles: true,
     })
+  })
+
+  test("empty send-now removes the current item and advances only to the next queued edit", () => {
+    const items = [
+      { id: "pqu_1", text: "first" },
+      { id: "pqu_2", text: "second" },
+      { id: "pqu_3", text: "third" },
+    ]
+
+    expect(queueSendNowEmptyEditPlan({ items, messageID: "pqu_2" })).toEqual({ type: "advance", editID: "pqu_3" })
+    expect(queueSendNowEmptyEditPlan({ items, messageID: "pqu_3" })).toEqual({ type: "exit" })
+  })
+
+  test("send-now dispatch releases controls before the send turn settles", async () => {
+    let resolveSend!: () => void
+    let released = false
+    let settled = false
+    const sendTask = queueSendNowDispatch({
+      send: () =>
+        new Promise<void>((resolve) => {
+          resolveSend = resolve
+        }),
+      onError: () => {},
+      releaseControls: () => {
+        released = true
+      },
+    })
+    void sendTask.then(() => {
+      settled = true
+    })
+
+    await Bun.sleep(0)
+
+    expect(released).toBe(true)
+    expect(settled).toBe(false)
+
+    resolveSend()
+    await sendTask
+    expect(settled).toBe(true)
   })
 })

@@ -1,7 +1,7 @@
 // Subprocess smoke: mocked LLM via `opencode serve`, deferred queue through the
 // HTTP API (same path as TUI attach), plus optional `script` capture of
 // `opencode attach` for a real terminal frame.
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Scope } from "effect"
 import { mkdir, readFile } from "node:fs/promises"
 import path from "node:path"
@@ -10,6 +10,10 @@ import { pollWithTimeout } from "../../lib/effect"
 
 const opencodeRoot = path.resolve(import.meta.dir, "../../..")
 const scriptPath = path.resolve(opencodeRoot, "../tui/test/cli/tui/scripts/prompt-queue-tui-smoke.sh")
+
+test("prompt queue TUI smoke script exists", async () => {
+  expect(await Bun.file(scriptPath).exists()).toBe(true)
+})
 
 const deferredAsPromise = <A>(deferred: Deferred.Deferred<A>): PromiseLike<A> => ({
   then: (onfulfilled, onrejected) => {
