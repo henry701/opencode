@@ -282,6 +282,8 @@ export const dict = {
   "prompt.context.removeFile": "Remove file from context",
   "prompt.action.attachFile": "Add files",
   "prompt.attachment.remove": "Remove attachment",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
   "prompt.action.send": "Send",
   "prompt.action.stop": "Stop",
 

@@ -19,6 +19,7 @@ export interface MockServerConfig {
   sessions: ({ id: string } & Record<string, unknown>)[]
   pageMessages: (sessionId: string, limit: number, before?: string) => { items: unknown[]; cursor?: string }
   status?: Record<string, unknown>
+  queue?: Record<string, { id: string; text: string }[]>
   events?: () => unknown[]
 }
 
@@ -59,6 +60,10 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
     }
 
     if (/^\/session\/[^/]+\/(children|todo|diff)$/.test(path)) return json(route, [])
+
+    const queueMatch = path.match(/^\/session\/([^/]+)\/queue$/)
+    if (queueMatch && route.request().method() === "GET") return json(route, config.queue?.[queueMatch[1]] ?? [])
+    if (queueMatch && route.request().method() === "POST") return json(route, { id: "pqu_mock" })
 
     const messagesMatch = path.match(/^\/session\/([^/]+)\/message$/)
     if (messagesMatch) {

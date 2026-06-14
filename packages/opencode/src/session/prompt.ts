@@ -708,6 +708,7 @@ export const layer = Layer.effect(
         },
         system: input.system,
         format: input.format,
+        ...(input.delivery === "deferred" ? { delivery: "deferred" as const } : {}),
       }
 
       if (current?.agent !== info.agent) {
@@ -1111,11 +1112,13 @@ export const layer = Layer.effect(
       )
       // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
       if (flags.experimentalEventSystem) {
+        const delivery =
+          "delivery" in info && info.delivery === "deferred" ? ("queue" as const) : ("steer" as const)
         yield* events.publish(SessionEvent.Prompted, {
           sessionID: input.sessionID,
           messageID: SessionMessage.ID.create(),
           timestamp: DateTime.makeUnsafe(info.time.created),
-          delivery: "steer",
+          delivery,
           prompt: new Prompt({
             text: nextPrompt.text.join("\n"),
             files: nextPrompt.files,
@@ -1731,6 +1734,7 @@ export const PromptInput = Schema.Struct({
   format: Schema.optional(SessionV1.Format),
   system: Schema.optional(Schema.String),
   variant: Schema.optional(Schema.String),
+  delivery: Schema.optional(Schema.Literals(["immediate", "deferred", "queue", "steer"])),
   parts: Schema.Array(
     Schema.Union([
       SessionV1.TextPartInput,

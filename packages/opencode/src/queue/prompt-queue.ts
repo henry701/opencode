@@ -330,6 +330,7 @@ export function materializeQueuedItem(item: QueueItem): SessionV1.WithParts {
     tools: item.data.tools,
     system: item.data.system,
     format: item.data.format,
+    delivery: "immediate",
   }
   const parts = item.data.parts.map((part) => {
     const partID = part.id ? PartID.make(part.id) : PartID.ascending()

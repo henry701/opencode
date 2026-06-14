@@ -277,6 +277,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const imageAttachments = createMemo(() =>
     prompt.current().filter((part): part is ImageAttachmentPart => part.type === "image"),
   )
+  const [queueMode, setQueueMode] = createSignal(false)
+  const [localEditingQueueID, setLocalEditingQueueID] = createSignal<string | undefined>()
+  const editingQueueID = () => props.editingQueueID ?? localEditingQueueID()
+  const setEditingQueueID = (id: string | undefined) => {
+    props.onEditingQueueMessageID?.(id)
+    if (props.onEditingQueueMessageID === undefined) setLocalEditingQueueID(id)
+  }
 
   const [store, setStore] = createStore<{
     popover: "at" | "slash" | null
@@ -342,6 +349,28 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       </div>
     )
   }
+
+  const queueToggle = () => (
+    <Show when={store.mode === "normal" && !!params.id}>
+      <Tooltip
+        placement="top"
+        value={queueMode() ? language.t("prompt.action.sendDirect") : language.t("prompt.action.queue")}
+      >
+        <IconButton
+          data-action="prompt-queue-toggle"
+          type="button"
+          icon="bullet-list"
+          variant={queueMode() ? "secondary" : "ghost"}
+          class="size-7 rounded-md p-[6px] text-v2-icon-icon-muted"
+          style={buttons()}
+          onClick={() => setQueueMode((value) => !value)}
+          tabIndex={store.mode === "normal" ? undefined : -1}
+          aria-pressed={queueMode()}
+          aria-label={queueMode() ? language.t("prompt.action.sendDirect") : language.t("prompt.action.queue")}
+        />
+      </Tooltip>
+    </Show>
+  )
 
   const contextItems = createMemo(() => {
     const items = prompt.context.items()
@@ -1153,8 +1182,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     newSessionWorktree: () => props.newSessionWorktree,
     onNewSessionWorktreeReset: props.onNewSessionWorktreeReset,
     shouldQueue: props.shouldQueue,
-    editingQueueID: () => props.editingQueueID,
-    resetEditingQueueID: () => props.onEditingQueueMessageID?.(undefined),
+    queueMode,
+    resetQueueMode: () => setQueueMode(false),
+    editingQueueID: () => editingQueueID(),
+    resetEditingQueueID: () => setEditingQueueID(undefined),
     onQueue: props.onQueue,
     onAbort: props.onAbort,
     onSubmit: props.onSubmit,
@@ -1299,6 +1330,14 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       if (navigateHistory(direction)) {
         event.preventDefault()
       }
+      return
+    }
+
+    if (event.altKey && event.key === "Enter" && store.mode !== "shell") {
+      event.preventDefault()
+      if (event.repeat) return
+      setQueueMode(true)
+      void handleSubmit(event)
       return
     }
 
@@ -1639,13 +1678,22 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     </div>
                   </Show>
                 </div>
+                {queueToggle()}
                 <Tooltip placement="top" inactive={!working() && blank()} value={tip()}>
                   <IconButton
                     data-action="prompt-submit"
                     type="submit"
                     disabled={!working() && blank()}
                     tabIndex={store.mode === "normal" ? undefined : -1}
-                    icon={stopping() ? "stop" : store.mode === "shell" ? "arrow-undo-down" : "arrow-up"}
+                    icon={
+                      stopping()
+                        ? "stop"
+                        : queueMode() && store.mode === "normal"
+                          ? "bullet-list"
+                          : store.mode === "shell"
+                            ? "arrow-undo-down"
+                            : "arrow-up"
+                    }
                     variant="primary"
                     class="size-7 rounded-md p-[6px] text-v2-icon-icon-muted shadow-[var(--v2-elevation-button-contrast)] disabled:opacity-50"
                     style={{
@@ -1782,13 +1830,22 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 />
 
                 <div class="flex items-center gap-1 pointer-events-auto">
+                  {queueToggle()}
                   <Tooltip placement="top" inactive={!working() && blank()} value={tip()}>
                     <IconButton
                       data-action="prompt-submit"
                       type="submit"
                       disabled={!working() && blank()}
                       tabIndex={store.mode === "normal" ? undefined : -1}
-                      icon={stopping() ? "stop" : store.mode === "shell" ? "arrow-undo-down" : "arrow-up"}
+                      icon={
+                        stopping()
+                          ? "stop"
+                          : queueMode() && store.mode === "normal"
+                            ? "bullet-list"
+                            : store.mode === "shell"
+                              ? "arrow-undo-down"
+                              : "arrow-up"
+                      }
                       variant="primary"
                       class="size-8"
                       aria-label={stopping() ? language.t("prompt.action.stop") : language.t("prompt.action.send")}

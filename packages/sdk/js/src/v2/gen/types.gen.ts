@@ -7994,6 +7994,7 @@ export type SessionPromptData = {
     format?: OutputFormat
     system?: string
     variant?: string
+    delivery?: "immediate" | "deferred" | "queue" | "steer"
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
   path: {
@@ -8341,6 +8342,7 @@ export type SessionPromptAsyncData = {
     format?: OutputFormat
     system?: string
     variant?: string
+    delivery?: "immediate" | "deferred" | "queue" | "steer"
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
   path: {
@@ -8788,6 +8790,7 @@ export type SessionQueueEnqueueData = {
     format?: OutputFormat
     system?: string
     variant?: string
+    delivery?: "immediate" | "deferred" | "queue" | "steer"
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
   path: {
