@@ -9,7 +9,7 @@ import { cliIt, testModelID } from "../../lib/cli-process"
 import { pollWithTimeout } from "../../lib/effect"
 
 const opencodeRoot = path.resolve(import.meta.dir, "../../..")
-const scriptPath = path.join(import.meta.dir, "scripts/prompt-queue-tui-smoke.sh")
+const scriptPath = path.resolve(opencodeRoot, "../tui/test/cli/tui/scripts/prompt-queue-tui-smoke.sh")
 
 const deferredAsPromise = <A>(deferred: Deferred.Deferred<A>): PromiseLike<A> => ({
   then: (onfulfilled, onrejected) => {
