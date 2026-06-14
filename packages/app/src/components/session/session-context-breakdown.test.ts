@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { Message, Part } from "@opencode-ai/sdk/v2/client"
 import { estimateSessionContextBreakdown } from "./session-context-breakdown"
+import { getSessionSystemPrompt } from "./session-context-system"
 
 const user = (id: string) => {
   return {
@@ -10,12 +11,13 @@ const user = (id: string) => {
   } as unknown as Message
 }
 
-const assistant = (id: string, toolDefs?: string) => {
+const assistant = (id: string, toolDefs?: string, systemPrompt?: string) => {
   return {
     id,
     role: "assistant",
     time: { created: 1 },
     tool_defs: toolDefs,
+    system_prompt: systemPrompt,
   } as unknown as Message
 }
 
@@ -79,5 +81,25 @@ describe("estimateSessionContextBreakdown", () => {
 
     const map = Object.fromEntries(output.map((segment) => [segment.key, segment.tokens]))
     expect(map.toolDefs).toBe(Math.ceil(latestToolDefs.length / 4))
+  })
+
+  test("uses persisted assistant context metadata for system and tool definition segments", () => {
+    const systemPrompt = "persisted assistant system prompt"
+    const toolDefs = "persisted tool definitions"
+    const messages = [user("u1"), assistant("a1", toolDefs, systemPrompt)]
+
+    const output = estimateSessionContextBreakdown({
+      messages,
+      parts: {
+        u1: [{ type: "text", text: "hello" }] as unknown as Part[],
+        a1: [{ type: "text", text: "answer" }] as unknown as Part[],
+      },
+      input: 100,
+      systemPrompt: getSessionSystemPrompt(messages),
+    })
+
+    const map = Object.fromEntries(output.map((segment) => [segment.key, segment.tokens]))
+    expect(map.system).toBe(Math.ceil(systemPrompt.length / 4))
+    expect(map.toolDefs).toBe(Math.ceil(toolDefs.length / 4))
   })
 })

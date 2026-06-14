@@ -30,7 +30,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import * as DateTime from "effect/DateTime"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { ToolOutput, Usage, type LLMEvent } from "@opencode-ai/llm"
+import { ToolOutput, Usage } from "@opencode-ai/llm"
 
 const DOOM_LOOP_THRESHOLD = 3
 export type Result = "compact" | "stop" | "continue"
@@ -85,7 +85,7 @@ interface ProcessorContext extends Input {
   v2AssistantMessageID: SessionMessage.ID | undefined
 }
 
-type StreamEvent = LLMEvent
+type StreamEvent = LLM.StreamEvent
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionProcessor") {}
 
@@ -370,6 +370,12 @@ export const layer = Layer.effect(
 
       const handleEvent = Effect.fnUntraced(function* (value: StreamEvent) {
         switch (value.type) {
+          case "context-metadata":
+            ctx.assistantMessage.system_prompt = value.systemPrompt
+            ctx.assistantMessage.tool_defs = value.toolDefs
+            yield* session.updateMessage(ctx.assistantMessage)
+            return
+
           case "reasoning-start":
             if (value.id in ctx.reasoningMap) return
             // TODO(v2): Temporary dual-write while migrating session messages to v2 events.

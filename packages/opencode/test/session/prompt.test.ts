@@ -316,6 +316,56 @@ const useServerConfig = Effect.fn("test.useServerConfig")(function* (config: (ur
   return { dir, llm }
 })
 
+function requestText(value: unknown): string {
+  if (typeof value === "string") return value
+  if (!Array.isArray(value)) return ""
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return ""
+      const part = item as Record<string, unknown>
+      if (typeof part.text === "string") return part.text
+      if (typeof part.content === "string") return part.content
+      return ""
+    })
+    .join("")
+}
+
+function providerSystemPrompt(input: Record<string, unknown>) {
+  const messages = input.messages
+  if (!Array.isArray(messages)) return ""
+  return messages
+    .flatMap((item) => {
+      if (!item || typeof item !== "object") return []
+      const message = item as Record<string, unknown>
+      if (message.role !== "system") return []
+      return requestText(message.content)
+    })
+    .filter((text) => text.length > 0)
+    .join("\n")
+    .trim()
+}
+
+function providerToolNames(input: Record<string, unknown>) {
+  const tools = input.tools
+  if (!Array.isArray(tools)) return []
+  return tools
+    .flatMap((item) => {
+      if (!item || typeof item !== "object") return []
+      const entry = item as Record<string, unknown>
+      const fn = entry.function
+      if (!fn || typeof fn !== "object") return []
+      const name = (fn as Record<string, unknown>).name
+      return typeof name === "string" ? [name] : []
+    })
+    .toSorted()
+}
+
+function storedToolNames(toolDefs: string | undefined) {
+  if (!toolDefs) return []
+  const parsed = JSON.parse(toolDefs) as Record<string, unknown>
+  return Object.keys(parsed).toSorted()
+}
+
 // Wait for a session's runner to enter a busy state. SessionStatus is flipped
 // inside Runner.startShell's serialized transition, so cancel can't no-op once
 // we observe it.
@@ -505,6 +555,38 @@ it.instance("loop calls LLM and returns assistant message", () =>
     const parts = result.parts.filter((p) => p.type === "text")
     expect(parts.some((p) => p.type === "text" && p.text === "world")).toBe(true)
     expect(yield* llm.hits).toHaveLength(1)
+  }),
+)
+
+it.instance("loop persists prepared system prompt and tool definitions for context accounting", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({
+      title: "Context accounting",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+    yield* llm.text("world")
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    const stored = yield* MessageV2.get({ sessionID: chat.id, messageID: result.info.id })
+    const inputs = yield* llm.inputs
+    const providerInput = inputs.at(-1)
+    expect(providerInput).toBeDefined()
+    if (!providerInput) return
+
+    expect(stored.info.role).toBe("assistant")
+    if (stored.info.role !== "assistant") return
+    expect(stored.info.system_prompt).toBe(providerSystemPrompt(providerInput))
+    expect(storedToolNames(stored.info.tool_defs)).toEqual(providerToolNames(providerInput))
+    expect(storedToolNames(stored.info.tool_defs).length).toBeGreaterThan(0)
   }),
 )
 

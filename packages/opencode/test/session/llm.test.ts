@@ -56,6 +56,8 @@ const it = testEffect(Layer.mergeAll(LLM.defaultLayer, Provider.defaultLayer))
 
 // LLM.stream returns a Stream, not an Effect, so we can't use the serviceUse proxy.
 const drain = (input: LLM.StreamInput) => LLM.Service.use((svc) => svc.stream(input).pipe(Stream.runDrain))
+const collectEvents = (input: LLM.StreamInput) =>
+  LLM.Service.use((svc) => svc.stream(input).pipe(Stream.runCollect)).pipe(Effect.map((events) => Array.from(events)))
 
 // drainWith builds an isolated runtime so the custom layer fully owns LLM and
 // its transitive deps — `Effect.provide(layer)` over an existing runtime layers
@@ -562,6 +564,35 @@ type Capture = {
   body: Record<string, unknown>
 }
 
+function requestText(value: unknown): string {
+  if (typeof value === "string") return value
+  if (!Array.isArray(value)) return ""
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return ""
+      const part = item as Record<string, unknown>
+      if (typeof part.text === "string") return part.text
+      if (typeof part.content === "string") return part.content
+      return ""
+    })
+    .join("")
+}
+
+function providerSystemPrompt(input: Record<string, unknown>) {
+  const messages = input.messages
+  if (!Array.isArray(messages)) return ""
+  return messages
+    .flatMap((item) => {
+      if (!item || typeof item !== "object") return []
+      const message = item as Record<string, unknown>
+      if (message.role !== "system") return []
+      return requestText(message.content)
+    })
+    .filter((text) => text.length > 0)
+    .join("\n")
+    .trim()
+}
+
 const state = {
   server: null as ReturnType<typeof Bun.serve> | null,
   queue: [] as Array<{
@@ -951,6 +982,84 @@ describe("session.llm.stream", () => {
         const capture = yield* Effect.promise(() => request)
         const tools = capture.body.tools as Array<{ function?: { name?: string } }> | undefined
         expect(tools?.some((item) => item.function?.name === "question")).toBe(true)
+      }),
+    {
+      config: () => ({
+        enabled_providers: [alibabaQwenFixture.providerID],
+        provider: {
+          [alibabaQwenFixture.providerID]: {
+            options: { apiKey: "test-key", baseURL: `${state.server!.url.origin}/v1` },
+          },
+        },
+      }),
+    },
+  )
+
+  it.instance(
+    "emits prepared context metadata before provider events",
+    () =>
+      Effect.gen(function* () {
+        const fixture = loadFixture(alibabaQwenFixture.providerID, alibabaQwenFixture.modelID)
+        const request = waitRequest(
+          "/chat/completions",
+          new Response(createChatStream("Hello"), {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+        )
+
+        const resolved = yield* Provider.use.getModel(
+          ProviderV2.ID.make(alibabaQwenFixture.providerID),
+          ModelV2.ID.make(fixture.model.id),
+        )
+        const sessionID = SessionID.make("session-test-context-metadata")
+        const agent = {
+          name: "test",
+          mode: "primary",
+          options: {},
+          permission: [{ permission: "blocked", pattern: "*", action: "deny" }],
+        } satisfies Agent.Info
+
+        const user = {
+          id: MessageID.make("msg_user-context-metadata"),
+          sessionID,
+          role: "user",
+          time: { created: Date.now() },
+          agent: agent.name,
+          model: { providerID: ProviderV2.ID.make(alibabaQwenFixture.providerID), modelID: resolved.id },
+        } satisfies SessionV1.User
+
+        const events = yield* collectEvents({
+          user,
+          sessionID,
+          model: resolved,
+          agent,
+          system: ["You are a helpful assistant."],
+          messages: [{ role: "user", content: "Hello" }],
+          tools: {
+            question: tool({
+              description: "Ask a question",
+              inputSchema: z.object({}),
+              execute: async () => ({ output: "" }),
+            }),
+            blocked: tool({
+              description: "Blocked tool",
+              inputSchema: z.object({}),
+              execute: async () => ({ output: "" }),
+            }),
+          },
+        })
+
+        const capture = yield* Effect.promise(() => request)
+        const providerTools = capture.body.tools as Array<{ function?: { name?: string } }> | undefined
+
+        expect(events[0]).toEqual(expect.objectContaining({ type: "context-metadata" }))
+        if (events[0]?.type !== "context-metadata") throw new Error("expected context metadata first")
+        expect(events[0].systemPrompt).toBe(providerSystemPrompt(capture.body))
+        const toolDefs = JSON.parse(events[0].toolDefs ?? "{}") as Record<string, unknown>
+        expect(Object.keys(toolDefs).toSorted()).toEqual(["question"])
+        expect(providerTools?.map((item) => item.function?.name).filter(Boolean).toSorted()).toEqual(["question"])
+        expect(events.some((event) => event.type === "text-delta")).toBe(true)
       }),
     {
       config: () => ({
