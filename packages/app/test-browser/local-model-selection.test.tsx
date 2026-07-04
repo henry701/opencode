@@ -128,4 +128,43 @@ describe("local model selection", () => {
 
     expect(seen).toEqual(["big-pickle", "claude-sonnet-4"])
   })
+
+  test("lets session history repair stale defaults without clobbering explicit picker changes", () => {
+    params = { id: "session-2" }
+    const host = document.createElement("div")
+    const seen: string[] = []
+
+    const Probe: Component = () => {
+      const local = Local.useLocal()
+      seen.push(local.model.current()?.id ?? "none")
+      local.session.restore({
+        sessionID: "session-2",
+        agent: "build",
+        model: { providerID: "anthropic", modelID: "claude-sonnet-4" },
+      })
+      seen.push(local.model.current()?.id ?? "none")
+      local.model.set({ providerID: "opencode", modelID: "big-pickle" }, { recent: true })
+      seen.push(local.model.current()?.id ?? "none")
+      local.session.restore({
+        sessionID: "session-2",
+        agent: "build",
+        model: { providerID: "anthropic", modelID: "claude-sonnet-4" },
+      })
+      seen.push(local.model.current()?.id ?? "none")
+      return null
+    }
+
+    const dispose = render(
+      () =>
+        createComponent(Local.LocalProvider, {
+          get children() {
+            return createComponent(Probe, {})
+          },
+        }),
+      host,
+    )
+    dispose()
+
+    expect(seen).toEqual(["big-pickle", "claude-sonnet-4", "big-pickle", "big-pickle"])
+  })
 })

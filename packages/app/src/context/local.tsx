@@ -18,6 +18,7 @@ type State = {
   agent?: string
   model?: ModelKey
   variant?: string | null
+  source?: "history" | "user"
 }
 
 type Saved = {
@@ -203,6 +204,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             agent: item.name,
             model: item.model ?? prev?.model,
             variant: item.variant ?? prev?.variant,
+            source: "user",
           } satisfies State
           const session = id()
           if (session) {
@@ -252,17 +254,20 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
 
     const snapshot = () => {
       const model = current()
+      const currentScope = scope()
       return {
         agent: agent.current()?.name,
         model: model ? { providerID: model.provider.id, modelID: model.id } : undefined,
         variant: selected(),
+        source: currentScope?.source,
       } satisfies State
     }
 
-    const write = (next: Partial<State>) => {
+    const write = (next: Partial<State>, source: State["source"] = "user") => {
       const state = {
         ...(scope() ?? { agent: agent.current()?.name }),
         ...next,
+        source,
       } satisfies State
 
       const session = id()
@@ -391,13 +396,14 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           const session = id()
           if (!session) return
           if (msg.sessionID !== session) return
-          if (saved.session[session] !== undefined) return
+          if (saved.session[session]?.source === "user") return
           if (handoff.has(handoffKey(serverSDK().scope, sdk().directory, session))) return
 
           setSaved("session", session, {
             agent: msg.agent,
             model: msg.model,
             variant: msg.model?.variant ?? null,
+            source: "history",
           })
         },
       },
