@@ -1,11 +1,12 @@
 import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
-import { createContext, useContext, type ParentProps } from "solid-js"
+import { createContext, createSignal, useContext, type ParentProps } from "solid-js"
 import { createComponent, render } from "solid-js/web"
 import type { Component } from "solid-js"
 import { ServerScope } from "@/utils/server-scope"
 
 let Local: typeof import("@/context/local")
 let params: { id?: string }
+const [catalogEmpty, setCatalogEmpty] = createSignal(false)
 
 const bigPickle = {
   id: "big-pickle",
@@ -58,17 +59,22 @@ beforeAll(async () => {
   mock.module("@/hooks/use-providers", () => ({
     useProviders: () => ({
       all: () =>
-        new Map([
-          ["opencode", { id: "opencode", name: "OpenCode", models: { "big-pickle": { id: "big-pickle" } } }],
-          [
-            "anthropic",
-            { id: "anthropic", name: "Anthropic", models: { "claude-sonnet-4": { id: "claude-sonnet-4" } } },
-          ],
-        ]),
-      connected: () => [
-        { id: "opencode", name: "OpenCode", models: { "big-pickle": { id: "big-pickle" } } },
-        { id: "anthropic", name: "Anthropic", models: { "claude-sonnet-4": { id: "claude-sonnet-4" } } },
-      ],
+        catalogEmpty()
+          ? new Map()
+          : new Map([
+              ["opencode", { id: "opencode", name: "OpenCode", models: { "big-pickle": { id: "big-pickle" } } }],
+              [
+                "anthropic",
+                { id: "anthropic", name: "Anthropic", models: { "claude-sonnet-4": { id: "claude-sonnet-4" } } },
+              ],
+            ]),
+      connected: () =>
+        catalogEmpty()
+          ? []
+          : [
+              { id: "opencode", name: "OpenCode", models: { "big-pickle": { id: "big-pickle" } } },
+              { id: "anthropic", name: "Anthropic", models: { "claude-sonnet-4": { id: "claude-sonnet-4" } } },
+            ],
       default: () => ({ opencode: "big-pickle" }),
     }),
   }))
@@ -100,6 +106,7 @@ beforeAll(async () => {
 beforeEach(() => {
   params = { id: "session-1" }
   localStorage.clear()
+  setCatalogEmpty(false)
 })
 
 describe("local model selection", () => {
@@ -166,5 +173,37 @@ describe("local model selection", () => {
     dispose()
 
     expect(seen).toEqual(["big-pickle", "claude-sonnet-4", "big-pickle", "big-pickle"])
+  })
+
+  test("keeps the explicit model while the provider catalog transiently empties", () => {
+    params = { id: "session-3" }
+    const host = document.createElement("div")
+    const seen: string[] = []
+
+    const Probe: Component = () => {
+      const local = Local.useLocal()
+      local.model.set({ providerID: "anthropic", modelID: "claude-sonnet-4" }, { recent: true })
+      seen.push(local.model.current()?.id ?? "none")
+      // Simulate a scoped provider refetch clearing the catalog mid-flight.
+      setCatalogEmpty(true)
+      seen.push(local.model.current()?.id ?? "none")
+      // Catalog settles again with the same providers.
+      setCatalogEmpty(false)
+      seen.push(local.model.current()?.id ?? "none")
+      return null
+    }
+
+    const dispose = render(
+      () =>
+        createComponent(Local.LocalProvider, {
+          get children() {
+            return createComponent(Probe, {})
+          },
+        }),
+      host,
+    )
+    dispose()
+
+    expect(seen).toEqual(["claude-sonnet-4", "claude-sonnet-4", "claude-sonnet-4"])
   })
 })
