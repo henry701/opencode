@@ -161,8 +161,6 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer.pipe(Layer.provide(Layer.mergeAll(EventV2Bridge.defaultLayer, Database.defaultLayer)))
-
-export const node = LayerNode.make(layer, [EventV2Bridge.node, Database.node])
+export const node = LayerNode.make({ service: Service, layer: layer, deps: [EventV2Bridge.node, Database.node] })
 
 export * as SessionPromptQueue from "./prompt-queue"
