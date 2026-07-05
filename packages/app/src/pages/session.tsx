@@ -1982,7 +1982,7 @@ export default function Page() {
         [
           params.id,
           local.model.current()?.providerID,
-          local.model.current()?.modelID,
+          local.model.current()?.id,
           autoScroll.userScrolled(),
         ] as const,
       ([id, , , scrolled], prev) => {
@@ -1990,7 +1990,7 @@ export default function Page() {
         if (!prev) return
         const [, prevProvider, prevModel] = prev
         const provider = local.model.current()?.providerID
-        const model = local.model.current()?.modelID
+        const model = local.model.current()?.id
         if (provider === prevProvider && model === prevModel) return
         const el = scroller
         if (el) setTimelineScrollTop(el.scrollTop)
