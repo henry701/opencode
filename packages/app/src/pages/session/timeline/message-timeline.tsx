@@ -89,6 +89,22 @@ type TimelineRowByTag<T extends TimelineRow.TimelineRow["_tag"]> = Extract<Timel
 const timelineFallbackItemSize = 60
 const timelineCache = new Map<string, { measurements: VirtualItem[]; toolOpen: Record<string, boolean | undefined> }>()
 
+// TanStack Virtual tracks scroll offset from scroll events. When the DOM is already at the
+// preserved offset, programmatic writes are no-ops and the virtualizer can render the wrong
+// range until the user scrolls. Nudge scrollTop so observeElementOffset resyncs.
+const syncTimelineScrollToDom = (root: HTMLDivElement, scrollTop: number) => {
+  const max = Math.max(0, root.scrollHeight - root.clientHeight)
+  const target = Math.min(Math.max(scrollTop, 0), max)
+  if (Math.abs(root.scrollTop - target) > 1) {
+    root.scrollTop = target
+    return
+  }
+  if (max <= 0) return
+  const nudge = target < max ? target + 1 : target - 1
+  root.scrollTop = nudge
+  root.scrollTop = target
+}
+
 const taskDescription = (part: PartType, sessionID: string) => {
   if (part.type !== "tool" || part.tool !== "task") return
   const metadata = "metadata" in part.state ? part.state.metadata : undefined
@@ -435,15 +451,16 @@ export function MessageTimeline(props: {
         props.preservedScrollTop ?? 0,
         root?.scrollTop ?? 0,
       )
-      if (!props.shouldAnchorBottom() && preserved > 80 && offset < preserved - 80) {
-        offset = preserved
-      }
+      const clamped =
+        !props.shouldAnchorBottom() && preserved > 80 && offset < preserved - 80
+      if (clamped) offset = preserved
       // Expose the computed range before core writes an anchor correction so the browser does not clamp it to the old height.
       if (virtualContent) {
         const next = timelineContentHeight(timelineRowCount(), instance.getTotalSize())
         virtualContent.style.height = `${next}px`
       }
       elementScroll(offset, options, instance)
+      if (clamped && root) syncTimelineScrollToDom(root, offset)
     },
     get getItemKey() {
       const rows = timelineRows()
@@ -583,11 +600,9 @@ export function MessageTimeline(props: {
     const restore = (attempt = 0) => {
       const current = listRoot()
       if (!current || props.shouldAnchorBottom()) return
-      if (Math.abs(current.scrollTop - scrollTop) > 1) current.scrollTop = scrollTop
+      syncTimelineScrollToDom(current, scrollTop)
       virtualizer.getVirtualItems()
-      if (attempt < 8 && Math.abs(current.scrollTop - scrollTop) > 1) {
-        requestAnimationFrame(() => restore(attempt + 1))
-      }
+      if (attempt < 8) requestAnimationFrame(() => restore(attempt + 1))
     }
     syncVirtualScrollFrame = requestAnimationFrame(() => {
       syncVirtualScrollFrame = undefined

@@ -1976,6 +1976,30 @@ export default function Page() {
     },
   )
 
+  createEffect(
+    on(
+      () =>
+        [
+          params.id,
+          local.model.current()?.providerID,
+          local.model.current()?.modelID,
+          autoScroll.userScrolled(),
+        ] as const,
+      ([id, , , scrolled], prev) => {
+        if (!id || !scrolled) return
+        if (!prev) return
+        const [, prevProvider, prevModel] = prev
+        const provider = local.model.current()?.providerID
+        const model = local.model.current()?.modelID
+        if (provider === prevProvider && model === prevModel) return
+        const el = scroller
+        if (el) setTimelineScrollTop(el.scrollTop)
+        setComposerLayoutEpoch((value) => value + 1)
+      },
+      { defer: true },
+    ),
+  )
+
   const { clearMessageHash, scrollToMessage } = useSessionHashScroll({
     sessionKey,
     sessionID: () => params.id,
