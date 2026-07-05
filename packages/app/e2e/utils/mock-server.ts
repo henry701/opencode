@@ -10,6 +10,7 @@ export interface MockServerConfig {
   sessions: ({ id: string } & Record<string, unknown>)[]
   createSession?: () => { id: string } & Record<string, unknown>
   onPromptAsync?: (input: { sessionID: string; body: unknown }) => void
+  onQueueSend?: (input: { sessionID: string; queueID: string; raw: string | null; body: unknown }) => void
   agents?: unknown[]
   pageMessages: (sessionId: string, limit: number, before?: string) => { items: unknown[]; cursor?: string }
   status?: Record<string, unknown>
@@ -114,6 +115,18 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
     const queueMatch = path.match(/^\/session\/([^/]+)\/queue$/)
     if (queueMatch && route.request().method() === "GET") return json(route, config.queue?.[queueMatch[1]] ?? [])
     if (queueMatch && route.request().method() === "POST") return json(route, { id: "pqu_mock" })
+
+    const queueSendMatch = path.match(/^\/session\/([^/]+)\/queue\/([^/]+)\/send$/)
+    if (queueSendMatch && route.request().method() === "POST") {
+      const raw = route.request().postData()
+      config.onQueueSend?.({
+        sessionID: queueSendMatch[1]!,
+        queueID: queueSendMatch[2]!,
+        raw,
+        body: raw ? JSON.parse(raw) : undefined,
+      })
+      return json(route, true)
+    }
 
     const promptAsyncMatch = path.match(/^\/session\/([^/]+)\/prompt_async$/)
     if (promptAsyncMatch && route.request().method() === "POST") {

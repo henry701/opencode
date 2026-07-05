@@ -644,12 +644,13 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
             await ctx.sdk.session.queue.send({
               sessionID: state.sessionID,
               queueID,
-              body: buildQueueSendPayload({
-                agent: state.agent,
-                model: state.model,
-                variant: state.activeVariant,
-                prompt,
-              }),
+              body:
+                buildQueueSendPayload({
+                  agent: state.agent,
+                  model: state.model,
+                  variant: state.activeVariant,
+                  prompt,
+                }) ?? null,
             })
           },
       pauseQueueDrainRemote: state.demo

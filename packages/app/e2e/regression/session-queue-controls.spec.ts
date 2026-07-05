@@ -69,3 +69,50 @@ test("shows explicit queue controls and queues with Alt+Enter", async ({ page })
   await expect.poll(() => queueRequests.length).toBe(1)
   expect(queueRequests[0]).toContain(queuedText)
 })
+
+test("sends queued follow-ups with an explicit JSON body", async ({ page }) => {
+  const sends: Array<{ sessionID: string; queueID: string; raw: string | null; body: unknown }> = []
+
+  await mockOpenCodeServer(page, {
+    directory,
+    project: {
+      id: projectID,
+      worktree: directory,
+      vcs: "git",
+      name: "session-queue-controls-regression",
+      time: { created: 1700000000000, updated: 1700000000000 },
+      sandboxes: [],
+    },
+    provider: {
+      all: [
+        {
+          id: "opencode",
+          name: "OpenCode",
+          models: { "test-model": { id: "test-model", name: "Test Model", limit: { context: 200_000 } } },
+        },
+      ],
+      connected: ["opencode"],
+      default: model,
+    },
+    sessions: [session],
+    status: { [sessionID]: { type: "busy" } },
+    queue: { [sessionID]: [{ id: "pqu_send_now", text: "send this queued prompt now" }] },
+    pageMessages: () => ({ items: [] }),
+    onQueueSend: (input) => sends.push(input),
+  })
+
+  await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
+  await expectSessionTitle(page, session.title)
+
+  const followupDock = page.locator('[data-component="session-followup-dock"]')
+  await expectAppVisible(followupDock)
+  await followupDock.getByRole("button", { name: "Send now" }).click()
+
+  await expect.poll(() => sends.length).toBe(1)
+  expect(sends[0]).toEqual({
+    sessionID,
+    queueID: "pqu_send_now",
+    raw: "null",
+    body: null,
+  })
+})

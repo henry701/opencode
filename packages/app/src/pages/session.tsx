@@ -1680,7 +1680,7 @@ export default function Page() {
       if (input.manual) setFollowup("paused", input.sessionID, undefined)
       setFollowup("failed", input.sessionID, undefined)
 
-      await sdk().client.session.queue.send({ sessionID: input.sessionID, queueID: input.id }).catch((err) => {
+      await sdk().client.session.queue.send({ sessionID: input.sessionID, queueID: input.id, body: null }).catch((err) => {
         setFollowup("failed", input.sessionID, input.id)
         fail(err)
         throw err

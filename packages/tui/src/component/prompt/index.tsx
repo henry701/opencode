@@ -1373,7 +1373,7 @@ export function Prompt(props: PromptProps) {
             .send({
               sessionID,
               queueID: messageID,
-              ...(body ? { body } : {}),
+              body: body ?? null,
             })
             .then((result) => {
               const sendError = queueMutationError({ result, fallback: "no response" })
