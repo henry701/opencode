@@ -325,6 +325,16 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     const isNewSession = !params.id
     const shouldAutoAccept = isNewSession && input.autoAccept()
     const worktreeSelection = input.newSessionWorktree?.() || "main"
+    const model = {
+      modelID: currentModel.id,
+      providerID: currentModel.provider.id,
+    }
+    const modelSelection = {
+      ...model,
+      ...(currentModel.name ? { name: currentModel.name } : {}),
+      ...(currentModel.provider.name ? { providerName: currentModel.provider.name } : {}),
+    }
+    const agent = currentAgent.name
 
     let sessionDirectory = projectDirectory
     let client = sdk().client
@@ -384,7 +394,12 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         seed(sessionDirectory, created)
         session = created
         if (shouldAutoAccept) permission.enableAutoAccept(session.id, sessionDirectory)
-        local.session.promote(sessionDirectory, session.id)
+        local.session.promote(sessionDirectory, session.id, {
+          agent,
+          model: modelSelection,
+          variant: variant ?? null,
+          source: "user",
+        })
         layout.handoff.setTabs(base64Encode(sessionDirectory), session.id)
         const draftID = search.draftId
         if (draftID) tabs.promoteDraft(draftID, { server: tabs.draft(draftID).server, sessionId: session.id })
@@ -400,11 +415,6 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       return
     }
 
-    const model = {
-      modelID: currentModel.id,
-      providerID: currentModel.provider.id,
-    }
-    const agent = currentAgent.name
     const draft: FollowupDraft = {
       sessionID: session.id,
       sessionDirectory,

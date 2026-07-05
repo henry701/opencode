@@ -98,9 +98,12 @@ const ModelList: Component<{
         </Tooltip>
       )}
       onSelect={(x) => {
-        model.set(x ? { modelID: x.id, providerID: x.provider.id } : undefined, {
-          recent: true,
-        })
+        model.set(
+          x ? { modelID: x.id, providerID: x.provider.id, name: x.name, providerName: x.provider.name } : undefined,
+          {
+            recent: true,
+          },
+        )
         props.onSelect()
       }}
     >
@@ -307,7 +310,10 @@ export function ModelSelectorPopoverV2(props: {
     setStore({ open: false, search: "", active: "" })
   }
   const select = (item: ModelItem) => {
-    model.set({ modelID: item.id, providerID: item.provider.id }, { recent: true })
+    model.set(
+      { modelID: item.id, providerID: item.provider.id, name: item.name, providerName: item.provider.name },
+      { recent: true },
+    )
     props.onClose?.()
   }
   const selectModel = (item: ModelItem) => {

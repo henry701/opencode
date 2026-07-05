@@ -3,6 +3,8 @@ import { createContext, createSignal, useContext, type ParentProps } from "solid
 import { createComponent, render } from "solid-js/web"
 import type { Component } from "solid-js"
 import { ServerScope } from "@/utils/server-scope"
+import { PersistTesting } from "@/utils/persist"
+import { pathKey } from "@/utils/path-key"
 
 let Local: typeof import("@/context/local")
 let params: { id?: string }
@@ -122,9 +124,11 @@ beforeAll(async () => {
       ready: () => true,
       list: () => [bigPickle, selectedModel, sameProviderSelectedModel],
       find: (key: { providerID: string; modelID: string }) =>
-        [bigPickle, selectedModel, sameProviderSelectedModel].find(
-          (item) => item.provider.id === key.providerID && item.id === key.modelID,
-        ),
+        selectedModelUnavailable() && key.providerID === "opencode" && key.modelID === "deepseek-v4-flash-free"
+          ? undefined
+          : [bigPickle, selectedModel, sameProviderSelectedModel].find(
+              (item) => item.provider.id === key.providerID && item.id === key.modelID,
+            ),
       visible: () => true,
       setVisibility: () => undefined,
       recent: {
@@ -313,5 +317,82 @@ describe("local model selection", () => {
     dispose()
 
     expect(seen).toEqual(["deepseek-v4-flash-free", "deepseek-v4-flash-free", "deepseek-v4-flash-free"])
+  })
+
+  test("does not fall back to the agent default when promoting a submitted user model during a provider refresh", () => {
+    params = {}
+    setSelectedModelUnavailable(true)
+    const host = document.createElement("div")
+    const seen: string[] = []
+
+    const Probe: Component = () => {
+      const local = Local.useLocal()
+      local.session.promote("/repo", "session-6", {
+        agent: "build",
+        model: {
+          providerID: "opencode",
+          modelID: "deepseek-v4-flash-free",
+          name: "DeepSeek V4 Flash Free",
+          providerName: "OpenCode",
+        },
+        source: "user",
+      })
+      seen.push(local.model.current()?.id ?? "none")
+      setSelectedModelUnavailable(false)
+      seen.push(local.model.current()?.id ?? "none")
+      return null
+    }
+
+    const dispose = render(
+      () =>
+        createComponent(Local.LocalProvider, {
+          get children() {
+            return createComponent(Probe, {})
+          },
+        }),
+      host,
+    )
+    dispose()
+
+    expect(seen).toEqual(["deepseek-v4-flash-free", "deepseek-v4-flash-free"])
+  })
+
+  test("normalizes persisted session models that use the backend session model shape", () => {
+    params = { id: "session-backend-shape" }
+    const storage = PersistTesting.workspaceStorage(pathKey("/repo"))
+    localStorage.setItem(
+      `${storage}:workspace:model-selection`,
+      JSON.stringify({
+        session: {
+          "session-backend-shape": {
+            agent: "build",
+            model: { providerID: "opencode", id: "deepseek-v4-flash-free", variant: "high" },
+            variant: null,
+            source: "user",
+          },
+        },
+      }),
+    )
+    const host = document.createElement("div")
+    const seen: string[] = []
+
+    const Probe: Component = () => {
+      const local = Local.useLocal()
+      seen.push(local.model.current()?.id ?? "none")
+      return null
+    }
+
+    const dispose = render(
+      () =>
+        createComponent(Local.LocalProvider, {
+          get children() {
+            return createComponent(Probe, {})
+          },
+        }),
+      host,
+    )
+    dispose()
+
+    expect(seen).toEqual(["deepseek-v4-flash-free"])
   })
 })

@@ -4,7 +4,7 @@ const emptyList = new Set(["/skill", "/command", "/lsp", "/formatter", "/vcs/sta
 const emptyObject = new Set(["/global/config", "/config", "/provider/auth", "/mcp"])
 
 export interface MockServerConfig {
-  provider: unknown
+  provider: unknown | (() => unknown)
   directory: string
   project: unknown
   sessions: ({ id: string } & Record<string, unknown>)[]
@@ -31,7 +31,6 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
   const cursors = new Map<string, string>()
   let nextCursor = 0
   const staticRoutes: Record<string, unknown> = {
-    "/provider": config.provider,
     "/path": {
       state: config.directory,
       config: config.directory,
@@ -69,6 +68,7 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
       return json(route, await config.fileContent(url.searchParams.get("path") ?? ""))
     if (emptyObject.has(path)) return json(route, {})
     if (emptyList.has(path)) return json(route, [])
+    if (path === "/provider") return json(route, typeof config.provider === "function" ? config.provider() : config.provider)
 
     if (path === "/session" && route.request().method() === "POST") {
       const created = config.createSession?.()

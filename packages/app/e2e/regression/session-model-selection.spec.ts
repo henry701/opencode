@@ -142,6 +142,8 @@ test("keeps a manually selected model when submitting a brand-new web session", 
   }
   const sessions: Array<typeof session> = []
   const promptRequests: unknown[] = []
+  const events: Array<{ directory: string; payload: Record<string, unknown> }> = []
+  let selectedModelUnavailable = false
 
   await page.addInitScript(
     ({ directory, draftID, server }) => {
@@ -165,24 +167,28 @@ test("keeps a manually selected model when submitting a brand-new web session", 
   await mockOpenCodeServer(page, {
     directory,
     project,
-    provider: {
+    provider: () => ({
       all: [
         {
           id: "opencode",
           name: "OpenCode",
-          models: {
-            "big-pickle": { id: "big-pickle", name: "Big Pickle", limit: { context: 200_000 } },
-            "deepseek-v4-flash-free": {
-              id: "deepseek-v4-flash-free",
-              name: "DeepSeek V4 Flash Free",
-              limit: { context: 200_000 },
-            },
-          },
+          models: selectedModelUnavailable
+            ? {
+                "big-pickle": { id: "big-pickle", name: "Big Pickle", limit: { context: 200_000 } },
+              }
+            : {
+                "big-pickle": { id: "big-pickle", name: "Big Pickle", limit: { context: 200_000 } },
+                "deepseek-v4-flash-free": {
+                  id: "deepseek-v4-flash-free",
+                  name: "DeepSeek V4 Flash Free",
+                  limit: { context: 200_000 },
+                },
+              },
         },
       ],
       connected: ["opencode"],
       default: { opencode: "big-pickle" },
-    },
+    }),
     agents: [
       {
         name: "Sisyphus - ultraworker",
@@ -207,8 +213,31 @@ test("keeps a manually selected model when submitting a brand-new web session", 
     },
     onPromptAsync: ({ body }) => {
       promptRequests.push(body)
+      const request = body as {
+        messageID?: string
+        agent?: string
+        model?: { providerID: string; modelID: string }
+      }
+      events.push({
+        directory,
+        payload: {
+          type: "message.updated",
+          properties: {
+            info: {
+              id: request.messageID ?? "msg_new_session_model_selection",
+              sessionID: createdSessionID,
+              role: "user",
+              time: { created: 1700000000001 },
+              agent: request.agent ?? "Sisyphus - ultraworker",
+              model: request.model ?? { providerID: "opencode", modelID: "deepseek-v4-flash-free" },
+            },
+          },
+        },
+      })
     },
     pageMessages: () => ({ items: [] }),
+    events: () => events.splice(0, 1),
+    eventRetry: 16,
   })
 
   await page.goto(`/new-session?draftId=${draftID}`)
@@ -223,8 +252,9 @@ test("keeps a manually selected model when submitting a brand-new web session", 
   await page.getByRole("button", { name: /DeepSeek V4 Flash Free/ }).click()
   await expect(draftComposer.locator('[data-action="prompt-model"]')).toContainText("DeepSeek V4 Flash Free")
   await expect(draftInput).toContainText("hi")
+  selectedModelUnavailable = true
 
-  await draftInput.press("Enter")
+  await draftComposer.locator('[data-action="prompt-submit"]').click()
 
   await expect.poll(() => promptRequests.length).toBe(1)
   expect(promptRequests[0]).toMatchObject({
@@ -236,5 +266,16 @@ test("keeps a manually selected model when submitting a brand-new web session", 
   const sessionComposer = page.locator('[data-component="session-composer"]')
   await expect(sessionComposer.locator('[data-action="prompt-model"]')).toContainText("DeepSeek V4 Flash Free")
   await page.waitForTimeout(750)
+  await expect(sessionComposer.locator('[data-action="prompt-model"]')).toContainText("DeepSeek V4 Flash Free")
+
+  const sessionInput = sessionComposer.locator('[data-component="prompt-input"]')
+  await sessionInput.fill("second prompt should keep the selected model")
+  await sessionComposer.locator('[data-action="prompt-submit"]').click()
+
+  await expect.poll(() => promptRequests.length).toBe(2)
+  expect(promptRequests[1]).toMatchObject({
+    agent: "Sisyphus - ultraworker",
+    model: { providerID: "opencode", modelID: "deepseek-v4-flash-free" },
+  })
   await expect(sessionComposer.locator('[data-action="prompt-model"]')).toContainText("DeepSeek V4 Flash Free")
 })

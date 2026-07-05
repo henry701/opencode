@@ -12,7 +12,7 @@ import { useSync } from "./sync"
 import { useServerSDK } from "./server-sdk"
 import { ScopedKey, type ServerScope } from "@/utils/server-scope"
 
-export type ModelKey = { providerID: string; modelID: string; variant?: string }
+export type ModelKey = { providerID: string; modelID: string; variant?: string; name?: string; providerName?: string }
 
 type State = {
   agent?: string
@@ -30,6 +30,38 @@ const handoff = new Map<string, State>()
 
 const handoffKey = (scope: ServerScope, dir: string, id: string) => ScopedKey.from(scope, dir, id)
 
+const normalizeModelKey = (value: unknown) => {
+  if (!value || typeof value !== "object") return
+  const item = value as {
+    providerID?: unknown
+    modelID?: unknown
+    id?: unknown
+    variant?: unknown
+    name?: unknown
+    providerName?: unknown
+  }
+  if (typeof item.providerID !== "string") return
+  const modelID = typeof item.modelID === "string" ? item.modelID : typeof item.id === "string" ? item.id : undefined
+  if (!modelID) return
+  return {
+    providerID: item.providerID,
+    modelID,
+    ...(typeof item.variant === "string" ? { variant: item.variant } : {}),
+    ...(typeof item.name === "string" ? { name: item.name } : {}),
+    ...(typeof item.providerName === "string" ? { providerName: item.providerName } : {}),
+  } satisfies ModelKey
+}
+
+const normalizeState = (value: State | undefined) => {
+  if (!value) return
+  const model = normalizeModelKey(value.model)
+  return {
+    ...value,
+    ...(model ? { model } : { model: undefined }),
+    variant: value.variant === undefined && model?.variant ? model.variant : value.variant,
+  } satisfies State
+}
+
 const migrate = (value: unknown) => {
   if (!value || typeof value !== "object") return { session: {} }
 
@@ -38,19 +70,30 @@ const migrate = (value: unknown) => {
     pick?: Record<string, State | undefined>
   }
 
-  if (item.session && typeof item.session === "object") return { session: item.session }
+  if (item.session && typeof item.session === "object") {
+    return {
+      session: Object.fromEntries(
+        Object.entries(item.session).map(([key, value]) => [key, normalizeState(value)] as const),
+      ),
+    }
+  }
   if (!item.pick || typeof item.pick !== "object") return { session: {} }
 
   return {
-    session: Object.fromEntries(Object.entries(item.pick).filter(([key]) => key !== WORKSPACE_KEY)),
+    session: Object.fromEntries(
+      Object.entries(item.pick)
+        .filter(([key]) => key !== WORKSPACE_KEY)
+        .map(([key, value]) => [key, normalizeState(value)] as const),
+    ),
   }
 }
 
 const clone = (value: State | undefined) => {
-  if (!value) return
+  const normalized = normalizeState(value)
+  if (!normalized) return
   return {
-    ...value,
-    model: value.model ? { ...value.model } : undefined,
+    ...normalized,
+    model: normalized.model ? { ...normalized.model } : undefined,
   } satisfies State
 }
 
@@ -177,6 +220,33 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       }
     }
 
+    const knownModel = (model: ModelKey) => {
+      const found = models.find(model)
+      if (found) return found
+      const provider = providers.all().get(model.providerID)
+      const info = provider?.models[model.modelID]
+      if (!provider || !info) {
+        if (!model.name) return
+        return {
+          id: model.modelID,
+          name: model.name,
+          latest: false,
+          provider: {
+            id: model.providerID,
+            name: model.providerName ?? model.providerID,
+            models: {},
+          },
+        } as NonNullable<ReturnType<typeof models.find>>
+      }
+      const rawName = info.name ?? info.id
+      return {
+        ...info,
+        name: rawName.replace("(latest)", "").trim(),
+        latest: rawName.includes("(latest)"),
+        provider,
+      }
+    }
+
     const fallback = createMemo<ModelKey | undefined>(() => configuredModel() ?? recentModel() ?? defaultModel())
 
     const agent = {
@@ -236,10 +306,16 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     // falls through to fallback()/defaultModel(), and the picker plus submit
     // payload snap to the default model until the catalog settles.
     const resolvedCurrent = createMemo<ReturnType<typeof models.find>>((prev) => {
-      const explicit = scope()?.model
+      const currentScope = scope()
+      const explicit = currentScope?.model
       if (explicit && prev?.provider.id === explicit.providerID && prev.id === explicit.modelID) {
         const found = firstModel(() => explicit)
         if (!found) return prev
+      }
+      if (explicit && currentScope?.source === "user") {
+        const found = firstModel(() => explicit)
+        if (found) return knownModel(found)
+        return knownModel(explicit)
       }
       const item = firstModel(
         () => explicit,
@@ -391,8 +467,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         reset() {
           setStore({ draft: undefined, promoting: undefined })
         },
-        promote(dir: string, session: string) {
-          const next = clone(snapshot())
+        promote(dir: string, session: string, state?: State) {
+          const next = clone(state ?? snapshot())
           if (!next) return
           const key = handoffKey(serverSDK().scope, dir, session)
           handoff.set(key, next)
