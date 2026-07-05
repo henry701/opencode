@@ -8,6 +8,9 @@ export interface MockServerConfig {
   directory: string
   project: unknown
   sessions: ({ id: string } & Record<string, unknown>)[]
+  createSession?: () => { id: string } & Record<string, unknown>
+  onPromptAsync?: (input: { sessionID: string; body: unknown }) => void
+  agents?: unknown[]
   pageMessages: (sessionId: string, limit: number, before?: string) => { items: unknown[]; cursor?: string }
   status?: Record<string, unknown>
   queue?: Record<string, { id: string; text: string }[]>
@@ -38,7 +41,7 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
     },
     "/project": [config.project],
     "/project/current": config.project,
-    "/agent": [{ name: "build", mode: "primary" }],
+    "/agent": config.agents ?? [{ name: "build", mode: "primary" }],
     "/vcs": { branch: "main", default_branch: "main" },
     "/session": config.sessions,
   }
@@ -66,6 +69,12 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
       return json(route, await config.fileContent(url.searchParams.get("path") ?? ""))
     if (emptyObject.has(path)) return json(route, {})
     if (emptyList.has(path)) return json(route, [])
+
+    if (path === "/session" && route.request().method() === "POST") {
+      const created = config.createSession?.()
+      if (created) return json(route, created)
+    }
+
     if (path in staticRoutes) return json(route, staticRoutes[path])
 
     const sessionMatch = path.match(/^\/session\/([^/]+)$/)
@@ -81,6 +90,14 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
     const queueMatch = path.match(/^\/session\/([^/]+)\/queue$/)
     if (queueMatch && route.request().method() === "GET") return json(route, config.queue?.[queueMatch[1]] ?? [])
     if (queueMatch && route.request().method() === "POST") return json(route, { id: "pqu_mock" })
+
+    const promptAsyncMatch = path.match(/^\/session\/([^/]+)\/prompt_async$/)
+    if (promptAsyncMatch && route.request().method() === "POST") {
+      const raw = route.request().postData()
+      const body = raw ? JSON.parse(raw) : undefined
+      config.onPromptAsync?.({ sessionID: promptAsyncMatch[1]!, body })
+      return json(route, true)
+    }
 
     const messagesMatch = path.match(/^\/session\/([^/]+)\/message$/)
     if (messagesMatch) {

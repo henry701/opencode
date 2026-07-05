@@ -7,6 +7,8 @@ import { ServerScope } from "@/utils/server-scope"
 let Local: typeof import("@/context/local")
 let params: { id?: string }
 const [catalogEmpty, setCatalogEmpty] = createSignal(false)
+const [selectedDisconnected, setSelectedDisconnected] = createSignal(false)
+const [selectedModelUnavailable, setSelectedModelUnavailable] = createSignal(false)
 
 const bigPickle = {
   id: "big-pickle",
@@ -17,6 +19,11 @@ const selectedModel = {
   id: "claude-sonnet-4",
   name: "Claude Sonnet 4",
   provider: { id: "anthropic", name: "Anthropic" },
+}
+const sameProviderSelectedModel = {
+  id: "deepseek-v4-flash-free",
+  name: "DeepSeek V4 Flash Free",
+  provider: { id: "opencode", name: "OpenCode" },
 }
 
 beforeAll(async () => {
@@ -62,7 +69,19 @@ beforeAll(async () => {
         catalogEmpty()
           ? new Map()
           : new Map([
-              ["opencode", { id: "opencode", name: "OpenCode", models: { "big-pickle": { id: "big-pickle" } } }],
+              [
+                "opencode",
+                {
+                  id: "opencode",
+                  name: "OpenCode",
+                  models: selectedModelUnavailable()
+                    ? { "big-pickle": { id: "big-pickle" } }
+                    : {
+                        "big-pickle": { id: "big-pickle" },
+                        "deepseek-v4-flash-free": { id: "deepseek-v4-flash-free" },
+                      },
+                },
+              ],
               [
                 "anthropic",
                 { id: "anthropic", name: "Anthropic", models: { "claude-sonnet-4": { id: "claude-sonnet-4" } } },
@@ -71,19 +90,41 @@ beforeAll(async () => {
       connected: () =>
         catalogEmpty()
           ? []
-          : [
-              { id: "opencode", name: "OpenCode", models: { "big-pickle": { id: "big-pickle" } } },
-              { id: "anthropic", name: "Anthropic", models: { "claude-sonnet-4": { id: "claude-sonnet-4" } } },
-            ],
+          : selectedDisconnected()
+            ? [
+                {
+                  id: "opencode",
+                  name: "OpenCode",
+                  models: {
+                    "big-pickle": { id: "big-pickle" },
+                    "deepseek-v4-flash-free": { id: "deepseek-v4-flash-free" },
+                  },
+                },
+              ]
+            : [
+                {
+                  id: "opencode",
+                  name: "OpenCode",
+                  models: selectedModelUnavailable()
+                    ? { "big-pickle": { id: "big-pickle" } }
+                    : {
+                        "big-pickle": { id: "big-pickle" },
+                        "deepseek-v4-flash-free": { id: "deepseek-v4-flash-free" },
+                      },
+                },
+                { id: "anthropic", name: "Anthropic", models: { "claude-sonnet-4": { id: "claude-sonnet-4" } } },
+              ],
       default: () => ({ opencode: "big-pickle" }),
     }),
   }))
   mock.module("@/context/models", () => ({
     useModels: () => ({
       ready: () => true,
-      list: () => [bigPickle, selectedModel],
+      list: () => [bigPickle, selectedModel, sameProviderSelectedModel],
       find: (key: { providerID: string; modelID: string }) =>
-        [bigPickle, selectedModel].find((item) => item.provider.id === key.providerID && item.id === key.modelID),
+        [bigPickle, selectedModel, sameProviderSelectedModel].find(
+          (item) => item.provider.id === key.providerID && item.id === key.modelID,
+        ),
       visible: () => true,
       setVisibility: () => undefined,
       recent: {
@@ -107,6 +148,8 @@ beforeEach(() => {
   params = { id: "session-1" }
   localStorage.clear()
   setCatalogEmpty(false)
+  setSelectedDisconnected(false)
+  setSelectedModelUnavailable(false)
 })
 
 describe("local model selection", () => {
@@ -205,5 +248,70 @@ describe("local model selection", () => {
     dispose()
 
     expect(seen).toEqual(["claude-sonnet-4", "claude-sonnet-4", "claude-sonnet-4"])
+  })
+
+  test("keeps the explicit model while its provider transiently disconnects", () => {
+    params = { id: "session-4" }
+    const host = document.createElement("div")
+    const seen: string[] = []
+
+    const Probe: Component = () => {
+      const local = Local.useLocal()
+      local.model.set({ providerID: "anthropic", modelID: "claude-sonnet-4" }, { recent: true })
+      seen.push(local.model.current()?.id ?? "none")
+      // Simulate provider auth/config refresh briefly removing only the
+      // selected provider from connected providers while the default remains.
+      setSelectedDisconnected(true)
+      seen.push(local.model.current()?.id ?? "none")
+      setSelectedDisconnected(false)
+      seen.push(local.model.current()?.id ?? "none")
+      return null
+    }
+
+    const dispose = render(
+      () =>
+        createComponent(Local.LocalProvider, {
+          get children() {
+            return createComponent(Probe, {})
+          },
+        }),
+      host,
+    )
+    dispose()
+
+    expect(seen).toEqual(["claude-sonnet-4", "claude-sonnet-4", "claude-sonnet-4"])
+  })
+
+  test("keeps the explicit model while its provider transiently omits that model", () => {
+    params = { id: "session-5" }
+    const host = document.createElement("div")
+    const seen: string[] = []
+
+    const Probe: Component = () => {
+      const local = Local.useLocal()
+      local.model.set({ providerID: "opencode", modelID: "deepseek-v4-flash-free" }, { recent: true })
+      seen.push(local.model.current()?.id ?? "none")
+      // This mirrors the Sisyphus/Big Pickle setup: the selected model and the
+      // configured default share a provider, and a provider refresh briefly
+      // exposes only the default model.
+      setSelectedModelUnavailable(true)
+      seen.push(local.model.current()?.id ?? "none")
+      setSelectedModelUnavailable(false)
+      seen.push(local.model.current()?.id ?? "none")
+      return null
+    }
+
+    const dispose = render(
+      () =>
+        createComponent(Local.LocalProvider, {
+          get children() {
+            return createComponent(Probe, {})
+          },
+        }),
+      host,
+    )
+    dispose()
+
+    expect(seen).toEqual(["deepseek-v4-flash-free", "deepseek-v4-flash-free", "deepseek-v4-flash-free"])
   })
 })

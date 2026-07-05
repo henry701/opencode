@@ -230,24 +230,23 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       },
     }
 
-    // Resolving the active model is sticky on purpose. The provider catalog can
-    // flap between empty and populated during a submit or model swap (a scoped
-    // refetch clears providers.all() while provider_ready toggles). Without the
-    // stickiness below, validModel() transiently rejects an explicit selection,
-    // firstModel() falls through to fallback()/defaultModel(), and the picker
-    // (plus the submit payload) snap to the default model until the catalog
-    // settles. Keeping the last resolved model during those empty windows keeps
-    // an explicit user/history selection stable.
+    // Resolving the active model is sticky on purpose. Provider/auth/config
+    // refreshes can transiently make an explicit selection look invalid while a
+    // default model remains valid. Without the stickiness below, firstModel()
+    // falls through to fallback()/defaultModel(), and the picker plus submit
+    // payload snap to the default model until the catalog settles.
     const resolvedCurrent = createMemo<ReturnType<typeof models.find>>((prev) => {
       const explicit = scope()?.model
+      if (explicit && prev?.provider.id === explicit.providerID && prev.id === explicit.modelID) {
+        const found = firstModel(() => explicit)
+        if (!found) return prev
+      }
       const item = firstModel(
         () => explicit,
         () => agent.current()?.model,
         fallback,
       )
       const found = item ? models.find(item) : undefined
-      if (found) return found
-      if (explicit && providers.all().size === 0 && prev) return prev
       return found
     })
 
