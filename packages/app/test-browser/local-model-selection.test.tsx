@@ -60,7 +60,14 @@ beforeAll(async () => {
   mock.module("@/context/sync", () => ({
     useSync: () => () => ({
       data: {
-        agent: [{ name: "build", mode: "primary", model: { providerID: "opencode", modelID: "big-pickle" } }],
+        agent: [
+          { name: "build", mode: "primary", model: { providerID: "opencode", modelID: "big-pickle" } },
+          {
+            name: "Sisyphus - ultraworker",
+            mode: "primary",
+            model: { providerID: "opencode", modelID: "big-pickle" },
+          },
+        ],
         config: {},
       },
     }),
@@ -394,5 +401,35 @@ describe("local model selection", () => {
     dispose()
 
     expect(seen).toEqual(["deepseek-v4-flash-free"])
+  })
+
+  test("keeps an explicit user model when the current agent is re-selected with a configured default", () => {
+    params = { id: "session-sisyphus-reselect" }
+    const host = document.createElement("div")
+    const seen: string[] = []
+
+    const Probe: Component = () => {
+      const local = Local.useLocal()
+      local.model.set({ providerID: "opencode", modelID: "deepseek-v4-flash-free" }, { recent: true })
+      seen.push(local.model.current()?.id ?? "none")
+      local.agent.set("Sisyphus - ultraworker")
+      seen.push(local.model.current()?.id ?? "none")
+      local.agent.set("Sisyphus - ultraworker")
+      seen.push(local.model.current()?.id ?? "none")
+      return null
+    }
+
+    const dispose = render(
+      () =>
+        createComponent(Local.LocalProvider, {
+          get children() {
+            return createComponent(Probe, {})
+          },
+        }),
+      host,
+    )
+    dispose()
+
+    expect(seen).toEqual(["deepseek-v4-flash-free", "deepseek-v4-flash-free", "deepseek-v4-flash-free"])
   })
 })

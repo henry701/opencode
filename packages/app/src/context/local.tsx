@@ -261,18 +261,29 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           return
         }
 
+        const prev = scope()
+        const explicitModel = prev?.source === "user" && prev.model ? prev.model : undefined
+        if (
+          explicitModel &&
+          prev?.agent === item.name &&
+          prev.model?.providerID === explicitModel.providerID &&
+          prev.model?.modelID === explicitModel.modelID
+        ) {
+          setStore("current", item.name)
+          return
+        }
+
         batch(() => {
           setStore("current", item.name)
           setStore("last", {
             type: "agent",
             agent: item.name,
-            model: item.model,
+            model: explicitModel ?? item.model,
             variant: item.variant ?? null,
           })
-          const prev = scope()
           const next = {
             agent: item.name,
-            model: item.model ?? prev?.model,
+            model: explicitModel ?? item.model ?? prev?.model,
             variant: item.variant ?? prev?.variant,
             source: "user",
           } satisfies State
