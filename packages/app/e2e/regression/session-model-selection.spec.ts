@@ -279,3 +279,96 @@ test("keeps a manually selected model when submitting a brand-new web session", 
   })
   await expect(sessionComposer.locator('[data-action="prompt-model"]')).toContainText("DeepSeek V4 Flash Free")
 })
+
+test("keeps a manually selected model when submitting with Enter on a Sisyphus session", async ({ page }) => {
+  const storage = PersistTesting.workspaceStorage(pathKey(directory))
+  const promptRequests: string[] = []
+
+  page.on("request", (request) => {
+    const url = new URL(request.url())
+    if (url.pathname === `/session/${sessionID}/prompt_async` && request.method() === "POST") {
+      promptRequests.push(request.postData() ?? "")
+    }
+  })
+
+  await page.addInitScript(
+    ({ storage, sessionID }) => {
+      localStorage.setItem(
+        "settings.v3",
+        JSON.stringify({ general: { newLayoutDesigns: true }, visibility: { customAgents: true } }),
+      )
+      localStorage.setItem(
+        `${storage}:workspace:model-selection`,
+        JSON.stringify({
+          session: {
+            [sessionID]: {
+              agent: "Sisyphus - ultraworker",
+              model: { providerID: "opencode", modelID: "big-pickle" },
+              variant: null,
+            },
+          },
+        }),
+      )
+    },
+    { storage, sessionID },
+  )
+
+  await mockOpenCodeServer(page, {
+    directory,
+    project: {
+      id: projectID,
+      worktree: directory,
+      vcs: "git",
+      name: "session-model-selection-regression",
+      time: { created: 1700000000000, updated: 1700000000000 },
+      sandboxes: [],
+    },
+    provider: {
+      all: [
+        {
+          id: "opencode",
+          name: "OpenCode",
+          models: {
+            "big-pickle": { id: "big-pickle", name: "Big Pickle", limit: { context: 200_000 } },
+            "deepseek-v4-flash-free": {
+              id: "deepseek-v4-flash-free",
+              name: "DeepSeek V4 Flash Free",
+              limit: { context: 200_000 },
+            },
+          },
+        },
+      ],
+      connected: ["opencode"],
+      default: { opencode: "big-pickle" },
+    },
+    agents: [
+      {
+        name: "Sisyphus - ultraworker",
+        mode: "primary",
+        model: { providerID: "opencode", modelID: "big-pickle" },
+      },
+    ],
+    sessions: [session],
+    pageMessages: () => ({ items: [] }),
+  })
+
+  await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
+  await expectSessionTitle(page, session.title)
+
+  const composer = page.locator('[data-component="session-composer"]')
+  await expectAppVisible(composer)
+  await expect(composer.locator('[data-action="prompt-model"]')).toContainText("Big Pickle")
+
+  await composer.locator('[data-action="prompt-model"]').click()
+  await page.getByRole("button", { name: /DeepSeek V4 Flash Free/ }).click()
+  await expect(composer.locator('[data-action="prompt-model"]')).toContainText("DeepSeek V4 Flash Free")
+
+  const input = composer.locator('[data-component="prompt-input"]')
+  await input.fill("keep deepseek after enter submit")
+  await input.press("Enter")
+
+  await expect.poll(() => promptRequests.length).toBe(1)
+  expect(promptRequests[0]).toContain('"agent":"Sisyphus - ultraworker"')
+  expect(promptRequests[0]).toContain('"modelID":"deepseek-v4-flash-free"')
+  await expect(composer.locator('[data-action="prompt-model"]')).toContainText("DeepSeek V4 Flash Free")
+})

@@ -432,4 +432,39 @@ describe("local model selection", () => {
 
     expect(seen).toEqual(["deepseek-v4-flash-free", "deepseek-v4-flash-free", "deepseek-v4-flash-free"])
   })
+
+  test("ignores same-agent re-selection when the session model came from history", () => {
+    params = { id: "session-sisyphus-history-reselect" }
+    const host = document.createElement("div")
+    const seen: string[] = []
+
+    const Probe: Component = () => {
+      const local = Local.useLocal()
+      local.session.restore({
+        id: "msg_history",
+        sessionID: "session-sisyphus-history-reselect",
+        role: "user",
+        time: { created: 1 },
+        agent: "Sisyphus - ultraworker",
+        model: { providerID: "anthropic", modelID: "claude-sonnet-4" },
+      })
+      seen.push(local.model.current()?.id ?? "none")
+      local.agent.set("Sisyphus - ultraworker")
+      seen.push(local.model.current()?.id ?? "none")
+      return null
+    }
+
+    const dispose = render(
+      () =>
+        createComponent(Local.LocalProvider, {
+          get children() {
+            return createComponent(Probe, {})
+          },
+        }),
+      host,
+    )
+    dispose()
+
+    expect(seen).toEqual(["claude-sonnet-4", "claude-sonnet-4"])
+  })
 })

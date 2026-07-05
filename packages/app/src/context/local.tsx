@@ -262,16 +262,12 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         }
 
         const prev = scope()
-        const explicitModel = prev?.source === "user" && prev.model ? prev.model : undefined
-        if (
-          explicitModel &&
-          prev?.agent === item.name &&
-          prev.model?.providerID === explicitModel.providerID &&
-          prev.model?.modelID === explicitModel.modelID
-        ) {
+        if (prev?.agent === item.name) {
           setStore("current", item.name)
           return
         }
+
+        const explicitModel = prev?.source === "user" && prev.model ? prev.model : undefined
 
         batch(() => {
           setStore("current", item.name)
