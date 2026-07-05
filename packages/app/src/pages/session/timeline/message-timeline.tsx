@@ -16,6 +16,7 @@ import { Dynamic } from "solid-js/web"
 import { useNavigate } from "@solidjs/router"
 import { useMutation } from "@tanstack/solid-query"
 import { createVirtualizer, defaultRangeExtractor, elementScroll, type VirtualItem } from "@tanstack/solid-virtual"
+import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { Accordion } from "@opencode-ai/ui/accordion"
 import { Button } from "@opencode-ai/ui/button"
 import { Card } from "@opencode-ai/ui/card"
@@ -245,8 +246,11 @@ export function MessageTimeline(props: {
   hasScrollGesture: () => boolean
   onUserScroll: () => void
   onHistoryScroll: () => void
+  onLeaveBottom?: () => void
   onAutoScrollInteraction: (event: MouseEvent) => void
   shouldAnchorBottom: () => boolean
+  composerLayoutEpoch?: number
+  preservedScrollTop?: number
   centered: boolean
   setContentRef: (el: HTMLDivElement) => void
   userMessages: UserMessage[]
@@ -400,17 +404,45 @@ export function MessageTimeline(props: {
   let resizePinnedIndexes: number[] = []
   let resizePinFrame: number | undefined
   let virtualContent: HTMLDivElement | undefined
+  let lastTimelineRowCount = 0
+  let lastVirtualContentHeight = timelineFallbackItemSize
+  let lastAwayFromBottomScrollTop = 0
+  const timelineRowCount = () => {
+    const next = timelineRows().length
+    if (next > 0) lastTimelineRowCount = next
+    return Math.max(next, lastTimelineRowCount)
+  }
+  const timelineContentHeight = (rowCount: number, measured: number) => {
+    if (rowCount > 0) lastTimelineRowCount = rowCount
+    const rows = Math.max(rowCount, lastTimelineRowCount)
+    if (rows === 0) return lastVirtualContentHeight
+    const next = Math.max(measured, rows * timelineFallbackItemSize + 64)
+    lastVirtualContentHeight = next
+    return next
+  }
   const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>({
     get count() {
-      return timelineRows().length
+      return timelineRowCount()
     },
     getScrollElement: () => listRoot() ?? null,
-    initialOffset: () => (props.shouldAnchorBottom() ? Number.MAX_SAFE_INTEGER : 0),
+    initialOffset: 0,
     initialMeasurementsCache: initialMeasurements,
     estimateSize: () => timelineFallbackItemSize,
     scrollToFn: (offset, options, instance) => {
+      const root = listRoot()
+      const preserved = Math.max(
+        lastAwayFromBottomScrollTop,
+        props.preservedScrollTop ?? 0,
+        root?.scrollTop ?? 0,
+      )
+      if (!props.shouldAnchorBottom() && preserved > 80 && offset < preserved - 80) {
+        offset = preserved
+      }
       // Expose the computed range before core writes an anchor correction so the browser does not clamp it to the old height.
-      if (virtualContent) virtualContent.style.height = `${instance.getTotalSize()}px`
+      if (virtualContent) {
+        const next = timelineContentHeight(timelineRowCount(), instance.getTotalSize())
+        virtualContent.style.height = `${next}px`
+      }
       elementScroll(offset, options, instance)
     },
     get getItemKey() {
@@ -422,8 +454,12 @@ export function MessageTimeline(props: {
         return TimelineRow.key(row)
       }
     },
-    anchorTo: "end",
-    followOnAppend: true,
+    get anchorTo() {
+      return props.shouldAnchorBottom() ? "end" : "start"
+    },
+    get followOnAppend() {
+      return props.shouldAnchorBottom()
+    },
     scrollEndThreshold: 80,
     get scrollMargin() {
       return showHeader() ? 64 : 0
@@ -483,6 +519,9 @@ export function MessageTimeline(props: {
     () => new Map(virtualizer.getVirtualItems().map((item) => [item.key, item] as const)),
   )
   const virtualRowKeys = createMemo(() => virtualizer.getVirtualItems().map((item) => item.key as string))
+  const virtualContentHeight = createMemo(() =>
+    timelineContentHeight(timelineRowCount(), virtualizer.getTotalSize()),
+  )
   createEffect(() => {
     props.setRevealMessage?.((id) => {
       const index = messageRowIndex().get(id)
@@ -515,15 +554,64 @@ export function MessageTimeline(props: {
   }
 
   let measuredSessionKey = sessionKey()
-  createEffect(() => {
-    const key = sessionKey()
-    timelineRows().length
-    if (measuredSessionKey !== key) {
+  createEffect(
+    on(sessionKey, (key) => {
+      if (measuredSessionKey === key) return
       measuredSessionKey = key
+      lastAwayFromBottomScrollTop = 0
       virtualizer.measure()
+    }),
+  )
+  createEffect(
+    on(
+      () => timelineRows().length,
+      (length) => {
+        if (length === 0) return
+        maybeAnchorBottom()
+      },
+    ),
+  )
+
+  let syncVirtualScrollFrame: number | undefined
+  const preserveScrollAnchor = () => {
+    if (props.shouldAnchorBottom()) return
+    const root = listRoot()
+    if (!root) return
+    const scrollTop = Math.max(root.scrollTop, lastAwayFromBottomScrollTop, props.preservedScrollTop ?? 0)
+    if (scrollTop > 80) lastAwayFromBottomScrollTop = scrollTop
+    if (syncVirtualScrollFrame !== undefined) cancelAnimationFrame(syncVirtualScrollFrame)
+    const restore = (attempt = 0) => {
+      const current = listRoot()
+      if (!current || props.shouldAnchorBottom()) return
+      if (Math.abs(current.scrollTop - scrollTop) > 1) current.scrollTop = scrollTop
+      virtualizer.getVirtualItems()
+      if (attempt < 8 && Math.abs(current.scrollTop - scrollTop) > 1) {
+        requestAnimationFrame(() => restore(attempt + 1))
+      }
     }
-    maybeAnchorBottom()
-  })
+    syncVirtualScrollFrame = requestAnimationFrame(() => {
+      syncVirtualScrollFrame = undefined
+      restore()
+    })
+  }
+
+  createEffect(
+    on(
+      () => props.composerLayoutEpoch,
+      () => {
+        if (props.shouldAnchorBottom()) return
+        const root = listRoot()
+        if (!root) return
+        const dom = Math.max(root.scrollTop, lastAwayFromBottomScrollTop, props.preservedScrollTop ?? 0)
+        if (dom > 80) {
+          lastAwayFromBottomScrollTop = dom
+        }
+        resizePinnedIndexes = []
+        preserveScrollAnchor()
+      },
+      { defer: true },
+    ),
+  )
 
   onCleanup(() => {
     clearPrependAnchor()
@@ -532,6 +620,7 @@ export function MessageTimeline(props: {
     while (timelineCache.size > 16) timelineCache.delete(timelineCache.keys().next().value!)
     if (resizePinFrame !== undefined) cancelAnimationFrame(resizePinFrame)
     if (overscanFrame !== undefined) cancelAnimationFrame(overscanFrame)
+    if (syncVirtualScrollFrame !== undefined) cancelAnimationFrame(syncVirtualScrollFrame)
     props.setRevealMessage?.(() => {})
     props.setScrollToEnd?.(() => {})
     props.setHistoryAnchor?.({ capture: () => {}, restore: () => {} })
@@ -619,6 +708,19 @@ export function MessageTimeline(props: {
     if (prependLoading) updatePrependAnchor()
     props.onScheduleScrollState(event.currentTarget)
     props.onHistoryScroll()
+    const root = event.currentTarget
+    const max = root.scrollHeight - root.clientHeight
+    const distance = max - root.scrollTop
+    if (distance > 80) {
+      lastAwayFromBottomScrollTop = root.scrollTop
+    }
+    if (distance < 10) {
+      lastAwayFromBottomScrollTop = 0
+    }
+    if (distance > 200) {
+      props.onUserScroll()
+      props.onLeaveBottom?.()
+    }
     if (!props.hasScrollGesture()) return
     props.onUserScroll()
     props.onAutoScrollHandleScroll()
@@ -1821,7 +1923,7 @@ export function MessageTimeline(props: {
             props.setContentRef(element)
           }}
           style={{
-            height: `${virtualizer.getTotalSize()}px`,
+            height: `${virtualContentHeight()}px`,
             position: "relative",
             width: "100%",
           }}
@@ -1832,7 +1934,7 @@ export function MessageTimeline(props: {
               data-timeline-row="bottom-spacer"
               aria-hidden="true"
               class="h-16 absolute top-0 left-0 w-full"
-              style={{ transform: `translateY(${virtualizer.getTotalSize() - 64}px)` }}
+              style={{ transform: `translateY(${virtualContentHeight() - 64}px)` }}
             />
           </Show>
         </div>

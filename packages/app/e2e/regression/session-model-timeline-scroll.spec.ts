@@ -1,0 +1,117 @@
+import { expect, test } from "@playwright/test"
+import { base64Encode } from "@opencode-ai/core/util/encode"
+import {
+  assistantMessage,
+  directory,
+  project,
+  session,
+  sessionID,
+  textPart,
+  title,
+  userMessage,
+} from "../performance/timeline-stability/fixture"
+import { mockOpenCodeServer } from "../utils/mock-server"
+import { expectSessionTitle } from "../utils/waits"
+
+const messages = Array.from({ length: 12 }, (_, index) => {
+  const userID = `msg_history_${index}_user`
+  return [
+    userMessage([textPart(`prt_history_${index}_user`, `History message ${index}. ${"content ".repeat(20)}`)], {
+      id: userID,
+      created: 1700000000000 + index * 10_000,
+    }),
+    assistantMessage([textPart(`prt_history_${index}_assistant`, `Assistant reply ${index}. ${"response ".repeat(20)}`)], {
+      id: `msg_history_${index}_assistant`,
+      parentID: userID,
+      created: 1700000001000 + index * 10_000,
+    }),
+  ]
+}).flat()
+
+const provider = {
+  all: [
+    {
+      id: "opencode",
+      name: "OpenCode",
+      models: {
+        "big-pickle": { id: "big-pickle", name: "Big Pickle", limit: { context: 200_000 } },
+        "deepseek-v4-flash-free": {
+          id: "deepseek-v4-flash-free",
+          name: "DeepSeek V4 Flash Free",
+          limit: { context: 200_000 },
+        },
+        "claude-opus-4-6": {
+          id: "claude-opus-4-6",
+          name: "Claude Opus 4.6",
+          limit: { context: 200_000 },
+          variants: { max: {}, high: {} },
+        },
+      },
+    },
+  ],
+  connected: ["opencode"],
+  default: { opencode: "big-pickle" },
+}
+
+test("keeps scrolled timeline messages visible after switching models", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("settings.v3", JSON.stringify({ general: { newLayoutDesigns: true } }))
+  })
+
+  await mockOpenCodeServer(page, {
+    directory,
+    project: project(),
+    provider,
+    sessions: [session()],
+    pageMessages: () => ({ items: messages }),
+  })
+
+  await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
+  await expectSessionTitle(page, title)
+
+  const scroller = page
+    .locator("[data-timeline-virtual-content]")
+    .locator("xpath=ancestor::*[contains(@class,'scroll-view__viewport')][1]")
+  await expect(scroller).toBeVisible()
+
+  await scroller.hover()
+  for (let i = 0; i < 12; i++) {
+    await page.mouse.wheel(0, -300)
+  }
+  await expect(page.getByRole("button", { name: /Jump to latest/i })).toBeVisible({ timeout: 5000 })
+
+  const readVisible = () =>
+    scroller.evaluate((element) => {
+      const view = element.getBoundingClientRect()
+      const visible = [...element.querySelectorAll<HTMLElement>("[data-timeline-part-id]")]
+        .filter((part) => {
+          const rect = part.getBoundingClientRect()
+          return rect.bottom > view.top + 8 && rect.top < view.bottom - 8 && rect.width > 0 && rect.height > 0
+        })
+        .map((part) => part.getAttribute("data-timeline-part-id") ?? "")
+        .filter(Boolean)
+        .sort()
+      return {
+        scrollTop: element.scrollTop,
+        visible,
+        rowCount: element.querySelectorAll("[data-timeline-row]").length,
+      }
+    })
+
+  await page.waitForTimeout(200)
+
+  const before = await readVisible()
+  expect(before.visible.length).toBeGreaterThan(2)
+
+  const composer = page.locator('[data-component="session-composer"]')
+  await composer.locator('[data-action="prompt-model"]').click()
+  await page.getByRole("button", { name: /DeepSeek V4 Flash Free/ }).click()
+  await expect(composer.locator('[data-action="prompt-model"]')).toContainText("DeepSeek V4 Flash Free")
+  await page.waitForTimeout(200)
+
+  const after = await readVisible()
+
+  expect(after.scrollTop, `before=${before.scrollTop} after=${after.scrollTop}`).toBeCloseTo(before.scrollTop, 0)
+  expect(after.visible).toEqual(before.visible)
+  expect(after.rowCount).toBe(before.rowCount)
+})
