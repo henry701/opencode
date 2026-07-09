@@ -13,7 +13,7 @@ import {
 import { mockOpenCodeServer } from "../utils/mock-server"
 import { expectSessionTitle } from "../utils/waits"
 
-const messages = Array.from({ length: 40 }, (_, index) => {
+const messages = Array.from({ length: 80 }, (_, index) => {
   const userID = `msg_history_${index}_user`
   return [
     userMessage([textPart(`prt_history_${index}_user`, `History message ${index}. ${"content ".repeat(40)}`)], {
@@ -99,7 +99,7 @@ test("keeps scrolled timeline messages visible after switching models", async ({
   await expect(scroller).toBeVisible()
 
   await scroller.hover()
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 80; i++) {
     await page.mouse.wheel(0, -300)
   }
   await expect(page.getByRole("button", { name: /Jump to latest/i })).toBeVisible({ timeout: 5000 })
@@ -162,7 +162,7 @@ test("keeps scrolled timeline when model switch does not resize composer", async
   await expect(scroller).toBeVisible()
 
   await scroller.hover()
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 80; i++) {
     await page.mouse.wheel(0, -300)
   }
   await expect(page.getByRole("button", { name: /Jump to latest/i })).toBeVisible({ timeout: 5000 })
@@ -182,5 +182,66 @@ test("keeps scrolled timeline when model switch does not resize composer", async
   expect(after.scrollTop, `before=${before.scrollTop} after=${after.scrollTop}`).toBeCloseTo(before.scrollTop, 0)
   expect(after.visible).toEqual(before.visible)
   expect(after.rowCount).toBe(before.rowCount)
+  expect(after.blankCount, JSON.stringify(after)).toBe(0)
+})
+
+test("keeps scrolled timeline when switching between variant and non-variant models", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("settings.v3", JSON.stringify({ general: { newLayoutDesigns: true } }))
+  })
+
+  await mockOpenCodeServer(page, {
+    directory,
+    project: project(),
+    provider,
+    sessions: [session()],
+    pageMessages: () => ({ items: messages }),
+  })
+
+  await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
+  await expectSessionTitle(page, title)
+
+  const scroller = page
+    .locator("[data-timeline-virtual-content]")
+    .locator("xpath=ancestor::*[contains(@class,'scroll-view__viewport')][1]")
+  await expect(scroller).toBeVisible()
+
+  await scroller.hover()
+  for (let i = 0; i < 80; i++) {
+    await page.mouse.wheel(0, -300)
+  }
+  await expect(page.getByRole("button", { name: /Jump to latest/i })).toBeVisible({ timeout: 5000 })
+  await page.waitForTimeout(200)
+
+  const before = await readVisibleTimeline(scroller)
+  expect(before.visible.length).toBeGreaterThan(2)
+  expect(before.blankCount).toBe(0)
+
+  const composer = page.locator('[data-component="session-composer"]')
+  const modelDialog = () => page.getByRole("dialog", { name: /Select model/i })
+
+  await composer.locator('[data-action="prompt-model"]').click()
+  await modelDialog().getByRole("button", { name: /Big Pickle/ }).click()
+  await expect(composer.locator('[data-action="prompt-model"]')).toContainText("Big Pickle")
+  await page.waitForTimeout(200)
+
+  await composer.locator('[data-action="prompt-model"]').click()
+  await modelDialog().getByRole("button", { name: /Claude Opus 4.6/ }).click()
+  await expect(composer.locator('[data-action="prompt-model"]')).toContainText("Claude Opus 4.6")
+  await page.waitForTimeout(200)
+
+  const withVariant = await readVisibleTimeline(scroller)
+  expect(withVariant.scrollTop).toBeCloseTo(before.scrollTop, 0)
+  expect(withVariant.blankCount, JSON.stringify(withVariant)).toBe(0)
+  expect(withVariant.visible.length).toBeGreaterThan(2)
+
+  await composer.locator('[data-action="prompt-model"]').click()
+  await modelDialog().getByRole("button", { name: /DeepSeek V4 Flash Free/ }).click()
+  await expect(composer.locator('[data-action="prompt-model"]')).toContainText("DeepSeek V4 Flash Free")
+  await page.waitForTimeout(200)
+
+  const after = await readVisibleTimeline(scroller)
+  expect(after.scrollTop).toBeCloseTo(before.scrollTop, 0)
+  expect(after.partIds).toEqual(before.partIds)
   expect(after.blankCount, JSON.stringify(after)).toBe(0)
 })

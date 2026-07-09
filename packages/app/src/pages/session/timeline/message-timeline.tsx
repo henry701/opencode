@@ -91,18 +91,37 @@ const timelineCache = new Map<string, { measurements: VirtualItem[]; toolOpen: R
 
 // TanStack Virtual tracks scroll offset from scroll events. When the DOM is already at the
 // preserved offset, programmatic writes are no-ops and the virtualizer can render the wrong
-// range until the user scrolls. Nudge scrollTop so observeElementOffset resyncs.
+// range until the user scrolls. Nudge scrollTop across frames and emit scroll so
+// observeElementOffset re-reads the DOM offset.
+const notifyVirtualizerScroll = (root: HTMLDivElement) => {
+  root.dispatchEvent(new Event("scroll"))
+}
+
 const syncTimelineScrollToDom = (root: HTMLDivElement, scrollTop: number) => {
   const max = Math.max(0, root.scrollHeight - root.clientHeight)
   const target = Math.min(Math.max(scrollTop, 0), max)
   if (Math.abs(root.scrollTop - target) > 1) {
     root.scrollTop = target
+    notifyVirtualizerScroll(root)
     return
   }
   if (max <= 0) return
-  const nudge = target < max ? target + 1 : target - 1
+  const nudge = target < max ? target + 1 : Math.max(0, target - 1)
   root.scrollTop = nudge
-  root.scrollTop = target
+  requestAnimationFrame(() => {
+    root.scrollTop = target
+    notifyVirtualizerScroll(root)
+  })
+}
+
+const reconcileVirtualizerScroll = (
+  root: HTMLDivElement,
+  scrollTop: number,
+  virtualizer: ReturnType<typeof createVirtualizer<HTMLDivElement, HTMLDivElement>>,
+) => {
+  syncTimelineScrollToDom(root, scrollTop)
+  virtualizer.scrollOffset = root.scrollTop
+  notifyVirtualizerScroll(root)
 }
 
 const taskDescription = (part: PartType, sessionID: string) => {
@@ -600,8 +619,7 @@ export function MessageTimeline(props: {
     const restore = (attempt = 0) => {
       const current = listRoot()
       if (!current || props.shouldAnchorBottom()) return
-      syncTimelineScrollToDom(current, scrollTop)
-      virtualizer.getVirtualItems()
+      reconcileVirtualizerScroll(current, scrollTop, virtualizer)
       if (attempt < 8) requestAnimationFrame(() => restore(attempt + 1))
     }
     syncVirtualScrollFrame = requestAnimationFrame(() => {

@@ -1983,15 +1983,17 @@ export default function Page() {
           params.id,
           local.model.current()?.providerID,
           local.model.current()?.id,
+          local.model.variant.current(),
           autoScroll.userScrolled(),
         ] as const,
-      ([id, , , scrolled], prev) => {
+      ([id, , , , scrolled], prev) => {
         if (!id || !scrolled) return
         if (!prev) return
-        const [, prevProvider, prevModel] = prev
+        const [, prevProvider, prevModel, prevVariant] = prev
         const provider = local.model.current()?.providerID
         const model = local.model.current()?.id
-        if (provider === prevProvider && model === prevModel) return
+        const variant = local.model.variant.current()
+        if (provider === prevProvider && model === prevModel && variant === prevVariant) return
         const el = scroller
         if (el) setTimelineScrollTop(el.scrollTop)
         setComposerLayoutEpoch((value) => value + 1)
