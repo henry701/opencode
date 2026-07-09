@@ -196,8 +196,10 @@ function TimelineDiffSummaryRow(props: { diffs: SummaryDiff[] }) {
     >
       <div data-slot="session-turn-diffs-header">
         <span data-slot="session-turn-diffs-label">
-          {props.diffs.length} {language.t("ui.sessionTurn.diffs.changed")}{" "}
-          {language.t(props.diffs.length === 1 ? "ui.common.file.one" : "ui.common.file.other")}
+          {language.t(
+            props.diffs.length === 1 ? "ui.sessionTurn.diffs.changed.one" : "ui.sessionTurn.diffs.changed.other",
+            { count: String(props.diffs.length) },
+          )}
         </span>
         <DiffChanges changes={props.diffs} />
         <Show when={overflow() > 0}>
@@ -1373,11 +1375,12 @@ export function MessageTimeline(props: {
   function VirtualTimelineRow(props: { rowKey: string }) {
     let element: HTMLDivElement
     const initialItem = virtualItemByKey().get(props.rowKey)!
-    const initialRow = timelineRowByKey().get(props.rowKey)!
+    const initialRow = timelineRowByKey().get(props.rowKey)
     const item = createMemo(() => virtualItemByKey().get(props.rowKey) ?? initialItem)
     const row = createMemo(() => timelineRowByKey().get(props.rowKey) ?? initialRow)
     const asyncFile = () => {
       const value = row()
+      if (!value) return false
       if (value._tag !== "AssistantPart" || value.group.type !== "part") return false
       const part = getMsgPart(value.group.ref.messageID, value.group.ref.partID)
       return part?.type === "tool" && ["edit", "write", "apply_patch"].includes(part.tool)
@@ -1420,14 +1423,18 @@ export function MessageTimeline(props: {
           data-index={item().index}
           style={{ "min-height": ready() ? undefined : `${initialItem.size}px` }}
         >
-          <TimelineRowView
-            row={row()}
-            onSizeChange={() => {
-              setReady(true)
-              if (contentMeasureFrame !== undefined) cancelAnimationFrame(contentMeasureFrame)
-              contentMeasureFrame = scheduleConnectedMeasure(element, virtualizer.measureElement)
-            }}
-          />
+          <Show when={row()}>
+            {(timelineRow) => (
+              <TimelineRowView
+                row={timelineRow()}
+                onSizeChange={() => {
+                  setReady(true)
+                  if (contentMeasureFrame !== undefined) cancelAnimationFrame(contentMeasureFrame)
+                  contentMeasureFrame = scheduleConnectedMeasure(element, virtualizer.measureElement)
+                }}
+              />
+            )}
+          </Show>
         </div>
       </div>
     )
