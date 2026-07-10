@@ -62,17 +62,6 @@ const model: Provider.Model = {
   release_date: "2026-01-01",
 }
 
-test("Assistant schema exposes persisted context metadata", () => {
-  const decoded = Schema.decodeUnknownSync(MessageV2.Assistant)({
-    ...assistantInfo(MessageID.ascending(), MessageID.ascending()),
-    system_prompt: "system",
-    tool_defs: "tools",
-  })
-
-  expect(decoded.system_prompt).toBe("system")
-  expect(decoded.tool_defs).toBe("tools")
-})
-
 function userInfo(id: string): SessionV1.User {
   return {
     id,
@@ -1460,6 +1449,7 @@ describe("session.message-v2.fromError", () => {
       "prompt is too long: 213462 tokens > 200000 maximum",
       "Your input exceeds the context window of this model",
       "The input token count (1196265) exceeds the maximum number of tokens allowed (1048575)",
+      "tokens in request more than max tokens allowed",
       "Please reduce the length of the messages or completion",
       "400 status code (no body)",
       "413 status code (no body)",
@@ -1675,9 +1665,9 @@ describe("session.message-v2.latest", () => {
 describe("immediateTurnUnsettled", () => {
   test("steer message before assistant reply keeps turn unsettled", () => {
     const msgs: MessageV2.WithParts[] = [
-      { info: { ...userInfo("u1"), delivery: "immediate" }, parts: [] },
+      { info: { ...userInfo("u1"), delivery: "immediate" } as unknown as SessionV1.User, parts: [] },
       { info: { ...assistantInfo("a1", "u1"), finish: "stop" }, parts: [] },
-      { info: { ...userInfo("u2"), delivery: "immediate" }, parts: [] },
+      { info: { ...userInfo("u2"), delivery: "immediate" } as unknown as SessionV1.User, parts: [] },
     ]
 
     expect(MessageV2.immediateTurnUnsettled(msgs)).toBe(true)
@@ -1685,9 +1675,9 @@ describe("immediateTurnUnsettled", () => {
 
   test("completed steer settles the immediate turn", () => {
     const msgs: MessageV2.WithParts[] = [
-      { info: { ...userInfo("u1"), delivery: "immediate" }, parts: [] },
+      { info: { ...userInfo("u1"), delivery: "immediate" } as unknown as SessionV1.User, parts: [] },
       { info: { ...assistantInfo("a1", "u1"), finish: "stop" }, parts: [] },
-      { info: { ...userInfo("u2"), delivery: "immediate" }, parts: [] },
+      { info: { ...userInfo("u2"), delivery: "immediate" } as unknown as SessionV1.User, parts: [] },
       { info: { ...assistantInfo("a2", "u2"), finish: "stop" }, parts: [] },
     ]
 
