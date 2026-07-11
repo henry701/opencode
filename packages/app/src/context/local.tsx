@@ -111,7 +111,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const list = createMemo(() => sync().data.agent.filter((item) => item.mode !== "subagent" && !item.hidden))
     const connected = createMemo(() => new Set(providers.connected().map((item) => item.id)))
 
-    const [saved, setSaved] = persisted(
+    const [saved, setSaved, , savedReady] = persisted(
       {
         ...Persist.serverWorkspace(serverSDK().scope, sdk().directory, "model-selection", ["model-selection.v1"]),
         migrate,
@@ -471,6 +471,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       model,
       agent,
       session: {
+        ready: savedReady,
         reset() {
           setStore({ draft: undefined, promoting: undefined })
         },
@@ -506,3 +507,5 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     return result
   },
 })
+
+export type ModelSelection = ReturnType<typeof useLocal>["model"]

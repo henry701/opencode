@@ -3,12 +3,12 @@ import { showToast } from "@opencode-ai/ui/toast"
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import { Binary } from "@opencode-ai/core/util/binary"
 import { useNavigate, useParams, useSearchParams } from "@solidjs/router"
-import { batch, type Accessor } from "solid-js"
+import { batch, startTransition, type Accessor } from "solid-js"
 import { useTabs } from "@/context/tabs"
 import { useServerSync, type ServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
-import { useLocal } from "@/context/local"
+import { useLocal, type ModelSelection } from "@/context/local"
 import { usePermission } from "@/context/permission"
 import { type ContextItem, type ImageAttachmentPart, type Prompt, type usePrompt } from "@/context/prompt"
 import { useSDK, type DirectorySDK } from "@/context/sdk"
@@ -199,6 +199,7 @@ type PromptSubmitInput = {
   onQueue?: (draft: FollowupDraft) => void
   onAbort?: () => void
   onSubmit?: () => void
+  model?: ModelSelection
 }
 
 export function createPromptSubmit(input: PromptSubmitInput) {
@@ -307,9 +308,10 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       return
     }
 
-    const currentModel = local.model.current()
+    const modelState = input.model ?? local.model
+    const currentModel = modelState.current()
     const currentAgent = local.agent.current()
-    const variant = local.model.variant.current()
+    const variant = modelState.variant.current()
     if (!currentModel || !currentAgent) {
       showToast({
         title: language.t("prompt.toast.modelAgentRequired.title"),
@@ -329,7 +331,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       modelID: currentModel.id,
       providerID: currentModel.provider.id,
     }
-    const modelSelection = {
+    const selectedModel = {
       ...model,
       ...(currentModel.name ? { name: currentModel.name } : {}),
       ...(currentModel.provider.name ? { providerName: currentModel.provider.name } : {}),
@@ -393,18 +395,21 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       if (created) {
         seed(sessionDirectory, created)
         session = created
-        if (shouldAutoAccept) permission.enableAutoAccept(session.id, sessionDirectory)
-        local.session.promote(sessionDirectory, session.id, {
-          agent,
-          model: modelSelection,
-          variant: variant ?? null,
-          source: "user",
+        await startTransition(() => {
+          if (!session) return
+          if (shouldAutoAccept) permission.enableAutoAccept(session.id, sessionDirectory)
+          local.session.promote(sessionDirectory, session.id, {
+            agent,
+            model: selectedModel,
+            variant: variant ?? null,
+            source: "user",
+          })
+          layout.handoff.setTabs(base64Encode(sessionDirectory), session.id)
+          const draftID = search.draftId
+          if (draftID) tabs.promoteDraft(draftID, { server: tabs.draft(draftID).server, sessionId: session.id })
+          else navigate(`/${base64Encode(sessionDirectory)}/session/${session.id}`)
+          submission.retarget(prompt.capture({ dir: base64Encode(sessionDirectory), id: session.id }))
         })
-        layout.handoff.setTabs(base64Encode(sessionDirectory), session.id)
-        const draftID = search.draftId
-        if (draftID) tabs.promoteDraft(draftID, { server: tabs.draft(draftID).server, sessionId: session.id })
-        else navigate(`/${base64Encode(sessionDirectory)}/session/${session.id}`)
-        submission.retarget(prompt.capture({ dir: base64Encode(sessionDirectory), id: session.id }))
       }
     }
     if (!session) {
