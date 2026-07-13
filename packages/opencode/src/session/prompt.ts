@@ -112,16 +112,6 @@ export interface Interface {
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
-  readonly updateDeferredQueue: (
-    sessionID: SessionID,
-    queueID: QueueItemID,
-    message: SessionV1.WithParts,
-  ) => Effect.Effect<boolean>
-  readonly sendDeferredNow: (
-    sessionID: SessionID,
-    queueID: QueueItemID,
-    message?: SessionV1.WithParts,
-  ) => Effect.Effect<SessionV1.WithParts, QueueItemNotFoundError | Session.BusyError>
   readonly queueEnqueue: (input: PromptInput) => Effect.Effect<QueueItem, Image.Error>
   readonly queueUpdate: (input: PromptInput & { queueID: QueueItemID }) => Effect.Effect<boolean, Image.Error>
   readonly queueSend: (input: { sessionID: SessionID; queueID: QueueItemID; prompt?: PromptInput }) => Effect.Effect<
@@ -1139,15 +1129,10 @@ export const layer = Layer.effect(
       yield* loop({ sessionID }).pipe(Effect.ignore, Effect.forkIn(scope))
     })
 
-    const sendDeferredNow = Effect.fn("SessionPrompt.sendDeferredNow")(function* (
+    const sendQueuedNow = Effect.fn("SessionPrompt.sendQueuedNow")(function* (
       sessionID: SessionID,
       queueID: QueueItemID,
-      message?: SessionV1.WithParts,
     ) {
-      if (message) {
-        const ok = yield* promptQueue.update(sessionID, queueID, queueDataFromMessage(message))
-        if (!ok) return yield* new QueueItemNotFoundError({ message: "Queued message not found" })
-      }
       const items = yield* promptQueue.list(sessionID)
       const item = items.find((entry) => entry.id === queueID)
       if (!item) return yield* new QueueItemNotFoundError({ message: "Queued message not found" })
@@ -1169,15 +1154,7 @@ export const layer = Layer.effect(
         const ok = yield* promptQueue.update(input.sessionID, input.queueID, queueDataFromMessage(message))
         if (!ok) return yield* new QueueItemNotFoundError({ message: "Queued message not found" })
       }
-      return yield* sendDeferredNow(input.sessionID, input.queueID)
-    })
-
-    const updateDeferredQueue = Effect.fn("SessionPrompt.updateDeferredQueue")(function* (
-      sessionID: SessionID,
-      queueID: QueueItemID,
-      message: SessionV1.WithParts,
-    ) {
-      return yield* promptQueue.update(sessionID, queueID, queueDataFromMessage(message))
+      return yield* sendQueuedNow(input.sessionID, input.queueID)
     })
 
     const lastAssistant = Effect.fnUntraced(function* (sessionID: SessionID) {
@@ -1607,8 +1584,6 @@ export const layer = Layer.effect(
       shell,
       command,
       resolvePromptParts,
-      updateDeferredQueue,
-      sendDeferredNow,
       queueEnqueue,
       queueUpdate,
       queueSend,
