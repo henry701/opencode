@@ -1500,6 +1500,29 @@ test("public provider info omits invalid models", () => {
   expect(result.models.invalid).toBeUndefined()
 })
 
+test("public model strips null reasoning effort values for sdk boundaries", () => {
+  const provider = Provider.fromModelsDevProvider({
+    id: "test",
+    name: "Test",
+    env: [],
+    models: {
+      reasoner: {
+        id: "reasoner",
+        name: "Reasoner",
+        cost: { input: 1, output: 1 },
+        limit: { context: 128_000, output: 16_000 },
+        reasoning_options: [{ type: "effort", values: ["low", null, "high"] }],
+      },
+    },
+  } as unknown as ModelsDev.Provider)
+
+  const model = provider.models.reasoner
+  expect(model.reasoning_options?.[0]).toEqual({ type: "effort", values: ["low", null, "high"] })
+
+  const publicInfo = Provider.toPublicInfo(provider)
+  expect(publicInfo.models.reasoner.reasoning_options).toEqual([{ type: "effort", values: ["low", "high"] }])
+})
+
 it.instance("model variants are generated for reasoning models", () =>
   Effect.gen(function* () {
     yield* set("ANTHROPIC_API_KEY", "test-api-key")

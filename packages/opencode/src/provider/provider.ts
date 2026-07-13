@@ -28,6 +28,7 @@ import { optional } from "@opencode-ai/core/schema"
 import { ProviderTransform } from "./transform"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import type { Provider as SdkProvider } from "@opencode-ai/sdk/v2"
 import { ModelStatus } from "./model-status"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderError } from "./error"
@@ -1090,7 +1091,11 @@ export function toPublicInfo(provider: Info): Info {
     JSON.stringify(
       {
         ...provider,
-        models: Object.fromEntries(Object.entries(provider.models).filter(([, model]) => Schema.is(Model)(model))),
+        models: Object.fromEntries(
+          Object.entries(provider.models)
+            .filter(([, model]) => Schema.is(Model)(model))
+            .map(([id, model]) => [id, publicModel(model)]),
+        ),
       },
       (_, value) => {
         if (typeof value === "function" || typeof value === "symbol" || value === undefined) return undefined
@@ -1246,6 +1251,36 @@ function normalizeReasoningOption(option: unknown): ReasoningOption | undefined 
     ...(min === undefined ? {} : { min }),
     ...(max === undefined ? {} : { max }),
   }
+}
+
+type PublicReasoningOption = NonNullable<import("@opencode-ai/sdk/v2").Model["reasoning_options"]>[number]
+
+function publicReasoningOptions(options: Model["reasoning_options"]): PublicReasoningOption[] | undefined {
+  if (!options) return undefined
+  const next: PublicReasoningOption[] = []
+  for (const option of options) {
+    if (option.type === "effort") {
+      const values = option.values.filter((value): value is string => typeof value === "string")
+      if (values.length > 0) next.push({ type: "effort", values })
+      continue
+    }
+    if (option.type === "toggle") {
+      next.push({ type: "toggle" })
+      continue
+    }
+    next.push({
+      type: "budget_tokens",
+      ...(option.min === undefined ? {} : { min: option.min }),
+      ...(option.max === undefined ? {} : { max: option.max }),
+    })
+  }
+  return next.length > 0 ? next : undefined
+}
+
+export function publicModel(model: Model): Model {
+  const reasoning_options = publicReasoningOptions(model.reasoning_options)
+  if (reasoning_options === undefined) return model
+  return { ...model, reasoning_options: reasoning_options as Model["reasoning_options"] }
 }
 
 function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model): Model {
@@ -1441,7 +1476,7 @@ const layer = Layer.effect(
           const pluginAuth = yield* auth.get(providerID).pipe(Effect.orDie)
 
           provider.models = yield* Effect.promise(async () => {
-            const next = await models(toPublicInfo(provider), { auth: pluginAuth })
+            const next = await models(toPublicInfo(provider) as SdkProvider, { auth: pluginAuth })
             return Object.fromEntries(
               Object.entries(next).map(([id, model]) => [
                 id,
@@ -1922,7 +1957,7 @@ const layer = Layer.effect(
 
       const experimental = yield* plugin.trigger<"experimental.provider.small_model">(
         "experimental.provider.small_model",
-        { provider: toPublicInfo(provider) },
+        { provider: toPublicInfo(provider) as SdkProvider },
         { model: undefined },
       )
       if (experimental.model) {
