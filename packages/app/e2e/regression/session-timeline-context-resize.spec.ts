@@ -44,7 +44,8 @@ test.describe("regression: session timeline context group resize", () => {
     expect(samples.at(-1)?.expanded).toBe("true")
   })
 
-  test("paints a stable exploring to explored transition", async ({ page }) => {
+  test("paints a stable exploring to explored transition", async ({ page, browserName }) => {
+    test.skip(browserName !== "chromium", "Visual stability probes require CDP")
     const events: { directory: string; payload: Record<string, unknown> }[] = []
     await page.setViewportSize({ width: 1400, height: 900 })
     await mockServer(page, events, [

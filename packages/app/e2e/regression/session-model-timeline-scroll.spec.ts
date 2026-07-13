@@ -12,6 +12,7 @@ import {
 } from "../performance/timeline-stability/fixture"
 import { mockOpenCodeServer } from "../utils/mock-server"
 import { expectSessionTitle } from "../utils/waits"
+import { expectAtBottom, scrollToBottom, scrollToHistoryView } from "../utils/scroll"
 
 const messages = Array.from({ length: 80 }, (_, index) => {
   const userID = `msg_history_${index}_user`
@@ -99,11 +100,7 @@ test("keeps scrolled timeline messages visible after switching models", async ({
   await expect(scroller).toBeVisible()
 
   await scroller.hover()
-  for (let i = 0; i < 80; i++) {
-    await page.mouse.wheel(0, -300)
-  }
-  await expect(page.getByRole("button", { name: /Jump to latest/i })).toBeVisible({ timeout: 5000 })
-
+  await scrollToHistoryView(scroller)
   await page.waitForTimeout(200)
 
   const before = await readVisibleTimeline(scroller)
@@ -162,11 +159,7 @@ test("keeps scrolled timeline when model switch does not resize composer", async
   await expect(scroller).toBeVisible()
 
   await scroller.hover()
-  for (let i = 0; i < 80; i++) {
-    await page.mouse.wheel(0, -300)
-  }
-  await expect(page.getByRole("button", { name: /Jump to latest/i })).toBeVisible({ timeout: 5000 })
-
+  await scrollToHistoryView(scroller)
   await page.waitForTimeout(200)
   const before = await readVisibleTimeline(scroller)
   expect(before.visible.length).toBeGreaterThan(2)
@@ -207,10 +200,7 @@ test("keeps scrolled timeline when switching between variant and non-variant mod
   await expect(scroller).toBeVisible()
 
   await scroller.hover()
-  for (let i = 0; i < 80; i++) {
-    await page.mouse.wheel(0, -300)
-  }
-  await expect(page.getByRole("button", { name: /Jump to latest/i })).toBeVisible({ timeout: 5000 })
+  await scrollToHistoryView(scroller)
   await page.waitForTimeout(200)
 
   const before = await readVisibleTimeline(scroller)
@@ -242,6 +232,6 @@ test("keeps scrolled timeline when switching between variant and non-variant mod
 
   const after = await readVisibleTimeline(scroller)
   expect(after.scrollTop).toBeCloseTo(before.scrollTop, 0)
-  expect(after.partIds).toEqual(before.partIds)
+  expect(after.visible).toEqual(before.visible)
   expect(after.blankCount, JSON.stringify(after)).toBe(0)
 })

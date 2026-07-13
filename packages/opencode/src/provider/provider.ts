@@ -982,21 +982,6 @@ const ProviderInterleaved = Schema.Union([
   }),
 ])
 
-const ProviderReasoningOption = Schema.Union([
-  Schema.Struct({
-    type: Schema.Literal("effort"),
-    values: Schema.Array(Schema.NullOr(Schema.String)),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("toggle"),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("budget_tokens"),
-    min: optional(Schema.Finite),
-    max: optional(Schema.Finite),
-  }),
-])
-
 const ProviderCapabilities = Schema.Struct({
   temperature: Schema.Boolean,
   reasoning: Schema.Boolean,
@@ -1055,7 +1040,6 @@ export const Model = Schema.Struct({
   options: Schema.Record(Schema.String, Schema.Any),
   headers: Schema.Record(Schema.String, Schema.String),
   release_date: Schema.String,
-  reasoning_options: optional(Schema.Array(ProviderReasoningOption)),
   variants: optional(Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Any))),
 }).annotate({ identifier: "Model" })
 export type Model = Types.DeepMutable<Schema.Schema.Type<typeof Model>>
@@ -1091,11 +1075,7 @@ export function toPublicInfo(provider: Info): Info {
     JSON.stringify(
       {
         ...provider,
-        models: Object.fromEntries(
-          Object.entries(provider.models)
-            .filter(([, model]) => Schema.is(Model)(model))
-            .map(([id, model]) => [id, publicModel(model)]),
-        ),
+        models: Object.fromEntries(Object.entries(provider.models).filter(([, model]) => Schema.is(Model)(model))),
       },
       (_, value) => {
         if (typeof value === "function" || typeof value === "symbol" || value === undefined) return undefined
@@ -1223,66 +1203,6 @@ function cost(c: ModelsDev.Model["cost"]): Model["cost"] {
   return result
 }
 
-type ReasoningOption = NonNullable<Model["reasoning_options"]>[number]
-
-function reasoningOptions(input: unknown): Model["reasoning_options"] {
-  if (!Array.isArray(input)) return []
-  return input.flatMap((option) => {
-    const normalized = normalizeReasoningOption(option)
-    return normalized ? [normalized] : []
-  })
-}
-
-function normalizeReasoningOption(option: unknown): ReasoningOption | undefined {
-  if (!isRecord(option)) return
-  if (option.type === "effort") {
-    if (!Array.isArray(option.values)) return
-    return {
-      type: "effort",
-      values: option.values.filter((value): value is string | null => value === null || typeof value === "string"),
-    }
-  }
-  if (option.type === "toggle") return { type: "toggle" }
-  if (option.type !== "budget_tokens") return
-  const min = typeof option.min === "number" && Number.isFinite(option.min) ? option.min : undefined
-  const max = typeof option.max === "number" && Number.isFinite(option.max) ? option.max : undefined
-  return {
-    type: "budget_tokens",
-    ...(min === undefined ? {} : { min }),
-    ...(max === undefined ? {} : { max }),
-  }
-}
-
-type PublicReasoningOption = NonNullable<import("@opencode-ai/sdk/v2").Model["reasoning_options"]>[number]
-
-function publicReasoningOptions(options: Model["reasoning_options"]): PublicReasoningOption[] | undefined {
-  if (!options) return undefined
-  const next: PublicReasoningOption[] = []
-  for (const option of options) {
-    if (option.type === "effort") {
-      const values = option.values.filter((value): value is string => typeof value === "string")
-      if (values.length > 0) next.push({ type: "effort", values })
-      continue
-    }
-    if (option.type === "toggle") {
-      next.push({ type: "toggle" })
-      continue
-    }
-    next.push({
-      type: "budget_tokens",
-      ...(option.min === undefined ? {} : { min: option.min }),
-      ...(option.max === undefined ? {} : { max: option.max }),
-    })
-  }
-  return next.length > 0 ? next : undefined
-}
-
-export function publicModel(model: Model): Model {
-  const reasoning_options = publicReasoningOptions(model.reasoning_options)
-  if (reasoning_options === undefined) return model
-  return { ...model, reasoning_options: reasoning_options as Model["reasoning_options"] }
-}
-
 function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model): Model {
   const base: Model = {
     id: ModelV2.ID.make(model.id),
@@ -1325,13 +1245,14 @@ function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model
       interleaved: model.interleaved ?? false,
     },
     release_date: model.release_date ?? "",
-    reasoning_options: reasoningOptions(model.reasoning_options),
     variants: {},
   }
 
+  const variants = ProviderTransform.reasoningVariants(model, base) ?? ProviderTransform.variants(base)
+
   return {
     ...base,
-    variants: mapValues(ProviderTransform.variants(base), (v) => v),
+    variants: mapValues(variants, (v) => v),
   }
 }
 
@@ -1572,10 +1493,13 @@ const layer = Layer.effect(
               headers: mergeDeep(existingModel?.headers ?? {}, model.headers ?? {}),
               family: model.family ?? existingModel?.family ?? "",
               release_date: model.release_date ?? existingModel?.release_date ?? "",
-              reasoning_options: existingModel?.reasoning_options,
               variants: {},
             }
-            const merged = mergeDeep(ProviderTransform.variants(parsedModel), model.variants ?? {})
+            const variants =
+              existingModel?.api.npm === parsedModel.api.npm
+                ? (existingModel.variants ?? ProviderTransform.variants(parsedModel))
+                : ProviderTransform.variants(parsedModel)
+            const merged = mergeDeep(variants, model.variants ?? {})
             parsedModel.variants = mapValues(
               pickBy(merged, (v) => !v.disabled),
               (v) => omit(v, ["disabled"]),
@@ -1703,7 +1627,7 @@ const layer = Layer.effect(
             )
               delete provider.models[modelID]
 
-            if (!model.variants || Object.keys(model.variants).length === 0) {
+            if (model.variants === undefined) {
               model.variants = mapValues(ProviderTransform.variants(model), (v) => v)
             }
 

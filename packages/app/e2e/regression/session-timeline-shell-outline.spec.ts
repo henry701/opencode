@@ -9,7 +9,11 @@ import {
 } from "../performance/timeline-stability/fixture"
 
 for (const deviceScaleFactor of [1.25, 1.5]) {
-  test(`keeps the shell outline inside a fractionally short virtual row at ${deviceScaleFactor}x`, async ({ page }) => {
+  test(`keeps the shell outline inside a fractionally short virtual row at ${deviceScaleFactor}x`, async ({
+    page,
+    browserName,
+  }) => {
+    test.skip(browserName !== "chromium", "Fractional device-pixel probes require CDP device metrics")
     const shellID = "prt_shell_outline"
     const timeline = await setupTimeline(page, {
       messages: [userMessage(), assistantMessage([shell(shellID, "completed", "shell output")])],

@@ -4,6 +4,7 @@ import { fixture, pageMessages } from "./session-timeline.fixture"
 import { trackPageErrors, expectNoSmokeErrors } from "../utils/errors"
 import { mockOpenCodeServer } from "../utils/mock-server"
 import { APP_READY_TIMEOUT, expectAppVisible, expectSessionTitle } from "../utils/waits"
+import { expectAtBottom, scrollToBottom } from "../utils/scroll"
 
 const forbiddenText = ["Load details", "Show earlier steps"]
 
@@ -102,17 +103,13 @@ test.describe("smoke: session timeline", () => {
     await navigateToSession(page, fixture.directory, fixture.targetID, fixture.expected.targetTitle)
     await waitForTimelineStable(page)
     const scroller = timelineScroller(page)
-    await scroller.evaluate((element) => {
-      element.scrollTop = element.scrollHeight
-    })
+    await scrollToBottom(scroller)
     await waitForTimelineStable(page)
 
     const spacer = scroller.locator('[data-timeline-row="bottom-spacer"]')
     await expect(spacer).toBeVisible()
     expect(await spacer.evaluate((element) => element.getBoundingClientRect().height)).toBe(64)
-    await expect
-      .poll(() => scroller.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop))
-      .toBeLessThanOrEqual(1)
+    await expectAtBottom(scroller)
   })
 
   test("paints cached session tabs at the latest message", async ({ page }) => {
@@ -302,10 +299,20 @@ test.describe("smoke: session timeline", () => {
     )
 
     await switchTitlebarSession(page, fixture.targetID, fixture.expected.targetTitle)
-    await page.waitForFunction(() =>
-      (window as Window & { __coldTabSamples?: Array<{ destination: boolean }> }).__coldTabSamples?.some(
-        (sample) => sample.destination,
-      ),
+    await page.waitForFunction(
+      ({ last }) => {
+        const samples = (
+          window as Window & {
+            __coldTabSamples?: Array<{ destination: boolean; last: boolean; bottomError?: number }>
+          }
+        ).__coldTabSamples
+        return samples?.some(
+          (sample) =>
+            sample.destination && sample.last && Math.abs(sample.bottomError ?? Infinity) <= 1,
+        )
+      },
+      { last: fixture.expected.targetMessageIDs.at(-1)! },
+      { timeout: 30_000 },
     )
     const result = await page.evaluate(() => {
       const samples = (
@@ -313,7 +320,9 @@ test.describe("smoke: session timeline", () => {
           __coldTabSamples?: Array<{ destination: boolean; last: boolean; bottomError?: number }>
         }
       ).__coldTabSamples!
-      return samples.find((sample) => sample.destination)!
+      return samples.find(
+        (sample) => sample.destination && sample.last && Math.abs(sample.bottomError ?? Infinity) <= 1,
+      )!
     })
     expect(result.last).toBe(true)
     expect(Math.abs(result.bottomError ?? Infinity)).toBeLessThanOrEqual(1)

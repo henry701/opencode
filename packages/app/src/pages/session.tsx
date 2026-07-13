@@ -891,6 +891,7 @@ export default function Page() {
   let scrollMark = 0
   let messageMark = 0
   const [timelineScrollTop, setTimelineScrollTop] = createSignal(0)
+  const [pendingTabBottomAnchor, setPendingTabBottomAnchor] = createSignal(false)
 
   const scrollGestureWindowMs = 250
 
@@ -1548,6 +1549,7 @@ export default function Page() {
       (id, previous) => {
         if (!id || !previous || id === previous) return
         if (location.hash || store.messageId || ui.pendingMessage) return
+        setPendingTabBottomAnchor(true)
         autoScroll.resume()
       },
     ),
@@ -1569,6 +1571,8 @@ export default function Page() {
     setTimelineScrollTop(el.scrollTop)
     const max = el.scrollHeight - el.clientHeight
     const distance = max - el.scrollTop
+    if (distance <= 80) setPendingTabBottomAnchor(false)
+    if (autoScroll.userScrolled()) setPendingTabBottomAnchor(false)
     const overflow = max > 1
     const bottom = !overflow || distance <= 2
     const jump = overflow && distance > jumpThreshold(el)
@@ -1595,6 +1599,7 @@ export default function Page() {
 
   const resumeScroll = () => {
     setStore("messageId", undefined)
+    setPendingTabBottomAnchor(true)
     autoScroll.resume()
     scrollToEnd()
     clearMessageHash()
@@ -2313,13 +2318,13 @@ export default function Page() {
                   onMarkScrollGesture={markScrollGesture}
                   hasScrollGesture={hasScrollGesture}
                   onUserScroll={markUserScroll}
-                  onLeaveBottom={autoScroll.pause}
                   onHistoryScroll={onHistoryScroll}
                   onAutoScrollInteraction={autoScroll.handleInteraction}
                   composerLayoutEpoch={composerLayoutEpoch()}
                   preservedScrollTop={timelineScrollTop()}
                   shouldAnchorBottom={() => {
                     if (location.hash || store.messageId || ui.pendingMessage || autoScroll.userScrolled()) return false
+                    if (pendingTabBottomAnchor()) return true
                     const el = scroller
                     if (!el) return true
                     return nearTimelineBottom(el)
