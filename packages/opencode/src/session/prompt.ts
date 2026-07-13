@@ -140,7 +140,7 @@ export class QueueItemNotFoundError extends Schema.TaggedErrorClass<QueueItemNot
   },
 ) {}
 
-const layer = Layer.effect(
+export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const status = yield* SessionStatus.Service
@@ -701,6 +701,7 @@ const layer = Layer.effect(
         },
         system: input.system,
         format: input.format,
+        ...(input.delivery === "deferred" ? { delivery: "deferred" as const } : {}),
       }
 
       const current = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
@@ -1081,7 +1082,6 @@ const layer = Layer.effect(
         yield* sessions.updateMessage(info)
         for (const part of parts) yield* sessions.updatePart(part)
       }
-
       return { info, parts }
     }, Effect.scoped)
 
@@ -1635,6 +1635,7 @@ export const PromptInput = Schema.Struct({
   format: Schema.optional(SessionV1.Format),
   system: Schema.optional(Schema.String),
   variant: Schema.optional(Schema.String),
+  delivery: Schema.optional(Schema.Literals(["immediate", "deferred", "queue", "steer"])),
   parts: Schema.Array(
     Schema.Union([
       SessionV1.TextPartInput,

@@ -1099,6 +1099,8 @@ export const dict = {
   "error.childStore.persistedProjectIconCreateFailed": "Error al crear icono de proyecto persistente",
   "error.childStore.storeCreateFailed": "Error al crear almacén",
   "terminal.connectionLost.abnormalClose": "WebSocket cerrado anormalmente: {{code}}",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
   "context.breakdown.toolDefs": "Tool Definitions",
   "session.followupDock.editing": "Editing",
   "session.header.reveal.finder": "Reveal in Finder",

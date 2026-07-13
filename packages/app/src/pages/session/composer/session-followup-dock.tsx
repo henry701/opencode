@@ -11,7 +11,7 @@ export function SessionFollowupDock(props: {
   editingMessageID?: string
   onSend: (id: string) => void
   onEdit: (id: string) => void
-  onRemove?: (id: string) => void
+  onRemove: (id: string) => void
 }) {
   const language = useLanguage()
   const [store, setStore] = createStore({
@@ -100,9 +100,16 @@ export function SessionFollowupDock(props: {
               const active = () => editing() === item.id
               return (
                 <div
+                  tabIndex={0}
                   classList={{
                     "flex items-center gap-2 min-w-0 py-1 px-1 -mx-1 rounded-md": true,
                     "bg-v2-background-bg-raised ring-1 ring-inset ring-[var(--v2-border-border-focus)]": active(),
+                  }}
+                  onKeyDown={(event) => {
+                    if (!event.altKey || event.key !== "Delete") return
+                    event.preventDefault()
+                    event.stopPropagation()
+                    props.onRemove(item.id)
                   }}
                 >
                   <span
@@ -136,25 +143,32 @@ export function SessionFollowupDock(props: {
                         >
                           {language.t("session.followupDock.edit")}
                         </Button>
-                        <Show when={props.onRemove}>
-                          {(onRemove) => (
-                            <Button
-                              size="small"
-                              variant="ghost"
-                              class="shrink-0"
-                              disabled={!!props.sending || !!editing()}
-                              onClick={() => onRemove()(item.id)}
-                            >
-                              Remove
-                            </Button>
-                          )}
-                        </Show>
+                        <IconButton
+                          icon="trash"
+                          size="normal"
+                          variant="ghost"
+                          class="shrink-0"
+                          disabled={!!props.sending}
+                          onClick={() => props.onRemove(item.id)}
+                          aria-label={language.t("common.delete")}
+                        />
                       </>
                     }
                   >
-                    <span class="shrink-0 text-12-medium text-icon-info-active">
-                      {language.t("session.followupDock.editing")}
-                    </span>
+                    <>
+                      <span class="shrink-0 text-12-medium text-icon-info-active">
+                        {language.t("session.followupDock.editing")}
+                      </span>
+                      <IconButton
+                        icon="trash"
+                        size="normal"
+                        variant="ghost"
+                        class="shrink-0"
+                        disabled={!!props.sending}
+                        onClick={() => props.onRemove(item.id)}
+                        aria-label={language.t("common.delete")}
+                      />
+                    </>
                   </Show>
                 </div>
               )

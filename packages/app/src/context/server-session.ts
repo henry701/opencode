@@ -140,7 +140,7 @@ export function createServerSession(client: OpencodeClient, options?: { retry?: 
     info: {} as Record<string, Session | undefined>,
     session_status: {} as Record<string, SessionStatus>,
     session_diff: {} as Record<string, SnapshotFileDiff[]>,
-    prompt_queue: {} as Record<string, { id: string; text: string }[]>,
+    prompt_queue: {} as Record<string, { id: string; text: string }[] | undefined>,
     todo: {} as Record<string, Todo[]>,
     permission: {} as Record<string, PermissionRequest[]>,
     question: {} as Record<string, QuestionRequest[]>,

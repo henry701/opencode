@@ -308,10 +308,10 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       return
     }
 
-    const modelSelection = input.model ?? local.model
-    const currentModel = modelSelection.current()
+    const modelState = input.model ?? local.model
+    const currentModel = modelState.current()
     const currentAgent = local.agent.current()
-    const variant = modelSelection.variant.current()
+    const variant = modelState.variant.current()
     if (!currentModel || !currentAgent) {
       showToast({
         title: language.t("prompt.toast.modelAgentRequired.title"),
@@ -327,6 +327,16 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     const isNewSession = !params.id
     const shouldAutoAccept = isNewSession && input.autoAccept()
     const worktreeSelection = input.newSessionWorktree?.() || "main"
+    const model = {
+      modelID: currentModel.id,
+      providerID: currentModel.provider.id,
+    }
+    const selectedModel = {
+      ...model,
+      ...(currentModel.name ? { name: currentModel.name } : {}),
+      ...(currentModel.provider.name ? { providerName: currentModel.provider.name } : {}),
+    }
+    const agent = currentAgent.name
 
     let sessionDirectory = projectDirectory
     let client = sdk().client
@@ -389,9 +399,10 @@ export function createPromptSubmit(input: PromptSubmitInput) {
           if (!session) return
           if (shouldAutoAccept) permission.enableAutoAccept(session.id, sessionDirectory)
           local.session.promote(sessionDirectory, session.id, {
-            agent: currentAgent.name,
-            model: { providerID: currentModel.provider.id, modelID: currentModel.id },
+            agent,
+            model: selectedModel,
             variant: variant ?? null,
+            source: "user",
           })
           layout.handoff.setTabs(base64Encode(sessionDirectory), session.id)
           const draftID = search.draftId
@@ -409,11 +420,6 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       return
     }
 
-    const model = {
-      modelID: currentModel.id,
-      providerID: currentModel.provider.id,
-    }
-    const agent = currentAgent.name
     const draft: FollowupDraft = {
       sessionID: session.id,
       sessionDirectory,

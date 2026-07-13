@@ -140,7 +140,7 @@ index 70483ea4f7c340b84c23766ac1d1df21e052842b..4b4d052860caa019556151e9e46dbfda
 +      file_data?: string;
 +      filename?: string;
 +    };
- 
+
  export type XaiResponsesUserMessage = {
    role: 'user';
 diff --git a/src/responses/xai-responses-language-model.ts b/src/responses/xai-responses-language-model.ts
@@ -155,7 +155,7 @@ index f90df62eb9a30154388b1390e9f3acc3ccc022bf..00e61cba6cf048ae0045be692f33cb7e
 +        prompt_cache_key: options.promptCacheKey,
 +      }),
      };
- 
+
      if (xaiTools && xaiTools.length > 0) {
 diff --git a/src/responses/xai-responses-options.ts b/src/responses/xai-responses-options.ts
 index f8e96c061bf8793a402ababb8cad65bb2ad6aead..15c168892c1e8755453c61d3061e958cfd51ac71 100644

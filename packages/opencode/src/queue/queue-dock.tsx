@@ -88,6 +88,7 @@ export function QueueDock(props: {
   editingMessageID?: () => string | undefined
   onEdit: (id: string) => void
   onSendNow: (id: string) => void
+  onRemove: (id: string) => void
 }) {
   const [collapsed, setCollapsed] = createSignal(false)
   const total = () => props.items().length
@@ -213,6 +214,19 @@ export function QueueDock(props: {
                       <text fg={props.disabled ? props.theme().textMuted : props.theme().primary}>
                         <span style={{ fg: props.theme().textMuted }}>[</span>
                         edit
+                        <span style={{ fg: props.theme().textMuted }}>]</span>
+                      </text>
+                    </box>
+                    <box
+                      flexShrink={0}
+                      onMouseUp={() => {
+                        if (props.disabled) return
+                        props.onRemove(entry.item.id)
+                      }}
+                    >
+                      <text fg={props.disabled ? props.theme().textMuted : props.theme().text}>
+                        <span style={{ fg: props.theme().textMuted }}>[</span>
+                        remove
                         <span style={{ fg: props.theme().textMuted }}>]</span>
                       </text>
                     </box>

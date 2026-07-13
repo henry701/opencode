@@ -5,10 +5,10 @@ import { onMount } from "solid-js"
 import type { Event, GlobalEvent } from "@opencode-ai/sdk/v2"
 import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
-import { Global } from "@opencode-ai/core/global"
 import { ArgsProvider } from "../../../src/context/args"
 import { ExitProvider } from "../../../src/context/exit"
 import { KVProvider } from "../../../src/context/kv"
+import { PermissionProvider } from "../../../src/context/permission"
 import { ProjectProvider } from "../../../src/context/project"
 import { SDKProvider } from "../../../src/context/sdk"
 import { SyncProvider, useSync } from "../../../src/context/sync"
@@ -28,8 +28,9 @@ function global(payload: Event): GlobalEvent {
 }
 
 test("TUI sync preserves queued prompts across rollback session updates", async () => {
-  await mkdir(Global.Path.state, { recursive: true })
-  await writeFile(path.join(Global.Path.state, "kv.json"), "{}")
+  const state = "/tmp/opencode/state"
+  await mkdir(state, { recursive: true })
+  await writeFile(path.join(state, "kv.json"), "{}")
 
   const events = createEventSource()
   const calls = createFetch()
@@ -46,20 +47,22 @@ test("TUI sync preserves queued prompts across rollback session updates", async 
   }
 
   const app = await testRender(() => (
-    <TestTuiContexts>
-      <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
-        <ProjectProvider>
-          <KVProvider>
-            <ExitProvider exit={() => {}}>
-              <ArgsProvider>
-                <SyncProvider>
-                  <Probe />
-                </SyncProvider>
-              </ArgsProvider>
-            </ExitProvider>
-          </KVProvider>
-        </ProjectProvider>
-      </SDKProvider>
+    <TestTuiContexts paths={{ state }}>
+      <ArgsProvider>
+        <KVProvider>
+          <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
+            <PermissionProvider>
+              <ProjectProvider>
+                <ExitProvider exit={() => {}}>
+                  <SyncProvider>
+                    <Probe />
+                  </SyncProvider>
+                </ExitProvider>
+              </ProjectProvider>
+            </PermissionProvider>
+          </SDKProvider>
+        </KVProvider>
+      </ArgsProvider>
     </TestTuiContexts>
   ))
 

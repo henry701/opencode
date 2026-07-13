@@ -1,8 +1,7 @@
 import { expect, test } from "@playwright/test"
-import { base64Encode, checksum } from "@opencode-ai/core/util/encode"
+import { base64Encode } from "@opencode-ai/core/util/encode"
 import { mockOpenCodeServer } from "../utils/mock-server"
 import { expectAppVisible, expectSessionTitle } from "../utils/waits"
-import { pathKey } from "@/utils/path-key"
 
 const directory = "C:/OpenCode/SessionRollbackQueueRegression"
 const projectID = "proj_session_rollback_queue_regression"
@@ -10,9 +9,6 @@ const sessionID = "ses_session_rollback_queue_regression"
 const queuedText = "queued prompt should survive rollback"
 
 const model = { providerID: "opencode", modelID: "test-model" }
-const key = pathKey(directory)
-const storageHead = (key.slice(0, 12) || "workspace").replace(/[^a-zA-Z0-9._-]/g, "-")
-const followupStorageKey = `opencode.workspace.${storageHead}.${checksum(key)}.dat:workspace:followup`
 
 const session = {
   id: sessionID,
@@ -113,35 +109,9 @@ test("preserves visible queued follow-ups when rolling back a message", async ({
     },
     sessions: [session],
     status: { [sessionID]: { type: "busy" } },
+    queue: { [sessionID]: [{ id: "pqu_web_rollback", text: queuedText }] },
     pageMessages: () => ({ items: messages }),
   })
-
-  await page.addInitScript(
-    ({ directory, sessionID, queuedText, followupStorageKey }) => {
-      localStorage.setItem(
-        followupStorageKey,
-        JSON.stringify({
-          items: {
-            [sessionID]: [
-              {
-                id: "pqu_web_rollback",
-                sessionID,
-                sessionDirectory: directory,
-                prompt: [{ type: "text", content: queuedText }],
-                context: [],
-                agent: "build",
-                model: { providerID: "opencode", modelID: "test-model" },
-              },
-            ],
-          },
-          failed: {},
-          paused: { [sessionID]: true },
-          edit: {},
-        }),
-      )
-    },
-    { directory, sessionID, queuedText, followupStorageKey },
-  )
 
   await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
   await expectSessionTitle(page, session.title)
@@ -152,15 +122,4 @@ test("preserves visible queued follow-ups when rolling back a message", async ({
 
   await expectAppVisible(page.locator('[data-component="session-revert-dock"]'))
   await expect(page.locator('[data-component="session-followup-dock"]')).toContainText(queuedText)
-  await expect
-    .poll(() =>
-      page.evaluate(({ sessionID, queuedText, followupStorageKey }) => {
-        const raw = localStorage.getItem(followupStorageKey)
-        if (!raw) return false
-        const parsed = JSON.parse(raw) as { items?: Record<string, Array<{ id: string; prompt: unknown[] }>> }
-        const item = parsed.items?.[sessionID]?.find((entry) => entry.id === "pqu_web_rollback")
-        return JSON.stringify(item?.prompt).includes(queuedText)
-      }, { sessionID, queuedText, followupStorageKey }),
-    )
-    .toBe(true)
 })

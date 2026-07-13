@@ -1102,6 +1102,8 @@ export const dict = {
   "settings.general.row.pinchZoom.description": "Tillat knipebevegelser på styreflaten og Ctrl-rulling for å zoome",
   "settings.updates.action.downloading": "Laster ned...",
   "settings.updates.action.installing": "Installerer...",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
   "context.breakdown.toolDefs": "Tool Definitions",
   "session.followupDock.editing": "Editing",
   "session.header.reveal.finder": "Reveal in Finder",

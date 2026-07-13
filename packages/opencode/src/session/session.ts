@@ -10,7 +10,6 @@ import type { ProviderMetadata, Usage } from "@opencode-ai/llm"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { EventV2 } from "@opencode-ai/core/event"
 import { SessionV2 } from "@opencode-ai/core/session"
 import * as SessionExecutionLocal from "@opencode-ai/core/session/execution/local"
 import { locationServiceMapLayer } from "@opencode-ai/core/location-services"
@@ -35,7 +34,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { Snapshot } from "@/snapshot"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
-import { SessionID, MessageID, PartID, QueueItemID } from "./schema"
+import { SessionID, MessageID, PartID } from "./schema"
 
 import type { Provider } from "@/provider/provider"
 import { Global } from "@opencode-ai/core/global"
@@ -327,13 +326,7 @@ export const Event = {
   Deleted: SessionV1.Event.Deleted,
   Diff: SessionV1.Event.Diff,
   Error: SessionV1.Event.Error,
-  QueueUpdated: EventV2.define({
-    type: "session.queue.updated",
-    schema: {
-      sessionID: SessionID,
-      items: Schema.Array(Schema.Struct({ id: QueueItemID, text: Schema.String })),
-    },
-  }),
+  QueueUpdated: SessionV1.Event.QueueUpdated,
 }
 
 export function plan(input: { slug: string; time: { created: number } }, instance: InstanceContext) {
@@ -1022,7 +1015,5 @@ export const node = LayerNode.make({
   layer: layer,
   deps: [BackgroundJob.node, RuntimeFlags.node, Database.node, EventV2Bridge.node],
 })
-
-export const defaultLayer = LayerNode.compile(node)
 
 export * as Session from "./session"

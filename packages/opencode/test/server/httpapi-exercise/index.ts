@@ -1499,6 +1499,214 @@ const scenarios: Scenario[] = [
       }),
     ),
   http.protected
+    .get("/session/{sessionID}/queue", "session.queue.list")
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Queue list session" })
+        const queued = yield* ctx.queue(session.id, { text: "queued list" })
+        return { session, queued }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/queue", { sessionID: ctx.state.session.id }),
+      headers: ctx.headers(),
+    }))
+    .json(200, (body, ctx) => {
+      array(body)
+      check(
+        body.some((item) => isRecord(item) && item.id === ctx.state.queued.id && item.text === "queued list"),
+        "queue list should include seeded prompt",
+      )
+    }),
+  http.protected
+    .get("/session/{sessionID}/queue/{queueID}", "session.queue.get")
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Queue get session" })
+        const queued = yield* ctx.queue(session.id, { text: "queued detail" })
+        return { session, queued }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/queue/{queueID}", {
+        sessionID: ctx.state.session.id,
+        queueID: ctx.state.queued.id,
+      }),
+      headers: ctx.headers(),
+    }))
+    .json(200, (body, ctx) => {
+      object(body)
+      check(body.id === ctx.state.queued.id, "queue get should return requested item")
+      check(
+        Array.isArray(body.parts) && body.parts.some((part) => isRecord(part) && part.text === "queued detail"),
+        "queue get should return full queued prompt parts",
+      )
+    }),
+  http.protected
+    .post("/session/{sessionID}/queue", "session.queue.enqueue")
+    .mutating()
+    .seeded((ctx) => ctx.session({ title: "Queue enqueue session" }))
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/queue", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: {
+        agent: "build",
+        model: { providerID: "openai", modelID: "gpt-4" },
+        parts: [{ type: "text", text: "queued enqueue" }],
+      },
+    }))
+    .json(200, (body) => {
+      object(body)
+      check(typeof body.id === "string", "queue enqueue should return queue id")
+      check(body.text === "queued enqueue", "queue enqueue should return queued preview text")
+    }),
+  http.protected
+    .patch("/session/{sessionID}/queue/{queueID}", "session.queue.update")
+    .mutating()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Queue update session" })
+        const queued = yield* ctx.queue(session.id, { text: "queued before" })
+        return { session, queued }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/queue/{queueID}", {
+        sessionID: ctx.state.session.id,
+        queueID: ctx.state.queued.id,
+      }),
+      headers: ctx.headers(),
+      body: {
+        agent: "build",
+        model: { providerID: "openai", modelID: "gpt-4" },
+        parts: [{ type: "text", text: "queued after" }],
+      },
+    }))
+    .json(200, (body) => {
+      check(body === true, "queue update should return true")
+    }),
+  http.protected
+    .delete("/session/{sessionID}/queue/{queueID}", "session.queue.remove")
+    .mutating()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Queue remove session" })
+        const queued = yield* ctx.queue(session.id, { text: "queued remove" })
+        return { session, queued }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/queue/{queueID}", {
+        sessionID: ctx.state.session.id,
+        queueID: ctx.state.queued.id,
+      }),
+      headers: ctx.headers(),
+    }))
+    .json(200, (body) => {
+      check(body === true, "queue remove should return true")
+    }),
+  http.protected
+    .post("/session/{sessionID}/queue/{queueID}/send", "session.queue.send")
+    .preserveDatabase()
+    .withLlm()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Queue send session" })
+        const queued = yield* ctx.queue(session.id, { text: "queued send" })
+        yield* ctx.llmText("queue sent")
+        yield* ctx.llmText("queue sent")
+        return { session, queued }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/queue/{queueID}/send", {
+        sessionID: ctx.state.session.id,
+        queueID: ctx.state.queued.id,
+      }),
+      headers: ctx.headers(),
+      body: {
+        agent: "build",
+        model: { providerID: "test", modelID: "test-model" },
+        parts: [{ type: "text", text: "queued send edited" }],
+      },
+    }))
+    .jsonEffect(200, (_body, ctx) =>
+      Effect.gen(function* () {
+        yield* ctx.llmWait(1)
+      }),
+    ),
+  http.protected
+    .post("/session/{sessionID}/queue/drain-pause", "session.queue.drain.pause")
+    .mutating()
+    .seeded((ctx) => ctx.session({ title: "Queue pause session" }))
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/queue/drain-pause", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+    }))
+    .json(200, (body) => {
+      check(body === true, "queue drain pause should return true")
+    }),
+  http.protected
+    .post("/session/{sessionID}/queue/drain-resume", "session.queue.drain.resume")
+    .mutating()
+    .seeded((ctx) => ctx.session({ title: "Queue resume session" }))
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/queue/drain-resume", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+    }))
+    .json(200, (body) => {
+      check(body === true, "queue drain resume should return true")
+    }),
+  http.protected
+    .patch("/session/{sessionID}/deferred/{queueID}", "session.deferred.update")
+    .mutating()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Deferred update session" })
+        const queued = yield* ctx.queue(session.id, { text: "deferred before" })
+        const message = yield* ctx.message(session.id, { text: "deferred after" })
+        return { session, queued, message }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/deferred/{queueID}", {
+        sessionID: ctx.state.session.id,
+        queueID: ctx.state.queued.id,
+      }),
+      headers: ctx.headers(),
+      body: { info: ctx.state.message.info, parts: [ctx.state.message.part] },
+    }))
+    .json(200, (body) => {
+      check(body === true, "deferred update should return true")
+    }),
+  http.protected
+    .post("/session/{sessionID}/deferred/{queueID}/send", "session.deferred.send")
+    .preserveDatabase()
+    .withLlm()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Deferred send session" })
+        const queued = yield* ctx.queue(session.id, { text: "deferred queued" })
+        const message = yield* ctx.message(session.id, { text: "deferred edited" })
+        yield* ctx.llmText("deferred sent")
+        yield* ctx.llmText("deferred sent")
+        return { session, queued, message }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/deferred/{queueID}/send", {
+        sessionID: ctx.state.session.id,
+        queueID: ctx.state.queued.id,
+      }),
+      headers: ctx.headers(),
+      body: { info: ctx.state.message.info, parts: [ctx.state.message.part] },
+    }))
+    .jsonEffect(200, (_body, ctx) =>
+      Effect.gen(function* () {
+        yield* ctx.llmWait(1)
+      }),
+    ),
+  http.protected
     .post("/session/{sessionID}/command", "session.command")
     .preserveDatabase()
     .withLlm()

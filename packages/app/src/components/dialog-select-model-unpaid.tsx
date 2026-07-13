@@ -69,9 +69,14 @@ export const DialogSelectModelUnpaid: Component<{ model?: ModelState }> = (props
             </Tooltip>
           )}
           onSelect={(x) => {
-            model.set(x ? { modelID: x.id, providerID: x.provider.id } : undefined, {
-              recent: true,
-            })
+            model.set(
+              x
+                ? { modelID: x.id, providerID: x.provider.id, name: x.name, providerName: x.provider.name }
+                : undefined,
+              {
+                recent: true,
+              },
+            )
             dialog.close()
           }}
         >

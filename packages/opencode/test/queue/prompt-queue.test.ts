@@ -50,11 +50,12 @@ describe("MemoryPromptQueue", () => {
 })
 
 describe("materializeQueuedItem", () => {
-  test("assigns fresh ids", () => {
+  test("assigns immediate delivery and fresh ids", () => {
     const sessionID = SessionID.make("ses_materialize")
     const item = new MemoryPromptQueue().enqueue(sessionID, sampleData("hello"))
     const message = materializeQueuedItem(item)
     expect(message.info.role).toBe("user")
+    if (message.info.role === "user") expect((message.info as { delivery?: string }).delivery).toBe("immediate")
     expect(message.parts[0]?.type === "text" ? message.parts[0].text : "").toBe("hello")
     expect(message.info.id).not.toBe(item.id)
   })

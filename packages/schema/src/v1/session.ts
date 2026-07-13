@@ -351,6 +351,7 @@ export const User = Schema.Struct({
   }),
   system: Schema.optional(Schema.String),
   tools: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
+  delivery: Schema.optional(Schema.Union([Schema.Literal("immediate"), Schema.Literal("deferred")])),
 }).annotate({ identifier: "UserMessage" })
 export type User = Types.DeepMutable<Schema.Schema.Type<typeof User>>
 
@@ -482,6 +483,8 @@ export const Assistant = Schema.Struct({
   structured: Schema.optional(Schema.Any),
   variant: Schema.optional(Schema.String),
   finish: Schema.optional(Schema.String),
+  system_prompt: Schema.optional(Schema.String),
+  tool_defs: Schema.optional(Schema.String),
 }).annotate({ identifier: "AssistantMessage" })
 export type Assistant = Omit<Types.DeepMutable<Schema.Schema.Type<typeof Assistant>>, "error"> & {
   error?: AssistantError
@@ -656,11 +659,25 @@ export const Error = define({
   },
 })
 
+export const QueueUpdated = define({
+  type: "session.queue.updated",
+  schema: {
+    sessionID: SessionID,
+    items: Schema.Array(
+      Schema.Struct({
+        id: Schema.String,
+        text: Schema.String,
+      }),
+    ),
+  },
+})
+
 export const Event = {
   ...events,
   PartDelta,
   Diff,
   Error,
+  QueueUpdated,
   Definitions: inventory(
     events.Created,
     events.Updated,
@@ -672,5 +689,6 @@ export const Event = {
     PartDelta,
     Diff,
     Error,
+    QueueUpdated,
   ),
 }

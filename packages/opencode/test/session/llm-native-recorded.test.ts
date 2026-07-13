@@ -295,11 +295,16 @@ const writeConfig = (directory: string, scenario: RecordedScenario, model: Model
     ),
   )
 
-const collect = (input: LLM.StreamInput) =>
+const isProviderEvent = (event: LLM.StreamEvent): event is Exclude<LLM.StreamEvent, LLM.ContextMetadataEvent> =>
+  event.type !== "context-metadata"
+
+const collectRaw = (input: LLM.StreamInput) =>
   Effect.gen(function* () {
     const llm = yield* LLM.Service
     return Array.from(yield* llm.stream(input).pipe(Stream.runCollect))
   })
+
+const collect = (input: LLM.StreamInput) => collectRaw(input).pipe(Effect.map((events) => events.filter(isProviderEvent)))
 
 const WEATHER_RESULT = { temperature: 22, condition: "sunny" } as const
 const WEATHER_SYSTEM =
@@ -377,7 +382,13 @@ const driveToolLoop = (scenario: RecordedScenario) =>
       tools: { get_weather: weatherTool },
     }
 
-    const turn1 = yield* collect({ ...base, messages: [userMessage] })
+    const turn1Raw = yield* collectRaw({ ...base, messages: [userMessage] })
+    expect(turn1Raw[0]).toEqual(expect.objectContaining({ type: "context-metadata" }))
+    if (turn1Raw[0]?.type !== "context-metadata") throw new Error("expected context metadata first")
+    expect(turn1Raw[0].systemPrompt).toContain(WEATHER_SYSTEM)
+    expect(Object.keys(JSON.parse(turn1Raw[0].toolDefs ?? "{}") as Record<string, unknown>)).toEqual(["get_weather"])
+
+    const turn1 = turn1Raw.filter(isProviderEvent)
     const toolCall = turn1.find(LLMEvent.is.toolCall)
     expect(toolCall).toBeDefined()
     expect(turn1.find(LLMEvent.is.toolResult)).toBeDefined()

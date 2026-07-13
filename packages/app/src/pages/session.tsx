@@ -48,7 +48,6 @@ import { ModelsProvider } from "@/context/models"
 import { useNotification } from "@/context/notification"
 import { PermissionProvider } from "@/context/permission"
 import { PromptProvider, usePrompt } from "@/context/prompt"
-import { usePlatform } from "@/context/platform"
 import { SDKProvider, useSDK } from "@/context/sdk"
 import { useServerSDK } from "@/context/server-sdk"
 import { ServerConnection, serverName, useServer } from "@/context/server"
@@ -57,6 +56,7 @@ import { useSync } from "@/context/sync"
 import { useTabs } from "@/context/tabs"
 import { TerminalProvider, useTerminal } from "@/context/terminal"
 import { PromptInput } from "@/components/prompt-input"
+import { useSettingsCommand } from "@/components/settings-dialog"
 import { buildRequestParts } from "@/components/prompt-input/build-request-parts"
 import { type FollowupDraft } from "@/components/prompt-input/submit"
 import { partsFromQueueDetail } from "@/utils/queue-parts"
@@ -100,6 +100,7 @@ import { useUsageExceededDialogs } from "./session/usage-exceeded-dialogs"
 import { createSessionOwnership } from "./session/session-ownership"
 import { createSessionLineage } from "./session/session-lineage"
 
+const emptyUserMessages: UserMessage[] = []
 type QueuePreview = { id: string; text: string }
 type FollowupEdit = Pick<FollowupDraft, "prompt" | "context"> & { id: string }
 const emptyQueue: QueuePreview[] = []
@@ -348,7 +349,6 @@ export default function Page() {
   const sdk = useSDK()
   const serverSDK = useServerSDK()
   const settings = useSettings()
-  const platform = usePlatform()
   const prompt = usePrompt()
   const comments = useComments()
   const terminal = useTerminal()
@@ -603,6 +603,7 @@ export default function Page() {
   )
 
   const [editingQueueMessageID, setEditingQueueMessageID] = createSignal<string | undefined>()
+  const [composerLayoutEpoch, setComposerLayoutEpoch] = createSignal(0)
 
   const stopEditingQueueMessage = () => setEditingQueueMessageID(undefined)
 
@@ -889,6 +890,7 @@ export default function Page() {
   let scrollToEnd = () => {}
   let scrollMark = 0
   let messageMark = 0
+  const [timelineScrollTop, setTimelineScrollTop] = createSignal(0)
 
   const scrollGestureWindowMs = 250
 
@@ -1557,7 +1559,14 @@ export default function Page() {
 
   const jumpThreshold = (el: HTMLDivElement) => Math.max(400, el.clientHeight)
 
+  const nearTimelineBottom = (el: HTMLDivElement, threshold = 80) => {
+    const max = el.scrollHeight - el.clientHeight
+    if (max <= 1) return true
+    return max - el.scrollTop <= threshold
+  }
+
   const updateScrollState = (el: HTMLDivElement) => {
+    setTimelineScrollTop(el.scrollTop)
     const max = el.scrollHeight - el.clientHeight
     const distance = max - el.scrollTop
     const overflow = max > 1
@@ -1569,6 +1578,7 @@ export default function Page() {
   }
 
   const scheduleScrollState = (el: HTMLDivElement) => {
+    setTimelineScrollTop(el.scrollTop)
     scrollStateTarget = el
     if (scrollStateFrame !== undefined) return
 
@@ -1769,7 +1779,8 @@ export default function Page() {
   const followupMutation = useMutation(() => ({
     mutationFn: async (input: { sessionID: string; id: string; manual?: boolean }) => {
       const owner = sessionOwnership.capture()
-      if (!queuedFollowups().find((entry) => entry.id === input.id)) return
+      const item = queuedFollowups().find((entry) => entry.id === input.id)
+      if (!item) return
 
       if (input.manual) setFollowup("paused", input.sessionID, undefined)
       setFollowup("failed", input.sessionID, undefined)
@@ -2023,22 +2034,6 @@ export default function Page() {
 
   const actions = { revert }
 
-  createEffect(() => {
-    const sessionID = params.id
-    if (!sessionID) return
-
-    const item = queuedFollowups()[0]
-    if (!item) return
-    if (followupBusy(sessionID)) return
-    if (followup.failed[sessionID] === item.id) return
-    if (followup.paused[sessionID]) return
-    if (isChildSession()) return
-    if (composer.blocked()) return
-    if (busy(sessionID)) return
-
-    void sendFollowup(sessionID, item.id)
-  })
-
   createResizeObserver(
     () => promptDock,
     ({ height }) => {
@@ -2047,18 +2042,59 @@ export default function Page() {
       if (next === dockHeight) return
 
       const el = scroller
+      const savedScrollTop = Math.max(timelineScrollTop(), el?.scrollTop ?? 0)
       const delta = next - dockHeight
-      const stick = el
-        ? !autoScroll.userScrolled() || el.scrollHeight - el.clientHeight - el.scrollTop < 10 + Math.max(0, delta)
-        : false
+      const distanceFromBottom = el ? el.scrollHeight - el.clientHeight - el.scrollTop : 0
+      const stick = el ? distanceFromBottom < 10 + Math.max(0, delta) : false
 
       dockHeight = next
+      setComposerLayoutEpoch((value) => value + 1)
 
-      if (stick) scrollToEnd()
+      if (stick) {
+        scrollToEnd()
+      } else if (el && savedScrollTop !== undefined) {
+        const scrollTop = savedScrollTop
+        const restore = (attempt = 0) => {
+          const root = scroller
+          if (!root) return
+          if (Math.abs(root.scrollTop - scrollTop) > 1) root.scrollTop = scrollTop
+          scheduleScrollState(root)
+          if (attempt < 5 && Math.abs(root.scrollTop - scrollTop) > 1) {
+            requestAnimationFrame(() => restore(attempt + 1))
+          }
+        }
+        requestAnimationFrame(() => restore())
+      }
 
       if (el) scheduleScrollState(el)
       fill()
     },
+  )
+
+  createEffect(
+    on(
+      () =>
+        [
+          params.id,
+          local.model.current()?.providerID,
+          local.model.current()?.id,
+          local.model.variant.current(),
+          autoScroll.userScrolled(),
+        ] as const,
+      ([id, , , , scrolled], prev) => {
+        if (!id || !scrolled) return
+        if (!prev) return
+        const [, prevProvider, prevModel, prevVariant] = prev
+        const provider = local.model.current()?.providerID
+        const model = local.model.current()?.id
+        const variant = local.model.variant.current()
+        if (provider === prevProvider && model === prevModel && variant === prevVariant) return
+        const el = scroller
+        if (el) setTimelineScrollTop(el.scrollTop)
+        setComposerLayoutEpoch((value) => value + 1)
+      },
+      { defer: true },
+    ),
   )
 
   const { clearMessageHash, scrollToMessage } = useSessionHashScroll({
@@ -2132,7 +2168,9 @@ export default function Page() {
               items: followupDock(),
               sending: sendingFollowup(),
               editingMessageID: editingQueueMessageID(),
-              onSend: (id) => void sendFollowup(params.id!, id, { manual: true }),
+              onSend: (id) => {
+                void sendFollowup(params.id!, id, { manual: true })
+              },
               onEdit: editFollowup,
               onRemove: removeFollowup,
             }
@@ -2174,15 +2212,15 @@ export default function Page() {
             }}
             newSessionWorktree={newSessionWorktree()}
             onNewSessionWorktreeReset={() => setStore("newSessionWorktree", "main")}
-            onSubmit={() => {
-              comments.clear()
-              resumeScroll()
-            }}
             edit={editingFollowup()}
             editingQueueID={editingQueueMessageID()}
             onEditingQueueMessageID={setEditingQueueMessageID}
             onEditLoaded={clearFollowupEdit}
             onCancelQueueEdit={cancelQueueEdit}
+            onSubmit={() => {
+              comments.clear()
+              resumeScroll()
+            }}
             shouldQueue={queueEnabled}
             onQueue={queueFollowup}
             onAbort={() => {
@@ -2275,11 +2313,17 @@ export default function Page() {
                   onMarkScrollGesture={markScrollGesture}
                   hasScrollGesture={hasScrollGesture}
                   onUserScroll={markUserScroll}
+                  onLeaveBottom={autoScroll.pause}
                   onHistoryScroll={onHistoryScroll}
                   onAutoScrollInteraction={autoScroll.handleInteraction}
-                  shouldAnchorBottom={() =>
-                    !location.hash && !store.messageId && !ui.pendingMessage && !autoScroll.userScrolled()
-                  }
+                  composerLayoutEpoch={composerLayoutEpoch()}
+                  preservedScrollTop={timelineScrollTop()}
+                  shouldAnchorBottom={() => {
+                    if (location.hash || store.messageId || ui.pendingMessage || autoScroll.userScrolled()) return false
+                    const el = scroller
+                    if (!el) return true
+                    return nearTimelineBottom(el)
+                  }}
                   centered={centered()}
                   setContentRef={(el) => {
                     content = el

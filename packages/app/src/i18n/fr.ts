@@ -1028,6 +1028,8 @@ export const dict = {
   "error.childStore.persistedProjectIconCreateFailed": "Échec de la création de l'icône de projet persistante",
   "error.childStore.storeCreateFailed": "Échec de la création du stockage",
   "terminal.connectionLost.abnormalClose": "WebSocket fermé anormalement : {{code}}",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
   "context.breakdown.toolDefs": "Tool Definitions",
   "session.followupDock.editing": "Editing",
   "session.header.reveal.finder": "Reveal in Finder",

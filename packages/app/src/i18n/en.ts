@@ -293,6 +293,8 @@ export const dict = {
   "prompt.menu.context": "Context",
   "prompt.menu.shellCommand": "Shell command",
   "prompt.attachment.remove": "Remove attachment",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
   "prompt.action.send": "Send",
   "prompt.action.stop": "Stop",
 

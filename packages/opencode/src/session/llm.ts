@@ -47,17 +47,67 @@ export type StreamInput = {
   toolChoice?: "auto" | "required" | "none"
 }
 
+export type ContextMetadataEvent = {
+  type: "context-metadata"
+  systemPrompt?: string
+  toolDefs?: string
+}
+
+export type StreamEvent = LLMEvent | ContextMetadataEvent
+
 export type StreamRequest = StreamInput & {
   abort: AbortSignal
 }
 
 export interface Interface {
-  readonly stream: (input: StreamInput) => Stream.Stream<LLMEvent, unknown>
+  readonly stream: (input: StreamInput) => Stream.Stream<StreamEvent, unknown>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/LLM") {}
 
 export const use = serviceUse(Service)
+
+function stringifyJson(value: unknown) {
+  const seen = new WeakSet<object>()
+  return JSON.stringify(value, (_, item) => {
+    if (typeof item === "function") return `[function ${item.name || "anonymous"}]`
+    if (typeof item === "symbol") return item.toString()
+    if (!item || typeof item !== "object") return item
+    if (seen.has(item)) return "[circular]"
+    seen.add(item)
+    return item
+  })
+}
+
+function stringifyToolDefs(tools: Record<string, Tool>) {
+  const names = Object.keys(tools).filter((name) => name !== "invalid")
+  if (names.length === 0) return undefined
+
+  return stringifyJson(
+    Object.fromEntries(
+      names.toSorted().map((name) => {
+        const item = tools[name]
+        return [
+          name,
+          {
+            description: item.description,
+            inputSchema: "inputSchema" in item ? item.inputSchema : undefined,
+          },
+        ]
+      }),
+    ),
+  )
+}
+
+function contextMetadata(prepared: LLMRequestPrep.Prepared): ContextMetadataEvent {
+  const systemPrompt = prepared.system.join("\n").trim()
+  const toolDefs = stringifyToolDefs(prepared.tools)
+  return {
+    type: "context-metadata",
+    ...(systemPrompt ? { systemPrompt } : {}),
+    ...(toolDefs ? { toolDefs } : {}),
+  }
+}
 
 const live: Layer.Layer<
   Service,
@@ -248,6 +298,7 @@ const live: Layer.Layer<
           })
           return {
             type: "native" as const,
+            context: contextMetadata(prepared),
             stream: native.stream,
           }
         }
@@ -277,6 +328,7 @@ const live: Layer.Layer<
       // LLMAISDK.toLLMEvents below normalizes fullStream parts for the processor.
       return {
         type: "ai-sdk" as const,
+        context: contextMetadata(prepared),
         result: streamText({
           onError(error) {
             bridge.fork(
@@ -365,17 +417,18 @@ const live: Layer.Layer<
 
             const result = yield* run({ ...input, abort: ctrl.signal })
 
-            if (result.type === "native") return result.stream
+            if (result.type === "native") return Stream.make(result.context).pipe(Stream.concat(result.stream))
 
             // Adapter seam: both runtimes expose the same LLMEvent stream. Native
             // already returns one; AI SDK streams are converted here.
             const state = LLMAISDK.adapterState()
-            return Stream.fromAsyncIterable(result.result.fullStream, (e) =>
+            const providerStream = Stream.fromAsyncIterable(result.result.fullStream, (e) =>
               e instanceof Error ? e : new Error(String(e)),
             ).pipe(
               Stream.mapEffect((event) => LLMAISDK.toLLMEvents(state, event)),
               Stream.flatMap((events) => Stream.fromIterable(events)),
             )
+            return Stream.make(result.context).pipe(Stream.concat(providerStream))
           }),
         ),
       )

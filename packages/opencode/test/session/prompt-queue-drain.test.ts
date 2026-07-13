@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, mock } from "bun:test"
 import { Effect, Layer } from "effect"
+import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { Session as SessionNs } from "@/session/session"
 import { SessionPromptQueue } from "@/session/prompt-queue"
 import { ModelID, ProviderID } from "@/provider/schema"
@@ -20,11 +22,15 @@ const sample = (text: string) => ({
   parts: [{ type: "text" as const, text }],
 })
 
-const queueLayer = Layer.mergeAll(Session.defaultLayer, SessionPromptQueue.defaultLayer)
+const queueLayer = Layer.mergeAll(
+  LayerNode.compile(SessionNs.node),
+  LayerNode.compile(SessionPromptQueue.node),
+  LayerNode.compile(SessionProjector.node),
+)
 const queueHttpLayer = Layer.mergeAll(queueLayer, httpApiLayer)
 
 const itService = testEffect(queueLayer)
-const itHttp = testEffect(Layer.mergeAll(SessionNs.defaultLayer, httpApiLayer))
+const itHttp = testEffect(Layer.mergeAll(LayerNode.compile(SessionNs.node), httpApiLayer))
 const itHttpWithQueue = testEffect(queueHttpLayer)
 
 afterEach(async () => {

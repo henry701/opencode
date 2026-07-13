@@ -1069,6 +1069,8 @@ export const dict = {
   "error.childStore.persistedProjectIconCreateFailed": "创建持久化项目图标失败",
   "error.childStore.storeCreateFailed": "创建存储失败",
   "terminal.connectionLost.abnormalClose": "WebSocket 异常关闭：{{code}}",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
   "context.breakdown.toolDefs": "Tool Definitions",
   "session.followupDock.editing": "Editing",
   "session.header.reveal.finder": "Reveal in Finder",

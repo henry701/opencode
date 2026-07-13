@@ -180,6 +180,7 @@ export const {
         setStore("prompt_queue", queued.properties.sessionID, queued.properties.items)
         return
       }
+
       switch (event.type) {
         case "server.instance.disposed":
           void bootstrap()

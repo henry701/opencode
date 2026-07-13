@@ -260,6 +260,7 @@ export type UserMessage = {
   tools?: {
     [key: string]: boolean
   }
+  delivery?: "immediate" | "deferred"
 }
 
 export type ProviderAuthError = {
@@ -372,8 +373,8 @@ export type AssistantMessage = {
   structured?: unknown
   variant?: string
   finish?: string
-  tool_defs?: string
   system_prompt?: string
+  tool_defs?: string
 }
 
 export type Message = UserMessage | AssistantMessage
@@ -2926,6 +2927,7 @@ export type V2Event =
   | MessagePartDelta
   | SessionDiff
   | SessionError
+  | SessionQueueUpdated
   | InstallationUpdated
   | InstallationUpdateAvailable
   | FileEdited
@@ -5389,6 +5391,27 @@ export type SessionError = {
       | ContextOverflowError
       | ContentFilterError
       | ApiError
+  }
+}
+
+export type SessionQueueUpdated = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.queue.updated"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    sessionID: string
+    items: Array<{
+      id: string
+      text: string
+    }>
   }
 }
 

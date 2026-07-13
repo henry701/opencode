@@ -174,6 +174,20 @@ function withContext<A, E>(
               )
               return { info, part }
             }),
+          queue: (sessionID, input) =>
+            run(
+              modules.SessionPromptQueue.Service.use((svc) =>
+                svc.enqueue(sessionID, {
+                  version: 1,
+                  agent: "build",
+                  model: {
+                    providerID: ProviderV2.ID.opencode,
+                    modelID: ModelV2.ID.make("test"),
+                  },
+                  parts: [{ type: "text", text: input?.text ?? "queued" }],
+                }),
+              ),
+            ).pipe(Effect.map((item) => ({ id: item.id, text: input?.text ?? "queued" }))),
           messages: (sessionID) =>
             run(modules.Session.Service.use((svc) => svc.messages({ sessionID }).pipe(Effect.orDie))),
           todos: (sessionID, todos) => run(modules.Todo.Service.use((svc) => svc.update({ sessionID, todos }))),

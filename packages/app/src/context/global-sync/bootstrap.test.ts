@@ -30,6 +30,7 @@ function directoryState() {
       return this.session_status[id]?.type !== "idle"
     },
     session_diff: {},
+    prompt_queue: {},
     todo: {},
     permission: {},
     question: {},
@@ -41,7 +42,6 @@ function directoryState() {
     vcs: undefined,
     limit: 5,
     message: {},
-    prompt_queue: {},
     part: {},
     part_text_accum_delta: {},
   })
