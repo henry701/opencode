@@ -32,7 +32,8 @@ for (const expanded of [false, true]) {
   })
 }
 
-test("transitions thinking and hidden reasoning through busy to idle", async ({ page }) => {
+test("transitions thinking and hidden reasoning through busy to idle", async ({ page, browserName }) => {
+  test.skip(browserName !== "chromium", "CPU throttling for lifecycle timing requires CDP")
   const reasoningID = "prt_reasoning_hidden"
   const assistant = assistantMessage([reasoningPart(reasoningID, "## Inspecting stability")], { completed: false })
   const timeline = await setupTimeline(page, {

@@ -1,6 +1,7 @@
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import { expect, test, type Page } from "@playwright/test"
 import { mockOpenCodeServer } from "../utils/mock-server"
+import { distanceFromBottom, scrollToBottom } from "../utils/scroll"
 import { expectAppVisible, expectSessionTitle } from "../utils/waits"
 
 const directory = "C:/OpenCode/ReviewTabSwitch"
@@ -51,10 +52,8 @@ test("keeps the v2 review pane mounted when switching session tabs in a workspac
 
   const viewport = page.locator('#review-panel [data-slot="session-review-v2-sidebar-tree"] .scroll-view__viewport')
   await viewport.hover()
-  await page.mouse.wheel(0, 100_000)
-  await expect
-    .poll(() => viewport.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop))
-    .toBeLessThanOrEqual(1)
+  await scrollToBottom(viewport)
+  await expect.poll(() => distanceFromBottom(viewport)).toBeLessThanOrEqual(1)
   await expect(page.getByRole("button", { name: "generated-2739.ts" })).toBeVisible()
 })
 

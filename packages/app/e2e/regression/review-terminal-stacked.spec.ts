@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test"
 import { mockOpenCodeServer } from "../utils/mock-server"
+import { distanceFromBottom, scrollToBottom } from "../utils/scroll"
 import { expectSessionTitle } from "../utils/waits"
 
 const directory = "C:/OpenCode/ReviewTerminalStacked"
@@ -119,10 +120,8 @@ test("keeps the review tree and terminal sized when both panels are open", async
 
   const treeViewport = page.locator('#review-panel [data-slot="session-review-v2-sidebar-tree"] .scroll-view__viewport')
   await treeViewport.hover()
-  await page.mouse.wheel(0, 100_000)
-  await expect
-    .poll(() => treeViewport.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop))
-    .toBeLessThanOrEqual(1)
+  await scrollToBottom(treeViewport)
+  await expect.poll(() => distanceFromBottom(treeViewport)).toBeLessThanOrEqual(1)
   const lastFile = page.getByRole("button", { name: "generated-2738.ts" })
   await expect(lastFile).toBeVisible()
   const bottomGap = await lastFile.evaluate((element) => {

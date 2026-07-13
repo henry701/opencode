@@ -63,6 +63,7 @@ test("shows the V2 thinking level control while relevant", async ({ page }) => {
   await expect(control).toBeHidden()
 
   await composer.hover()
+  await input.focus()
   await expect(control).toBeVisible()
 
   await control.locator('[data-action="prompt-model-variant"]').click()
