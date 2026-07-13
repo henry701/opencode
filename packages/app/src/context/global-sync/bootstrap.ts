@@ -196,6 +196,12 @@ export const loadPathQuery = (scope: ServerScope, directory: string | null, sdk:
     queryFn: () => retry(() => sdk.path.get().then((x) => x.data!)),
   })
 
+export const loadLspQuery = (directory: string, sdk: OpencodeClient) =>
+  queryOptions({
+    queryKey: [directory, "lsp"] as const,
+    queryFn: () => sdk.lsp.status().then((r) => r.data ?? []),
+  })
+
 export const loadReferencesQuery = (scope: ServerScope, directory: string, sdk: OpencodeClient) =>
   queryOptions<ReferenceInfo[]>({
     queryKey: [scope, directory, "references"] as const,

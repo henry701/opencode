@@ -189,6 +189,7 @@ const promptRoot = LayerNode.group([
   BackgroundJob.node,
   SessionStatus.node,
   SessionRunState.node,
+  SessionPromptQueue.node,
   Database.node,
   EventV2Bridge.node,
   Question.node,

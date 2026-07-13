@@ -70,6 +70,10 @@ type Data =
       data: SDK.Model[]
     }
 
+function shareModel(model: Provider.Model): SDK.Model {
+  return structuredClone(Provider.publicModel(model)) as SDK.Model
+}
+
 export interface Interface {
   readonly init: () => Effect.Effect<void, unknown>
   readonly url: () => Effect.Effect<string, unknown>
@@ -188,7 +192,7 @@ const layer = Layer.effect(
             yield* sync(info.sessionID, [{ type: "message", data: structuredClone(info) as SDK.Message }])
             if (info.role !== "user") return
             const model = yield* provider.getModel(info.model.providerID, info.model.modelID)
-            yield* sync(info.sessionID, [{ type: "model", data: [model] }])
+            yield* sync(info.sessionID, [{ type: "model", data: [shareModel(model)] }])
           }),
         )
         yield* watch(MessageV2.Event.PartUpdated, (data) =>
@@ -294,7 +298,7 @@ const layer = Layer.effect(
         ...messages.map((item) => ({ type: "message" as const, data: item.info })),
         ...messages.flatMap((item) => item.parts.map((part) => ({ type: "part" as const, data: part }))),
         { type: "session_diff", data: diffs },
-        { type: "model", data: models },
+        { type: "model", data: models.map(shareModel) },
       ])
     })
 
