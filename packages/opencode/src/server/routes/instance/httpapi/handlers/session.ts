@@ -436,28 +436,6 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return yield* session.updatePart(payload)
     })
 
-    const updateDeferred = Effect.fn("SessionHttpApi.updateDeferred")(function* (ctx: {
-      params: { sessionID: SessionID; queueID: QueueItemID }
-      payload: unknown
-    }) {
-      yield* requireSession(ctx.params.sessionID)
-      const message = ctx.payload as SessionV1.WithParts
-      const ok = yield* promptSvc.updateDeferredQueue(ctx.params.sessionID, ctx.params.queueID, message)
-      if (!ok) return yield* Effect.fail(ApiError.notFound("Queued message not found"))
-      return true
-    })
-
-    const sendDeferred = Effect.fn("SessionHttpApi.sendDeferred")(function* (ctx: {
-      params: { sessionID: SessionID; queueID: QueueItemID }
-      payload: unknown
-    }) {
-      yield* requireSession(ctx.params.sessionID)
-      const message = ctx.payload as SessionV1.WithParts | undefined
-      return yield* promptSvc
-        .sendDeferredNow(ctx.params.sessionID, ctx.params.queueID, message)
-        .pipe(Effect.mapError(mapQueuePromptError))
-    })
-
     const listQueue = Effect.fn("SessionHttpApi.listQueue")(function* (ctx: { params: { sessionID: SessionID } }) {
       yield* requireSession(ctx.params.sessionID)
       return yield* promptQueueSvc.listPreview(ctx.params.sessionID)
@@ -571,8 +549,6 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("deleteMessage", deleteMessage)
       .handle("deletePart", deletePart)
       .handle("updatePart", updatePart)
-      .handle("updateDeferred", updateDeferred)
-      .handle("sendDeferred", sendDeferred)
       .handle("listQueue", listQueue)
       .handle("getQueue", getQueue)
       .handle("enqueueQueue", enqueueQueue)
