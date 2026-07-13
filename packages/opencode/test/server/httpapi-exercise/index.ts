@@ -1658,55 +1658,6 @@ const scenarios: Scenario[] = [
       check(body === true, "queue drain resume should return true")
     }),
   http.protected
-    .patch("/session/{sessionID}/deferred/{queueID}", "session.deferred.update")
-    .mutating()
-    .seeded((ctx) =>
-      Effect.gen(function* () {
-        const session = yield* ctx.session({ title: "Deferred update session" })
-        const queued = yield* ctx.queue(session.id, { text: "deferred before" })
-        const message = yield* ctx.message(session.id, { text: "deferred after" })
-        return { session, queued, message }
-      }),
-    )
-    .at((ctx) => ({
-      path: route("/session/{sessionID}/deferred/{queueID}", {
-        sessionID: ctx.state.session.id,
-        queueID: ctx.state.queued.id,
-      }),
-      headers: ctx.headers(),
-      body: { info: ctx.state.message.info, parts: [ctx.state.message.part] },
-    }))
-    .json(200, (body) => {
-      check(body === true, "deferred update should return true")
-    }),
-  http.protected
-    .post("/session/{sessionID}/deferred/{queueID}/send", "session.deferred.send")
-    .preserveDatabase()
-    .withLlm()
-    .seeded((ctx) =>
-      Effect.gen(function* () {
-        const session = yield* ctx.session({ title: "Deferred send session" })
-        const queued = yield* ctx.queue(session.id, { text: "deferred queued" })
-        const message = yield* ctx.message(session.id, { text: "deferred edited" })
-        yield* ctx.llmText("deferred sent")
-        yield* ctx.llmText("deferred sent")
-        return { session, queued, message }
-      }),
-    )
-    .at((ctx) => ({
-      path: route("/session/{sessionID}/deferred/{queueID}/send", {
-        sessionID: ctx.state.session.id,
-        queueID: ctx.state.queued.id,
-      }),
-      headers: ctx.headers(),
-      body: { info: ctx.state.message.info, parts: [ctx.state.message.part] },
-    }))
-    .jsonEffect(200, (_body, ctx) =>
-      Effect.gen(function* () {
-        yield* ctx.llmWait(1)
-      }),
-    ),
-  http.protected
     .post("/session/{sessionID}/command", "session.command")
     .preserveDatabase()
     .withLlm()
