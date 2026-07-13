@@ -60,7 +60,11 @@ test("shows explicit queue controls and queues with Alt+Enter", async ({ page })
 
   const composer = page.locator('[data-component="session-composer"]')
   await expectAppVisible(composer)
-  await expect(composer.getByRole("button", { name: "Queue" })).toBeVisible()
+  const queue = composer.getByRole("button", { name: "Queue" })
+  await expect(queue).toBeVisible()
+  await queue.hover()
+  await expect(page.getByText("Alt", { exact: true })).toBeVisible()
+  await expect(page.getByText("Enter", { exact: true })).toBeVisible()
 
   const input = composer.locator('[data-component="prompt-input"]')
   await input.fill(queuedText)

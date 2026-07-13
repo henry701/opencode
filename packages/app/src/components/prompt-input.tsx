@@ -403,9 +403,16 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
   const queueToggle = () => (
     <Show when={store.mode === "normal" && !!props.controls.session.id}>
-      <Tooltip
+      <TooltipV2
         placement="top"
-        value={queueMode() ? language.t("prompt.action.sendDirect") : language.t("prompt.action.queue")}
+        value={
+          <>
+            {queueMode() ? language.t("prompt.action.sendDirect") : language.t("prompt.action.queue")}
+            <Show when={!queueMode()}>
+              <KeybindV2 keys={["Alt", "Enter"]} variant="neutral" />
+            </Show>
+          </>
+        }
       >
         <IconButton
           data-action="prompt-queue-toggle"
@@ -419,7 +426,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           aria-pressed={queueMode()}
           aria-label={queueMode() ? language.t("prompt.action.sendDirect") : language.t("prompt.action.queue")}
         />
-      </Tooltip>
+      </TooltipV2>
     </Show>
   )
 
