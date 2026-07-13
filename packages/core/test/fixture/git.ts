@@ -12,6 +12,7 @@ export async function gitRemote(root: string) {
   const source = path.join(root, "source")
   await git(root, "init", "--bare", origin)
   await git(root, "init", source)
+  await git(source, "config", "commit.gpgsign", "false")
   await git(source, "config", "user.email", "test@example.com")
   await git(source, "config", "user.name", "Test")
   await fs.writeFile(path.join(source, "README.md"), "one\n")

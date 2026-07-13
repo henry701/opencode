@@ -18,6 +18,7 @@ describe("legacy public event schemas", () => {
       "message.part.delta",
       "session.diff",
       "session.error",
+      "session.queue.updated",
     ])
     const durable = SessionV1.Event.Definitions.filter((event) => event.durable !== undefined)
     expect(durable).toHaveLength(7)

@@ -183,10 +183,6 @@ import type {
   SessionCommandResponses,
   SessionCreateErrors,
   SessionCreateResponses,
-  SessionDeferredSendErrors,
-  SessionDeferredSendResponses,
-  SessionDeferredUpdateErrors,
-  SessionDeferredUpdateResponses,
   SessionDeleteErrors,
   SessionDeleteMessageErrors,
   SessionDeleteMessageResponses,
@@ -3379,92 +3375,6 @@ export class Provider extends HeyApiClient {
   }
 }
 
-export class Deferred extends HeyApiClient {
-  /**
-   * Update a prompt waiting in the in-memory deferred queue.
-   */
-  public update<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      queueID: string
-      directory?: string
-      workspace?: string
-      body?: unknown
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "path", key: "queueID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { key: "body", map: "body" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).patch<
-      SessionDeferredUpdateResponses,
-      SessionDeferredUpdateErrors,
-      ThrowOnError
-    >({
-      url: "/session/{sessionID}/deferred/{queueID}",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * Persist and run a queued prompt immediately.
-   */
-  public send<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      queueID: string
-      directory?: string
-      workspace?: string
-      body?: unknown
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "path", key: "queueID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { key: "body", map: "body" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<SessionDeferredSendResponses, SessionDeferredSendErrors, ThrowOnError>(
-      {
-        url: "/session/{sessionID}/deferred/{queueID}/send",
-        ...options,
-        ...params,
-        headers: {
-          "Content-Type": "application/json",
-          ...options?.headers,
-          ...params.headers,
-        },
-      },
-    )
-  }
-}
-
 export class Drain extends HeyApiClient {
   /**
    * Pause automatic FIFO dequeue while editing queued prompts. Explicit send-now and normal submits still run.
@@ -4747,11 +4657,6 @@ export class Session2 extends HeyApiClient {
       ...options,
       ...params,
     })
-  }
-
-  private _deferred?: Deferred
-  get deferred(): Deferred {
-    return (this._deferred ??= new Deferred({ client: this.client }))
   }
 
   private _queue?: Queue
