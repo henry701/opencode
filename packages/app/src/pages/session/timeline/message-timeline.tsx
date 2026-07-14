@@ -360,6 +360,7 @@ export function MessageTimeline(props: {
     parts: getMsgParts,
     status: sessionStatus,
     showReasoningSummaries: settings.general.showReasoningSummaries,
+    inlineComments: settings.general.newLayoutDesigns,
   })
   const activeMessageID = projection.activeMessageID
   const assistantMessagesByParent = projection.assistantMessagesByParent
@@ -1210,6 +1211,10 @@ export function MessageTimeline(props: {
           const m = messageByID().get(userMessageRow().userMessageID)
           if (m?.role === "user") return m
         })
+        const messageComments = createMemo(() => {
+          if (!settings.general.newLayoutDesigns()) return []
+          return getMsgParts(userMessageRow().userMessageID).flatMap((part) => MessageComment.fromPart(part) ?? [])
+        })
         return (
           <TimelineRowFrame row={userMessageRow}>
             <Show when={message()}>
@@ -1221,6 +1226,7 @@ export function MessageTimeline(props: {
                       parts={getMsgParts(userMessageRow().userMessageID)}
                       actions={props.actions}
                       useV2Actions={settings.general.newLayoutDesigns()}
+                      comments={messageComments()}
                     />
                   </div>
                 </div>
