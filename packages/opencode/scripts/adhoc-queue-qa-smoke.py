@@ -2,9 +2,9 @@
 """
 Ad-hoc QA smoke for unified prompt queue via opencode-local.
 
-Runs in order:
-  1. `opencode-local run --interactive` (demo + mocked LLM)
-  2. `opencode-local` full TUI attach (mocked serve + queue API)
+Runs the current interactive surfaces:
+  1. `opencode-local` full TUI with a mocked LLM
+  2. `opencode-local attach` with a mocked server and queued API data
 
 Optional live Nemotron when OPENCODE_QA_LIVE=1 (often slow; may time out).
 
@@ -715,21 +715,14 @@ def main() -> int:
         llm_url = mock.start()
         print(f"mock LLM: {llm_url}")
 
-        print("\n=== Phase 1: run --interactive --demo ===")
-        test_run_interactive_demo(report, ws)
-
-        print("\n=== Phase 2: run --interactive (mock LLM) ===")
-        test_run_interactive_mock(report, ws, llm_url, cli, use_source)
-        test_run_interactive_api_queue(report, ws, llm_url, cli)
-
-        print("\n=== Phase 3: opencode-local full TUI ===")
+        print("\n=== Phase 1: opencode-local full TUI ===")
         test_tui_full_queue(report, ws, llm_url, cli, use_source)
 
-        print("\n=== Phase 4: opencode-local attach (queue API seed) ===")
+        print("\n=== Phase 2: opencode-local attach (queue API seed) ===")
         test_tui_attach_queue(report, ws, llm_url, cli, use_source)
 
         if LIVE:
-            print("\n=== Phase 5: live Nemotron (optional) ===")
+            print("\n=== Phase 3: live Nemotron (optional) ===")
             test_live_nemotron(report, ws)
         else:
             report.note("skip live Nemotron (set OPENCODE_QA_LIVE=1 to enable)")
