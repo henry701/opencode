@@ -7,6 +7,7 @@ const workflowPath = path.join(import.meta.dir, "../workflows/upstream-sync.yml"
 const source = await Bun.file(workflowPath).text()
 const workflow = Bun.YAML.parse(source) as {
   on: Record<string, unknown>
+  permissions: Record<string, string>
   jobs: {
     sync: {
       if: string
@@ -82,6 +83,7 @@ async function fixture() {
 describe("upstream sync security boundary", () => {
   test("only runs trusted events from the fork's long-lived branches", () => {
     expect(Object.keys(workflow.on).sort()).toEqual(["schedule", "workflow_dispatch"])
+    expect(workflow.permissions).toEqual({})
     expect(job.if).toContain("github.repository == 'henry701/opencode'")
     expect(job.if).toContain("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'")
     expect(job.if).toContain("github.ref == 'refs/heads/production' || github.ref == 'refs/heads/dev'")
@@ -107,11 +109,14 @@ describe("upstream sync security boundary", () => {
     expect(codex?.with?.["codex-args"]).toContain("project_doc_max_bytes=0")
     expect(codex?.with?.["codex-version"]).toMatch(/^\d+\.\d+\.\d+$/)
     expect(codex?.env?.GIT_OPTIONAL_LOCKS).toBe("0")
+    expect(job.steps.filter((item) => !item.uses && item.env?.OPENAI_API_KEY)).toEqual([])
   })
 
   test("retains conflicts for Codex and validates its edits before pushing", () => {
     expect(step("merge")?.run).not.toContain("git merge --abort")
     expect(step("merge")?.run).toContain("$RUNNER_TEMP/upstream-sync-conflicts")
+    expect(step("merge")?.run).toContain('if [[ ! -s "$RUNNER_TEMP/upstream-sync-conflicts" ]]')
+    expect(step("merge")?.run).toContain("Merge failed without unresolved conflict paths")
     expect(step("merge")?.run).toContain("tar --sort=name")
 
     const validate = step("validate")

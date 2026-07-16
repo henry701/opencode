@@ -10,6 +10,8 @@ on:
         type: boolean
         default: false
 
+permissions: {}
+
 jobs:
   sync:
     name: Sync ${{ matrix.branch }}
@@ -21,7 +23,7 @@ jobs:
     environment: upstream-sync
     timeout-minutes: 45
     permissions:
-      contents: write
+      contents: write # Required only for the final push to production or dev.
     concurrency:
       group: upstream-sync-${{ matrix.branch }}
       cancel-in-progress: false
@@ -95,6 +97,11 @@ jobs:
           fi
 
           git diff --name-only --diff-filter=U -z > "$RUNNER_TEMP/upstream-sync-conflicts"
+          if [[ ! -s "$RUNNER_TEMP/upstream-sync-conflicts" ]]; then
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+            echo "Merge failed without unresolved conflict paths; refusing Codex resolution." >&2
+            exit 1
+          fi
           sha256sum .git/index > "$RUNNER_TEMP/upstream-sync-index-before"
           tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner --exclude='.git/index' -cf - .git | sha256sum > "$RUNNER_TEMP/upstream-sync-git-before"
           git ls-files --others --exclude-standard -z > "$RUNNER_TEMP/upstream-sync-untracked-before"
@@ -118,17 +125,6 @@ jobs:
             tr '\0' '\n' < "$RUNNER_TEMP/upstream-sync-conflicts"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-
-      - name: Require Codex credential
-        if: steps.merge.outputs.status == 'conflict' && steps.merge.outputs.safe == 'true'
-        shell: bash
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          if [[ -z "$OPENAI_API_KEY" ]]; then
-            echo "OPENAI_API_KEY is not configured as a repository or environment secret." >&2
-            exit 1
-          fi
 
       - name: Resolve conflicts with Codex
         id: codex
