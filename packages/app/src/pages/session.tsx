@@ -1,4 +1,5 @@
-import type { Project, UserMessage, VcsFileDiff } from "@opencode-ai/sdk/v2"
+import type { FilePart, Project, UserMessage, VcsFileDiff } from "@opencode-ai/sdk/v2"
+import { getFilename } from "@opencode-ai/core/util/path"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { createQuery, skipToken, useMutation, useQueryClient } from "@tanstack/solid-query"
 import {
@@ -46,7 +47,7 @@ import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
 import { ModelsProvider } from "@/context/models"
 import { useNotification } from "@/context/notification"
-import { PermissionProvider } from "@/context/permission"
+import { usePlatform } from "@/context/platform"
 import { PromptProvider, usePrompt } from "@/context/prompt"
 import { SDKProvider, useSDK } from "@/context/sdk"
 import { useServerSDK } from "@/context/server-sdk"
@@ -58,6 +59,8 @@ import { TerminalProvider, useTerminal } from "@/context/terminal"
 import { PromptInput } from "@/components/prompt-input"
 import { useSettingsCommand } from "@/components/settings-dialog"
 import { buildRequestParts } from "@/components/prompt-input/build-request-parts"
+import { setCursorPosition } from "@/components/prompt-input/editor-dom"
+import { promptLength } from "@/components/prompt-input/history"
 import { type FollowupDraft } from "@/components/prompt-input/submit"
 import { partsFromQueueDetail } from "@/utils/queue-parts"
 import { applyQueueSaveSuccess, removeQueuedFollowup } from "@/pages/session.queue-save"
@@ -82,6 +85,7 @@ import { SessionSidePanel } from "@/pages/session/session-side-panel"
 import { sessionPanelLayout } from "@/pages/session/session-panel-layout"
 import { SessionReviewEmptyChangesV2 } from "@opencode-ai/session-ui/v2/session-review-empty-changes-v2"
 import { SessionReviewEmptyNoGitV2 } from "@opencode-ai/session-ui/v2/session-review-empty-no-git-v2"
+import { SessionReviewV2SidebarToggle } from "@opencode-ai/session-ui/v2/session-review-v2"
 import { ReviewPanelV2 } from "@/pages/session/v2/review-panel-v2"
 import { createReviewPanelV2State } from "@/pages/session/v2/review-panel-v2-state"
 import { reviewDiffDirectory, reviewDiffNeedsLoad, reviewRootDirectory } from "@/pages/session/v2/review-diff-kinds"
@@ -155,11 +159,23 @@ export function SessionPage() {
 // workspace-scoped state (terminal, directory providers) lives below.
 export function TargetSessionRouteContent() {
   const params = useParams<{ serverKey: string; id: string }>()
+  const serverSync = useServerSync()
+  const directory = createMemo(() => serverSync().session.lineage.peek(params.id)?.session.directory)
   return (
-    <SessionRouteErrorBoundary sessionID={params.id} serverKey={requireServerKey(params.serverKey)} padded>
-      <ResolvedTargetSessionRoute />
-    </SessionRouteErrorBoundary>
+    // Settings must keep the target-server SDK, sync, and models context and remain registered
+    // when session content falls back to the route error boundary.
+    <TargetServerScopedProviders directory={directory} sessionID={() => params.id}>
+      <TargetSessionSettingsCommand />
+      <SessionRouteErrorBoundary sessionID={params.id} serverKey={requireServerKey(params.serverKey)} padded>
+        <ResolvedTargetSessionRoute />
+      </SessionRouteErrorBoundary>
+    </TargetServerScopedProviders>
   )
+}
+
+function TargetSessionSettingsCommand() {
+  useSettingsCommand()
+  return null
 }
 
 export function SessionRouteErrorBoundary(
@@ -250,19 +266,17 @@ function ResolvedTargetSessionRoute() {
   })
 
   return (
-    <TargetServerScopedProviders directory={directory} sessionID={() => params.id}>
-      {/* Non-keyed: closes only while the target's directory is unknown (uncached
-          lineage mid-resolution), which tears down the workspace subtree including
-          the terminal. Same-workspace tab switches keep it open because warm
-          targets resolve synchronously from the sync cache. */}
-      <Show when={directory()}>
-        <SDKProvider directory={targetDirectory}>
-          <DirectoryDataProvider directory={targetDirectory} server={serverKey}>
-            <TargetSessionPage />
-          </DirectoryDataProvider>
-        </SDKProvider>
-      </Show>
-    </TargetServerScopedProviders>
+    // Non-keyed: closes only while the target's directory is unknown (uncached
+    // lineage mid-resolution), which tears down the workspace subtree including
+    // the terminal. Same-workspace tab switches keep it open because warm
+    // targets resolve synchronously from the sync cache.
+    <Show when={directory()}>
+      <SDKProvider directory={targetDirectory}>
+        <DirectoryDataProvider directory={targetDirectory} server={serverKey}>
+          <TargetSessionPage />
+        </DirectoryDataProvider>
+      </SDKProvider>
+    </Show>
   )
 }
 
@@ -283,10 +297,10 @@ function TargetServerScopedProviders(
   props: ParentProps<{ directory?: () => string | undefined; sessionID?: () => string | undefined }>,
 ) {
   return (
-    <PermissionProvider directory={props.directory}>
+    <>
       <MarkSessionNotificationsViewed sessionID={props.sessionID} />
       <ModelsProvider directory={props.directory}>{props.children}</ModelsProvider>
-    </PermissionProvider>
+    </>
   )
 }
 
@@ -349,6 +363,7 @@ export default function Page() {
   const sdk = useSDK()
   const serverSDK = useServerSDK()
   const settings = useSettings()
+  const platform = usePlatform()
   const prompt = usePrompt()
   const comments = useComments()
   const terminal = useTerminal()
@@ -1091,7 +1106,10 @@ export default function Page() {
 
     if (event.key.length === 1 && event.key !== "Unidentified" && !(event.ctrlKey || event.metaKey)) {
       if (composer.blocked() || isChildSession()) return
-      inputRef?.focus()
+      const input = inputRef
+      if (!input) return
+      input.focus()
+      setCursorPosition(input, prompt.cursor() ?? promptLength(prompt.current()))
     }
   }
 
@@ -2037,7 +2055,30 @@ export default function Page() {
       .map((item) => ({ id: item.id, text: line(item.id) }))
   })
 
-  const actions = { revert }
+  // attachment bytes are embedded as a data URL, so downloading always works;
+  // revealing requires the on-disk path captured by the client that attached the file
+  const openAttachment = (file: FilePart) => {
+    const download = () => {
+      const anchor = document.createElement("a")
+      anchor.href = file.url
+      anchor.download = getFilename(file.filename) || "attachment"
+      anchor.click()
+    }
+    const path = file.filename ?? ""
+    const absolute = path.startsWith("/") || path.startsWith("\\\\") || /^[a-zA-Z]:[\\/]/.test(path)
+    if (platform.revealPath && absolute) {
+      void platform.revealPath(path).then(
+        (revealed) => {
+          if (!revealed) download()
+        },
+        () => download(),
+      )
+      return
+    }
+    download()
+  }
+
+  const actions = { revert, openAttachment }
 
   createResizeObserver(
     () => promptDock,
@@ -2449,6 +2490,13 @@ export default function Page() {
                     reviewHasFocusableContent={() => hasReview() || reviewV2State.sidebarOpened()}
                     reviewCount={reviewCount}
                     reviewPanel={reviewPanelV2}
+                    reviewSidebarToggle={(disabled) => (
+                      <SessionReviewV2SidebarToggle
+                        opened={reviewV2State.sidebarOpened()}
+                        disabled={disabled}
+                        onToggle={reviewV2State.toggleSidebar}
+                      />
+                    )}
                     fileBrowserState={reviewV2State}
                     activeDiff={activeReviewFile()}
                     focusReviewDiff={focusReviewDiff}
