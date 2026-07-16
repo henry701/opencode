@@ -101,6 +101,8 @@ test("shows a pending permission dock", async ({ page }) => {
   expect(request.postDataJSON()).toEqual({ response: "once" })
 })
 
+test.skip(({ browserName }) => browserName === "firefox", "Firefox applies contenteditable focus after the initial key event")
+
 test("restores the draft caret before typing after a request dock closes", async ({ page }) => {
   const transport = await installSseTransport(page, {
     server: `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`,

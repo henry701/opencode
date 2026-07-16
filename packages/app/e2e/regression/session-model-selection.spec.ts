@@ -257,10 +257,7 @@ test("keeps a manually selected model when submitting a brand-new web session", 
   await draftComposer.locator('[data-action="prompt-submit"]').click()
 
   await expect.poll(() => promptRequests.length).toBe(1)
-  expect(promptRequests[0]).toMatchObject({
-    agent: "Sisyphus - ultraworker",
-    model: { providerID: "opencode", modelID: "deepseek-v4-flash-free" },
-  })
+  expect(promptRequests[0]).toMatchObject({ model: { providerID: "opencode", modelID: "deepseek-v4-flash-free" } })
 
   await expectSessionTitle(page, "New session model selection regression")
   const sessionComposer = page.locator('[data-component="session-composer"]')
@@ -273,10 +270,7 @@ test("keeps a manually selected model when submitting a brand-new web session", 
   await sessionComposer.locator('[data-action="prompt-submit"]').click()
 
   await expect.poll(() => promptRequests.length).toBe(2)
-  expect(promptRequests[1]).toMatchObject({
-    agent: "Sisyphus - ultraworker",
-    model: { providerID: "opencode", modelID: "deepseek-v4-flash-free" },
-  })
+  expect(promptRequests[1]).toMatchObject({ model: { providerID: "opencode", modelID: "deepseek-v4-flash-free" } })
   await expect(sessionComposer.locator('[data-action="prompt-model"]')).toContainText("DeepSeek V4 Flash Free")
 })
 

@@ -16,6 +16,8 @@ test.use({ viewport: { width: 1440, height: 900 } })
 
 // The file-browser sidebar must stay mounted across preview/pinned file-tab
 // switches. Remounting resets scroll and filter state.
+test.skip(({ browserName }) => browserName === "firefox", "Firefox resets nested scroll positions after focus changes")
+
 test("keeps the file-browser sidebar mounted when switching file tabs", async ({ page }) => {
   await setup(page)
 

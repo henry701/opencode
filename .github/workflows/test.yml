@@ -131,7 +131,7 @@ jobs:
       - name: Install Playwright browsers
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         working-directory: packages/app
-        run: bunx playwright install chromium
+        run: bunx playwright install chromium firefox
 
       - name: Run app e2e tests
         run: bun --cwd packages/app test:e2e:local
