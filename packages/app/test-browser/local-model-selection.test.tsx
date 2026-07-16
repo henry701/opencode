@@ -148,6 +148,13 @@ beforeAll(async () => {
       },
     }),
   }))
+  mock.module("@/context/settings", () => ({
+    useSettings: () => ({
+      visibility: {
+        customAgents: () => false,
+      },
+    }),
+  }))
   mock.module("@/context/platform", () => ({
     usePlatform: () => ({ platform: "browser" }),
   }))
