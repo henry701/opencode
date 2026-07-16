@@ -120,3 +120,62 @@ test("sends queued follow-ups with an explicit JSON body", async ({ page }) => {
     body: null,
   })
 })
+
+test("Enter saves a queued message edit without sending it", async ({ page }) => {
+  const updates: Array<{ sessionID: string; queueID: string; raw: string | null; body: unknown }> = []
+  const sends: unknown[] = []
+  const prompts: unknown[] = []
+
+  await mockOpenCodeServer(page, {
+    directory,
+    project: {
+      id: projectID,
+      worktree: directory,
+      vcs: "git",
+      name: "session-queue-controls-regression",
+      time: { created: 1700000000000, updated: 1700000000000 },
+      sandboxes: [],
+    },
+    provider: {
+      all: [
+        {
+          id: "opencode",
+          name: "OpenCode",
+          models: { "test-model": { id: "test-model", name: "Test Model", limit: { context: 200_000 } } },
+        },
+      ],
+      connected: ["opencode"],
+      default: model,
+    },
+    sessions: [session],
+    status: { [sessionID]: { type: "busy" } },
+    queue: { [sessionID]: [{ id: "pqu_edit", text: "queued draft" }] },
+    pageMessages: () => ({ items: [] }),
+    onQueueUpdate: (input) => updates.push(input),
+    onQueueSend: (input) => sends.push(input),
+    onPromptAsync: (input) => prompts.push(input),
+  })
+
+  await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
+  await expectSessionTitle(page, session.title)
+
+  const followupDock = page.locator('[data-component="session-followup-dock"]')
+  await expectAppVisible(followupDock)
+  await followupDock.getByRole("button", { name: "Edit" }).click()
+
+  const composer = page.locator('[data-component="session-composer"]')
+  const input = composer.locator('[data-component="prompt-input"]')
+  await expect(input).toContainText("queued draft")
+  await expect(followupDock.getByRole("button", { name: "Send now" })).toHaveCount(0)
+  await expect(composer.getByRole("button", { name: "Queue" })).toHaveCount(0)
+  await expect(composer.getByRole("button", { name: "Save" })).toBeVisible()
+
+  await input.fill("edited queued draft")
+  await input.press("Enter")
+
+  await expect.poll(() => updates.length).toBe(1)
+  expect(updates[0]).toMatchObject({ sessionID, queueID: "pqu_edit" })
+  expect(updates[0]?.raw).toContain("edited queued draft")
+  expect(sends).toHaveLength(0)
+  expect(prompts).toHaveLength(0)
+})

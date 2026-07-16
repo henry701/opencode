@@ -385,6 +385,15 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   })
   const stopping = createMemo(() => working() && blank())
   const tip = () => {
+    if (editingQueueID()) {
+      return (
+        <div class="flex items-center gap-2">
+          <span>{language.t("common.save")}</span>
+          <Icon name="enter" size="small" class="text-icon-base" />
+        </div>
+      )
+    }
+
     if (stopping()) {
       return (
         <div class="flex items-center gap-2">
@@ -403,7 +412,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   }
 
   const queueToggle = () => (
-    <Show when={store.mode === "normal" && !!props.controls.session.id}>
+    <Show when={store.mode === "normal" && !!props.controls.session.id && !editingQueueID()}>
       <TooltipV2
         placement="top"
         value={
@@ -1893,7 +1902,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                       "background-image":
                         "linear-gradient(180deg,var(--v2-alpha-light-20) 0%,var(--v2-alpha-light-0) 100%),linear-gradient(90deg,var(--v2-background-bg-contrast) 0%,var(--v2-background-bg-contrast) 100%)",
                     }}
-                    aria-label={stopping() ? language.t("prompt.action.stop") : language.t("prompt.action.send")}
+                    aria-label={
+                      stopping()
+                        ? language.t("prompt.action.stop")
+                        : editingQueueID()
+                          ? language.t("common.save")
+                          : language.t("prompt.action.send")
+                    }
                   />
                 </TooltipV2>
               </div>
@@ -2036,7 +2051,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                       }
                       variant="primary"
                       class="size-8"
-                      aria-label={stopping() ? language.t("prompt.action.stop") : language.t("prompt.action.send")}
+                      aria-label={
+                        stopping()
+                          ? language.t("prompt.action.stop")
+                          : editingQueueID()
+                            ? language.t("common.save")
+                            : language.t("prompt.action.send")
+                      }
                     />
                   </Tooltip>
                 </div>

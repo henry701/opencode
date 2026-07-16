@@ -79,8 +79,8 @@ describe("prompt queue TUI smoke (serve + script)", () => {
 
         yield* Effect.sleep("150 millis")
 
-        const script = yield* Effect.tryPromise(() =>
-          Bun.spawn(["bash", scriptPath], {
+        const script = yield* Effect.tryPromise(async () => {
+          const child = Bun.spawn(["bash", scriptPath], {
             cwd: home,
             env: {
               ...process.env,
@@ -89,13 +89,21 @@ describe("prompt queue TUI smoke (serve + script)", () => {
               OPENCODE_SESSION_ID: sessionID,
               OPENCODE_ARTIFACT_DIR: artifactDir,
               OPENCODE_QUEUE_ONLY: "1",
+              OPENCODE_EDIT_FIRST: "1",
               OPENCODE_CLI_ENTRY: path.join(opencodeRoot, "src/index.ts"),
             },
             stdout: "pipe",
             stderr: "pipe",
-          }).exited,
-        )
-        expect(script).toBe(0)
+          })
+          const [exitCode, stdout, stderr] = await Promise.all([
+            child.exited,
+            new Response(child.stdout).text(),
+            new Response(child.stderr).text(),
+          ])
+          return { exitCode, stdout, stderr }
+        })
+        if (script.exitCode !== 0) throw new Error(`queue smoke failed\n${script.stderr}\n${script.stdout}`)
+        expect(script.exitCode).toBe(0)
 
         yield* Deferred.succeed(gate, void 0)
 
@@ -107,7 +115,7 @@ describe("prompt queue TUI smoke (serve + script)", () => {
 
         const inputs = yield* llm.inputs
         expect(inputs).toHaveLength(4)
-        expect(JSON.stringify(inputs[1]?.messages)).toContain("queue-one")
+        expect(JSON.stringify(inputs[1]?.messages)).toContain("queue-one-edited")
         expect(JSON.stringify(inputs[1]?.messages)).not.toContain("queue-two")
         expect(JSON.stringify(inputs[2]?.messages)).toContain("queue-two")
         expect(JSON.stringify(inputs[2]?.messages)).not.toContain("queue-three")
@@ -115,6 +123,9 @@ describe("prompt queue TUI smoke (serve + script)", () => {
 
         const queued = yield* Effect.tryPromise(() => readFile(path.join(artifactDir, "queued.txt"), "utf8"))
         expect(queued.trim()).toBe("queued")
+
+        const edited = yield* Effect.tryPromise(() => readFile(path.join(artifactDir, "edited.txt"), "utf8"))
+        expect(edited.trim()).toBe("queue-one-edited")
 
         const attach = yield* Effect.tryPromise(() =>
           readFile(path.join(artifactDir, "tui-attach.txt"), "utf8").catch(() => "attach skipped"),

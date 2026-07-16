@@ -110,10 +110,7 @@ export function QueueDock(props: {
     if (!props.editing?.()) return undefined
 
     const hints = props.hints?.()
-    const parts = [
-      hints?.submit ? `${hints.submit} send now` : "Return send now",
-      hints?.queue ? `${hints.queue} save to queue` : "Ctrl+Shift+Enter save to queue",
-    ]
+    const parts = [hints?.submit ? `${hints.submit} save edit` : "Return save edit"]
     if (hints?.cancel) parts.push(`${hints.cancel} go back`)
     if (hints?.edit && hints?.editNext && total() > 1) parts.push(`${hints.edit}/${hints.editNext} switch`)
     return parts.join(" · ")
@@ -190,19 +187,21 @@ export function QueueDock(props: {
                     >
                       {itemText(entry.item)}
                     </text>
-                    <box
-                      flexShrink={0}
-                      onMouseUp={() => {
-                        if (props.disabled) return
-                        props.onSendNow(entry.item.id)
-                      }}
-                    >
-                      <text fg={props.disabled ? props.theme().textMuted : props.theme().text}>
-                        <span style={{ fg: props.theme().textMuted }}>[</span>
-                        send now
-                        <span style={{ fg: props.theme().textMuted }}>]</span>
-                      </text>
-                    </box>
+                    <Show when={!props.editing?.()}>
+                      <box
+                        flexShrink={0}
+                        onMouseUp={() => {
+                          if (props.disabled) return
+                          props.onSendNow(entry.item.id)
+                        }}
+                      >
+                        <text fg={props.disabled ? props.theme().textMuted : props.theme().text}>
+                          <span style={{ fg: props.theme().textMuted }}>[</span>
+                          send now
+                          <span style={{ fg: props.theme().textMuted }}>]</span>
+                        </text>
+                      </box>
+                    </Show>
                     <box
                       flexShrink={0}
                       onMouseUp={() => {

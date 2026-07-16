@@ -34,13 +34,7 @@ import { usePromptHistory, type PromptInfo } from "../../prompt/history"
 import { computePromptTraits } from "../../prompt/traits"
 import { expandPastedTextPlaceholders, expandTrackedPastedText } from "../../prompt/part"
 import { usePromptStash } from "../../prompt/stash"
-import {
-  queueEditCommitPlan,
-  queueEditSwitchPlan,
-  queueSendNowEmptyEditPlan,
-  queueSendNowDispatch,
-  queueSendNowTransitionPlan,
-} from "../../queue/edit"
+import { queueEditCommitPlan, queueEditSwitchPlan, queueSendNowDispatch } from "../../queue/edit"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { queueMutationError } from "./queue-actions"
@@ -1273,26 +1267,16 @@ export function Prompt(props: PromptProps) {
       })
       return false
     }
-    await sdk.client.session.queue.drain.pause({ sessionID: props.sessionID }).catch(() => {})
+    await exitQueueEditModeAndResume(props.sessionID)
+    if (!promptDisposed && input && !input.isDestroyed) input.focus()
     return true
   }
 
   async function sendQueuedNow(messageID: string) {
-    if (queueComposerBusy) return false
+    if (queueComposerBusy || editingQueuedMessageID()) return false
     if (!props.sessionID || props.disabled) return false
     const sessionID = props.sessionID
-    const items = sync.data.prompt_queue[sessionID] ?? []
-    const index = items.findIndex((item) => item.id === messageID)
-    if (index < 0) {
-      if (editingQueuedMessageID() === messageID) await exitQueueEditModeAndResume(sessionID)
-      return false
-    }
-
-    const activeEditID = editingQueuedMessageID()
-    const editing = activeEditID === messageID
-    const body = editing ? queueEditBody() : undefined
-    if (editing && !body) return false
-    const transition = queueSendNowTransitionPlan({ items, messageID, editingID: activeEditID })
+    if (!sync.data.prompt_queue[sessionID]?.some((item) => item.id === messageID)) return false
 
     const releaseQueueComposer = () => {
       if (!queueComposerBusy) return
@@ -1302,80 +1286,13 @@ export function Prompt(props: PromptProps) {
 
     queueComposerBusy = true
     try {
-      if (
-        body &&
-        queueEditCommitPlan({ text: body.parts.find((part) => part.type === "text")?.text ?? "" }).type === "remove"
-      ) {
-        const result = await sdk.client.session.queue
-          .remove({ sessionID, queueID: messageID })
-          .catch((error: unknown) => ({ error }))
-        const error = queueMutationError({ result, fallback: "no response" })
-        if (error) {
-          toast.show({
-            message: `Removing queued prompt failed: ${errorMessage(error)}`,
-            variant: "error",
-          })
-          return false
-        }
-
-        const emptyTransition = queueSendNowEmptyEditPlan({ items, messageID })
-        if (emptyTransition.type === "advance") {
-          clearPromptDraft()
-          setEditingQueuedMessageID(undefined)
-          const advanced = await editQueuedMessage(emptyTransition.editID, { internal: true })
-          if (!advanced) await exitQueueEditModeAndResume(sessionID, { force: true })
-        } else {
-          await exitQueueEditModeAndResume(sessionID)
-        }
-        if (!promptDisposed && input && !input.isDestroyed) input.focus()
-        return true
-      }
-
-      if (activeEditID && activeEditID !== messageID) {
-        const saved = await saveQueuedEdit(activeEditID)
-        if (!saved) return false
-      }
-
-      const editorParts = editing ? editorContextParts() : []
-      const keepEditingOther = !!activeEditID && activeEditID !== messageID && editingQueuedMessageID() === activeEditID
-      const pauseForSend = transition.type === "advance" || keepEditingOther
-
-      if (body) {
-        const updateRes = await sdk.client.session.queue
-          .update({ sessionID, queueID: messageID, body })
-          .catch((error: unknown) => ({ error }))
-        const updateError = queueMutationError({ result: updateRes, fallback: "no response" })
-        if (updateError) {
-          toast.show({
-            message: `Saving queued prompt failed: ${errorMessage(updateError)}`,
-            variant: "error",
-          })
-          return false
-        }
-      }
-
-      if (pauseForSend) await sdk.client.session.queue.drain.pause({ sessionID }).catch(() => {})
-
-      const restoreFailedSendEdit = async () => {
-        if (!editing || promptDisposed || transition.type === "advance") return
-        await sdk.client.session.queue.drain.pause({ sessionID }).catch(() => {})
-        const listRes = await sdk.client.session.queue.list({ sessionID }).catch(() => undefined)
-        if (!listRes?.data?.some((item) => item.id === messageID)) {
-          await exitQueueEditModeAndResume(sessionID, { force: true })
-          return
-        }
-        const restored = await editQueuedMessage(messageID, { internal: true })
-        if (restored) return
-        await exitQueueEditModeAndResume(sessionID, { force: true })
-      }
-
       const sendTask = queueSendNowDispatch({
         send: () =>
           sdk.client.session.queue
             .send({
               sessionID,
               queueID: messageID,
-              body: body ?? null,
+              body: null,
             })
             .then((result) => {
               const sendError = queueMutationError({ result, fallback: "no response" })
@@ -1386,31 +1303,11 @@ export function Prompt(props: PromptProps) {
             message: `Sending queued prompt failed: ${errorMessage(sendError)}`,
             variant: "error",
           })
-          if (!editing && pauseForSend && !keepEditingOther) await resumeQueueDrain(sessionID)
-          await restoreFailedSendEdit()
         },
         releaseControls: releaseQueueComposer,
       })
 
-      if (editorParts.length > 0) editor.markSelectionSent()
       props.onSubmit?.()
-
-      if (promptDisposed) {
-        await resumeQueueDrain(sessionID)
-        return true
-      }
-
-      if (transition.type === "advance") {
-        clearPromptDraft()
-        setEditingQueuedMessageID(undefined)
-        const advanced = await editQueuedMessage(transition.editID, { internal: true })
-        if (!advanced) await exitQueueEditModeAndResume(sessionID, { force: true })
-      } else if (transition.type === "exit" && editing) {
-        await exitQueueEditModeAndResume(sessionID, { force: true })
-      } else if (pauseForSend && !keepEditingOther) {
-        await resumeQueueDrain(sessionID)
-      }
-
       void sendTask
       if (!promptDisposed && input && !input.isDestroyed) input.focus()
       return true
@@ -1473,8 +1370,8 @@ export function Prompt(props: PromptProps) {
     return editQueuedMessage(queueEditSwitchPlan({ currentID: current, targetID: next.id }).editID)
   }
 
-  async function editQueuedMessage(messageID: string, opts?: { internal?: boolean; submit?: boolean }) {
-    if (queueComposerBusy && !opts?.internal) return false
+  async function editQueuedMessage(messageID: string) {
+    if (queueComposerBusy) return false
     if (!props.sessionID || props.disabled) return false
     const sessionID = props.sessionID
     await sdk.client.session.queue.drain.pause({ sessionID }).catch(() => {})
@@ -1506,8 +1403,7 @@ export function Prompt(props: PromptProps) {
     input.gotoBufferEnd()
     input.focus()
 
-    if (!opts?.submit) return true
-    return sendQueuedNow(messageID)
+    return true
   }
 
   async function editQueue() {
@@ -1606,7 +1502,7 @@ export function Prompt(props: PromptProps) {
     // plainText directly and sync before any downstream reads.
     syncPromptInputFromTextarea()
     const editingID = editingQueuedMessageID()
-    if (editingID) return sendQueuedNow(editingID)
+    if (editingID) return saveQueuedEdit(editingID)
     if (props.disabled) return false
     if (workspace.creating() || move.creating()) return false
     if (auto()?.visible) return false
@@ -1973,8 +1869,8 @@ export function Prompt(props: PromptProps) {
     if (props.showPlaceholder === false) return undefined
     if (editingQueuedMessageID()) {
       const submit = submitShortcut()
-      if (!submit) return "Press Return to send now"
-      return `Press ${submit} to send now`
+      if (!submit) return "Press Return to save edit"
+      return `Press ${submit} to save edit`
     }
     if (store.mode === "shell") {
       if (!shell().length) return undefined
@@ -2074,11 +1970,6 @@ export function Prompt(props: PromptProps) {
               }}
               onSubmit={() => {
                 if (queueComposerBusy) return
-                const editingID = editingQueuedMessageID()
-                if (editingID) {
-                  void sendQueuedNow(editingID)
-                  return
-                }
                 // IME: double-defer so the last composed character (e.g. Korean
                 // hangul) is flushed to plainText before we read it for submission.
                 setTimeout(() => setTimeout(() => submit(), 0), 0)

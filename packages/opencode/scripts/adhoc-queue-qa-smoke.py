@@ -266,6 +266,10 @@ def send_queue_key(child: pexpect.spawn) -> None:
     child.send("\x1b[27;6;13~")
 
 
+def send_edit_queue_key(child: pexpect.spawn) -> None:
+    child.send("\x1b[1;3A")
+
+
 def send_submit(child: pexpect.spawn) -> None:
     child.send("\r")
 
@@ -657,6 +661,17 @@ def test_tui_attach_queue(
             )
             save_screen("tui-attach-queue-dock", snapshot(child))
             report.ok("TUI attach shows queued prompts in UI")
+
+            send_edit_queue_key(child)
+            wait_pattern(child, re.compile(r"Editing queued message|save edit", re.I), 15, "TUI queued edit mode")
+            child.send("-edited")
+            send_submit(child)
+            time.sleep(0.8)
+
+            edited = curl_json("GET", f"{base_url}/session/{sid}/queue", str(ws))
+            if not isinstance(edited, list) or len(edited) != 3 or "-edited" not in edited[0].get("text", ""):
+                raise RuntimeError(f"Enter did not save queued edit in place: {edited!r}")
+            report.ok("TUI Enter saves queued edit without sending it")
         except Exception as exc:
             save_screen("tui-attach-queue-dock-error", snapshot(child))
             if "timed out" in str(exc).lower():

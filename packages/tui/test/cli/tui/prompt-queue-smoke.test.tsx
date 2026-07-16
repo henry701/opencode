@@ -108,6 +108,8 @@ test("queue dock keeps active queued edit preview to one line", async () => {
   ))
 
   expect(frame).toContain("Editing queued message")
+  expect(frame).toContain("Return save edit")
+  expect(frame).not.toContain("send now")
   expect(frame).toContain("1. line one")
   expect(frame).not.toContain("line two")
 })
