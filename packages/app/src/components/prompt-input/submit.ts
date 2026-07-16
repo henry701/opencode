@@ -455,7 +455,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       return true
     }
 
-    if (!isNewSession && mode === "normal" && (input.shouldQueue?.() || queueMode)) {
+    if (!isNewSession && mode === "normal" && (draft.queueID || input.shouldQueue?.() || queueMode)) {
       input.onQueue?.(draft)
       input.resetQueueMode?.()
       if (draft.queueID) input.resetEditingQueueID?.()

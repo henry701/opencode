@@ -125,15 +125,17 @@ export function SessionFollowupDock(props: {
                     when={active()}
                     fallback={
                       <>
-                        <Button
-                          size="small"
-                          variant="secondary"
-                          class="shrink-0"
-                          disabled={!!props.sending}
-                          onClick={() => props.onSend(item.id)}
-                        >
-                          {language.t("session.followupDock.sendNow")}
-                        </Button>
+                        <Show when={!editing()}>
+                          <Button
+                            size="small"
+                            variant="secondary"
+                            class="shrink-0"
+                            disabled={!!props.sending}
+                            onClick={() => props.onSend(item.id)}
+                          >
+                            {language.t("session.followupDock.sendNow")}
+                          </Button>
+                        </Show>
                         <Button
                           size="small"
                           variant="ghost"

@@ -9,6 +9,7 @@
 #   OPENCODE_SESSION_ID  — existing session; created when unset
 #   OPENCODE_ARTIFACT_DIR — writes session-id.txt, queued.txt, tui-attach.txt
 #   OPENCODE_QUEUE_ONLY=1 — only queue deferred messages (open turn started elsewhere)
+#   OPENCODE_EDIT_FIRST=1 — edit the first queued message and save it with Return
 #   OPENCODE_SKIP_ATTACH=1 — skip `script` capture of `opencode attach`
 #   OPENCODE_CLI_ENTRY   — path to src/index.ts (defaults below)
 #
@@ -18,6 +19,7 @@ SERVER_URL="${OPENCODE_SERVER_URL:?OPENCODE_SERVER_URL is required}"
 DIRECTORY="${OPENCODE_DIRECTORY:?OPENCODE_DIRECTORY is required}"
 ARTIFACT_DIR="${OPENCODE_ARTIFACT_DIR:-$(mktemp -d)}"
 CLI_ENTRY="${OPENCODE_CLI_ENTRY:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)/src/index.ts}"
+CLI_CWD="$(cd "$(dirname "$CLI_ENTRY")/.." && pwd)"
 
 mkdir -p "$ARTIFACT_DIR"
 
@@ -71,8 +73,63 @@ attach_capture() {
     printf 'attach skipped: script(1) not found\n' >"$out"
     return 0
   fi
-  timeout 6 script -qefc \
-    "cd '${DIRECTORY}' && exec bun run --conditions=browser '${CLI_ENTRY}' attach '${SERVER_URL}' --session '${sid}'" \
+  if [[ "${OPENCODE_EDIT_FIRST:-}" == "1" ]]; then
+    coproc ATTACH {
+      timeout --kill-after=2 15 script -qefc \
+        "cd '${CLI_CWD}' && exec bun run --conditions=browser '${CLI_ENTRY}' attach '${SERVER_URL}' --session '${sid}' --dir '${DIRECTORY}'" \
+        "$out" >/dev/null 2>&1
+    }
+    local ready=0
+    for _ in {1..60}; do
+      if grep -aq "messages queued" "$out"; then
+        ready=1
+        break
+      fi
+      sleep 0.2
+    done
+    if [[ "$ready" != "1" ]]; then
+      kill "$ATTACH_PID" 2>/dev/null || true
+      wait "$ATTACH_PID" 2>/dev/null || true
+      return 1
+    fi
+    printf '\033[1;3A' >&"${ATTACH[1]}"
+    for _ in {1..10}; do
+      grep -aq "Editing queued message" "$out" && break
+      sleep 0.1
+    done
+    if ! grep -aq "Editing queued message" "$out"; then
+      printf '\033[57352;3u' >&"${ATTACH[1]}"
+      for _ in {1..10}; do
+        grep -aq "Editing queued message" "$out" && break
+        sleep 0.1
+      done
+    fi
+    if ! grep -aq "Editing queued message" "$out"; then
+      kill "$ATTACH_PID" 2>/dev/null || true
+      wait "$ATTACH_PID" 2>/dev/null || true
+      return 1
+    fi
+    printf '%s' '-edited' >&"${ATTACH[1]}"
+    sleep 0.2
+    printf '\r' >&"${ATTACH[1]}"
+
+    local edited=0
+    for _ in {1..40}; do
+      if api GET "/session/${sid}/queue" | jq -e \
+        'length == 3 and .[0].text == "queue-one-edited"' >/dev/null; then
+        edited=1
+        break
+      fi
+      sleep 0.2
+    done
+    kill "$ATTACH_PID" 2>/dev/null || true
+    wait "$ATTACH_PID" 2>/dev/null || true
+    [[ "$edited" == "1" ]]
+    return
+  fi
+
+  timeout --kill-after=2 6 script -qefc \
+    "cd '${CLI_CWD}' && exec bun run --conditions=browser '${CLI_ENTRY}' attach '${SERVER_URL}' --session '${sid}' --dir '${DIRECTORY}'" \
     "$out" 2>/dev/null || true
 }
 
@@ -92,6 +149,12 @@ main() {
   printf 'queued\n' >"${ARTIFACT_DIR}/queued.txt"
 
   attach_capture "$sid"
+
+  if [[ "${OPENCODE_EDIT_FIRST:-}" == "1" ]]; then
+    api GET "/session/${sid}/queue" | jq -er \
+      'length == 3 and .[0].text == "queue-one-edited"' >/dev/null
+    printf 'queue-one-edited\n' >"${ARTIFACT_DIR}/edited.txt"
+  fi
 }
 
 main "$@"

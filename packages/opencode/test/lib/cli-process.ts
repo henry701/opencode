@@ -319,9 +319,8 @@ export function withCliFixture<A, E>(
       if (opts?.hostname) argv.push("--hostname", opts.hostname)
       if (opts?.extraArgs) argv.push(...opts.extraArgs)
 
-      // Acquire the subprocess; release sends SIGTERM and awaits exit on
-      // scope close. Wrapped in Effect.ignore so a flaky kill doesn't surface
-      // as a finalizer error during test teardown.
+      // Acquire the subprocess; release sends SIGTERM and escalates to SIGKILL
+      // if an active server drain prevents graceful shutdown.
       const proc = yield* Effect.acquireRelease(
         Effect.sync(() =>
           Bun.spawn(["bun", "run", "--conditions=browser", cliEntry, ...argv], {
@@ -332,9 +331,15 @@ export function withCliFixture<A, E>(
           }),
         ),
         (p) =>
-          Effect.promise(() => {
-            p.kill()
-            return p.exited
+          Effect.gen(function* () {
+            yield* Effect.sync(() => p.kill())
+            yield* Effect.promise(() => p.exited).pipe(
+              Effect.timeoutOrElse({
+                duration: Duration.seconds(2),
+                orElse: () => Effect.sync(() => p.kill("SIGKILL")),
+              }),
+            )
+            yield* Effect.promise(() => p.exited)
           }).pipe(Effect.ignore),
       )
 

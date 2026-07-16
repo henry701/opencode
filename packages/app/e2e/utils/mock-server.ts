@@ -11,10 +11,12 @@ export interface MockServerConfig {
   createSession?: () => { id: string } & Record<string, unknown>
   onPromptAsync?: (input: { sessionID: string; body: unknown }) => void
   onQueueSend?: (input: { sessionID: string; queueID: string; raw: string | null; body: unknown }) => void
+  onQueueUpdate?: (input: { sessionID: string; queueID: string; raw: string | null; body: unknown }) => void
   agents?: unknown[]
   pageMessages: (sessionId: string, limit: number, before?: string) => { items: unknown[]; cursor?: string }
   status?: Record<string, unknown>
   queue?: Record<string, { id: string; text: string }[]>
+  queueDetails?: Record<string, Record<string, unknown>>
   vcsDiff?: unknown[]
   messageDelay?: number
   beforeMessagesResponse?: (input: { sessionID: string; before?: string }) => Promise<void>
@@ -96,7 +98,8 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
       })
     if (emptyObject.has(path)) return json(route, {})
     if (emptyList.has(path)) return json(route, [])
-    if (path === "/provider") return json(route, typeof config.provider === "function" ? config.provider() : config.provider)
+    if (path === "/provider")
+      return json(route, typeof config.provider === "function" ? config.provider() : config.provider)
 
     if (path === "/session" && route.request().method() === "POST") {
       const created = config.createSession?.()
@@ -137,6 +140,28 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
       config.onQueueSend?.({
         sessionID: queueSendMatch[1]!,
         queueID: queueSendMatch[2]!,
+        raw,
+        body: raw ? JSON.parse(raw) : undefined,
+      })
+      return json(route, true)
+    }
+
+    const queueItemMatch = path.match(/^\/session\/([^/]+)\/queue\/([^/]+)$/)
+    if (queueItemMatch && route.request().method() === "GET") {
+      const item = config.queue?.[queueItemMatch[1]!]?.find((entry) => entry.id === queueItemMatch[2])
+      return json(
+        route,
+        config.queueDetails?.[queueItemMatch[1]!]?.[queueItemMatch[2]!] ?? {
+          id: queueItemMatch[2],
+          parts: item ? [{ type: "text", text: item.text }] : [],
+        },
+      )
+    }
+    if (queueItemMatch && route.request().method() === "PATCH") {
+      const raw = route.request().postData()
+      config.onQueueUpdate?.({
+        sessionID: queueItemMatch[1]!,
+        queueID: queueItemMatch[2]!,
         raw,
         body: raw ? JSON.parse(raw) : undefined,
       })
