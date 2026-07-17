@@ -41,6 +41,7 @@ import { useLocation, useNavigate, useParams, useSearchParams } from "@solidjs/r
 import { NewSessionView, SessionHeader } from "@/components/session"
 import { ErrorPage } from "@/pages/error"
 import { CommentsProvider, useComments } from "@/context/comments"
+import { useCommand } from "@/context/command"
 import { DirectoryDataProvider } from "@/pages/directory-layout"
 import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
@@ -366,6 +367,7 @@ export default function Page() {
   const platform = usePlatform()
   const prompt = usePrompt()
   const comments = useComments()
+  const command = useCommand()
   const terminal = useTerminal()
   const [searchParams, setSearchParams] = useSearchParams<{ prompt?: string }>()
   const location = useLocation()
@@ -1175,6 +1177,14 @@ export default function Page() {
     review: reviewTab,
     fileBrowser: () => newSessionDesign() && isDesktop() && !!params.id,
   })
+  command.register("session-palette", () => [
+    {
+      id: "command.palette",
+      title: language.t("command.palette"),
+      hidden: true,
+      onSelect: () => command.trigger("file.open", "palette"),
+    },
+  ])
 
   const openReviewFile = createOpenReviewFile({
     showAllFiles,
