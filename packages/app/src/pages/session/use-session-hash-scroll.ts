@@ -1,21 +1,27 @@
-import type { UserMessage } from "@opencode-ai/sdk/v2"
 import { useLocation, useNavigate } from "@solidjs/router"
 import { createEffect, createMemo, onCleanup, onMount } from "solid-js"
 import { messageIdFromHash } from "./message-id-from-hash"
+
+type TimelineMessage = { id: string }
 
 export const useSessionHashScroll = (input: {
   sessionKey: () => string
   sessionID: () => string | undefined
   messagesReady: () => boolean
-  visibleUserMessages: () => UserMessage[]
+  visibleUserMessages: () => TimelineMessage[]
   historyMore: () => boolean
   historyLoading: () => boolean
   loadMore: (sessionID: string) => Promise<void>
   currentMessageId: () => string | undefined
   pendingMessage: () => string | undefined
   setPendingMessage: (value: string | undefined) => void
-  setActiveMessage: (message: UserMessage | undefined) => void
-  autoScroll: { pause: () => void; forceScrollToBottom: () => void }
+  setActiveMessage: (message: TimelineMessage | undefined) => void
+  autoScroll: {
+    pause: () => void
+    forceScrollToBottom: () => void
+    userScrolled?: () => boolean
+  }
+  followingBottom?: () => boolean
   scroller: () => HTMLDivElement | undefined
   anchor: (id: string) => string
   revealMessage?: (id: string) => void
@@ -85,7 +91,7 @@ export const useSessionHashScroll = (input: {
     return false
   }
 
-  const scrollToMessage = (message: UserMessage, behavior: ScrollBehavior = "smooth") => {
+  const scrollToMessage = (message: TimelineMessage, behavior: ScrollBehavior = "smooth") => {
     cancel()
     if (input.currentMessageId() !== message.id) input.setActiveMessage(message)
     input.revealMessage?.(message.id)
@@ -101,6 +107,10 @@ export const useSessionHashScroll = (input: {
   const applyHash = (behavior: ScrollBehavior) => {
     const hash = location.hash.slice(1)
     if (!hash) {
+      // Empty hash means "show latest" only while still following the bottom.
+      // This effect can re-queue after hydration/layout; never yank a user who
+      // scrolled up to page older history.
+      if (input.autoScroll.userScrolled?.() || input.followingBottom?.() === false) return
       input.autoScroll.forceScrollToBottom()
       const el = input.scroller()
       if (el) input.scheduleScrollState(el)
@@ -125,6 +135,7 @@ export const useSessionHashScroll = (input: {
       return
     }
 
+    if (input.autoScroll.userScrolled?.() || input.followingBottom?.() === false) return
     input.autoScroll.forceScrollToBottom()
     const el = input.scroller()
     if (el) input.scheduleScrollState(el)

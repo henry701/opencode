@@ -59,6 +59,7 @@ const fakeProtocol = Protocol.make<FakeBody, FakeEvent, FakeEvent, void>({
           ...request.tools.map((tool) => `tool:${tool.name}:${tool.description}`),
         ].join("\n"),
       }),
+    context: () => ({}),
   },
   stream: {
     event: FakeEvent,

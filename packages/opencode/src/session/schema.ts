@@ -24,12 +24,3 @@ export const PartID = Schema.String.check(Schema.isStartsWith("prt")).pipe(
 )
 
 export type PartID = Schema.Schema.Type<typeof PartID>
-
-export const QueueItemID = Schema.String.check(Schema.isPattern(/^(pqu|msg)/)).pipe(
-  Schema.brand("QueueItemID"),
-  statics((s) => ({
-    ascending: (id?: string) => s.make(Identifier.ascending("promptQueue", id)),
-  })),
-)
-
-export type QueueItemID = Schema.Schema.Type<typeof QueueItemID>

@@ -24,7 +24,7 @@ test("shows explicit queue controls and queues with Alt+Enter", async ({ page })
 
   page.on("request", (request) => {
     const url = new URL(request.url())
-    if (url.pathname === `/session/${sessionID}/queue` && request.method() === "POST") {
+    if (url.pathname === `/api/session/${sessionID}/queue` && request.method() === "POST") {
       queueRequests.push(request.postData() ?? "")
     }
   })
@@ -52,19 +52,22 @@ test("shows explicit queue controls and queues with Alt+Enter", async ({ page })
     },
     sessions: [session],
     status: { [sessionID]: { type: "busy" } },
-    pageMessages: () => ({ items: [] }),
+    currentPageMessages: () => ({ items: [], throughSeq: 0 }),
   })
 
   await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
   await expectSessionTitle(page, session.title)
 
-  const composer = page.locator('[data-component="session-composer"]')
+  const composer = page.locator('[data-component="session-prompt-dock"]')
   await expectAppVisible(composer)
   const queue = composer.getByRole("button", { name: "Queue" })
   await expect(queue).toBeVisible()
   await queue.hover()
   await expect(page.getByText("Alt", { exact: true })).toBeVisible()
   await expect(page.getByText("Enter", { exact: true })).toBeVisible()
+  await queue.click()
+  await expect(composer.getByRole("button", { name: "Send direct", exact: true })).toBeVisible()
+  await composer.getByRole("button", { name: "Send direct", exact: true }).click()
 
   const input = composer.locator('[data-component="prompt-input"]')
   await input.fill(queuedText)
@@ -100,8 +103,8 @@ test("sends queued follow-ups with an explicit JSON body", async ({ page }) => {
     },
     sessions: [session],
     status: { [sessionID]: { type: "busy" } },
-    queue: { [sessionID]: [{ id: "pqu_send_now", text: "send this queued prompt now" }] },
-    pageMessages: () => ({ items: [] }),
+    queue: { [sessionID]: [{ id: "msg_send_now", text: "send this queued prompt now" }] },
+    currentPageMessages: () => ({ items: [], throughSeq: 0 }),
     onQueueSend: (input) => sends.push(input),
   })
 
@@ -115,9 +118,9 @@ test("sends queued follow-ups with an explicit JSON body", async ({ page }) => {
   await expect.poll(() => sends.length).toBe(1)
   expect(sends[0]).toEqual({
     sessionID,
-    queueID: "pqu_send_now",
-    raw: "null",
-    body: null,
+    queueID: "msg_send_now",
+    raw: "{}",
+    body: {},
   })
 })
 
@@ -149,8 +152,8 @@ test("Enter saves a queued message edit without sending it", async ({ page }) =>
     },
     sessions: [session],
     status: { [sessionID]: { type: "busy" } },
-    queue: { [sessionID]: [{ id: "pqu_edit", text: "queued draft" }] },
-    pageMessages: () => ({ items: [] }),
+    queue: { [sessionID]: [{ id: "msg_queue_edit", text: "queued draft" }] },
+    currentPageMessages: () => ({ items: [], throughSeq: 0 }),
     onQueueUpdate: (input) => updates.push(input),
     onQueueSend: (input) => sends.push(input),
     onPromptAsync: (input) => prompts.push(input),
@@ -163,18 +166,18 @@ test("Enter saves a queued message edit without sending it", async ({ page }) =>
   await expectAppVisible(followupDock)
   await followupDock.getByRole("button", { name: "Edit" }).click()
 
-  const composer = page.locator('[data-component="session-composer"]')
+  const composer = page.locator('[data-component="session-prompt-dock"]')
   const input = composer.locator('[data-component="prompt-input"]')
   await expect(input).toContainText("queued draft")
   await expect(followupDock.getByRole("button", { name: "Send now" })).toHaveCount(0)
-  await expect(composer.getByRole("button", { name: "Queue" })).toHaveCount(0)
+  await expect(composer.getByRole("button", { name: "Queue", exact: true })).toHaveCount(0)
   await expect(composer.getByRole("button", { name: "Save" })).toBeVisible()
 
   await input.fill("edited queued draft")
   await input.press("Enter")
 
   await expect.poll(() => updates.length).toBe(1)
-  expect(updates[0]).toMatchObject({ sessionID, queueID: "pqu_edit" })
+  expect(updates[0]).toMatchObject({ sessionID, queueID: "msg_queue_edit" })
   expect(updates[0]?.raw).toContain("edited queued draft")
   expect(sends).toHaveLength(0)
   expect(prompts).toHaveLength(0)

@@ -23,6 +23,7 @@ import { SystemContextRegistry } from "../../system-context/registry"
 import { SkillGuidance } from "../../skill/guidance"
 import { ReferenceGuidance } from "../../reference/guidance"
 import { ToolRegistry } from "../../tool/registry"
+import { Tool } from "../../tool/tool"
 import { ToolOutputStore } from "../../tool-output-store"
 import { SessionContextEpoch } from "../context-epoch"
 import { SessionCompaction } from "../compaction"
@@ -39,6 +40,12 @@ import { MAX_STEPS_PROMPT } from "./max-steps"
 import { Snapshot } from "../../snapshot"
 import { makeLocationNode } from "../../effect/app-node"
 import { llmClient } from "../../effect/app-node-platform"
+import { SessionInputPayload } from "@opencode-ai/schema/session-input-payload"
+import { SessionMessage } from "../message"
+import { SessionV1 } from "../../v1/session"
+import { InstallationVersion } from "../../installation/version"
+import { Slug } from "../../util/slug"
+import { SessionRevert } from "../revert"
 
 /**
  * Runs one durable coding-agent Session until it settles.
@@ -106,7 +113,9 @@ const layer = Layer.effect(
     const config = yield* Config.Service
     const snapshots = yield* Snapshot.Service
     const db = (yield* Database.Service).db
-    const compaction = SessionCompaction.make({ events, llm, config: yield* config.entries() })
+    const configEntries = yield* config.entries()
+    const compaction = SessionCompaction.make({ events, llm, config: configEntries })
+    const subagentDepth = Config.latest(configEntries, "subagent_depth") ?? 1
     const getSession = Effect.fn("SessionRunner.getSession")(function* (sessionID: SessionSchema.ID) {
       const session = yield* store.get(sessionID)
       if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
@@ -123,6 +132,7 @@ const layer = Layer.effect(
         if (message.type !== "assistant") continue
         for (const tool of message.content) {
           if (tool.type !== "tool" || (tool.state.status !== "pending" && tool.state.status !== "running")) continue
+          if (tool.name === "task") continue
           yield* events.publish(SessionEvent.Tool.Failed, {
             sessionID,
             timestamp: yield* DateTime.now,
@@ -170,47 +180,343 @@ const layer = Layer.effect(
         concurrency: "unbounded",
       }).pipe(Effect.map(SystemContext.combine))
 
+    const createChild = Effect.fn("SessionRunner.createChild")(function* (input: {
+      parent: SessionSchema.Info
+      sessionID: SessionSchema.ID
+      agent: string
+      model: SessionInputPayload.Payload["model"]
+      title: string
+    }) {
+      const existing = yield* store.get(input.sessionID)
+      if (existing) return existing
+      const now = Date.now()
+      const info = SessionV1.SessionInfo.make({
+        id: input.sessionID,
+        slug: Slug.create(),
+        version: InstallationVersion,
+        projectID: input.parent.projectID,
+        parentID: input.parent.id,
+        directory: input.parent.location.directory,
+        path: input.parent.subpath ?? "",
+        workspaceID: input.parent.location.workspaceID,
+        title: input.title,
+        agent: AgentV2.ID.make(input.agent),
+        model: {
+          providerID: input.model.providerID,
+          id: ModelV2.ID.make(input.model.modelID),
+          variant: input.model.variant,
+        },
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        time: { created: now, updated: now },
+      })
+      yield* events.publish(
+        SessionV1.Event.Created,
+        { sessionID: input.sessionID, info },
+        { location: input.parent.location },
+      )
+      const child = yield* store.get(input.sessionID)
+      if (!child) return yield* Effect.die(`Child Session was not projected: ${input.sessionID}`)
+      return child
+    })
+
+    const executeChild = Effect.fn("SessionRunner.executeChild")(function* (input: {
+      parent: SessionSchema.Info
+      sessionID: SessionSchema.ID
+      messageID: SessionMessage.ID
+      agent: string
+      model: SessionInputPayload.Payload["model"]
+      title: string
+      prompt: string
+      execution: {
+        readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, RunError>
+        readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+      }
+    }) {
+      let current = input.parent
+      let depth = 0
+      while (current.parentID) {
+        depth++
+        const parent = yield* store.get(current.parentID)
+        if (!parent) return yield* Effect.fail(new Error(`Parent Session not found: ${current.parentID}`))
+        current = parent
+      }
+      if (depth >= subagentDepth)
+        return yield* Effect.fail(
+          new Error(
+            `Subagent depth limit reached (${subagentDepth}). Increase "subagent_depth" to allow nested subagents.`,
+          ),
+        )
+
+      const existing = yield* store.get(input.sessionID)
+      if (
+        existing &&
+        (existing.parentID !== input.parent.id ||
+          existing.location.directory !== input.parent.location.directory ||
+          existing.location.workspaceID !== input.parent.location.workspaceID)
+      )
+        return yield* Effect.fail(
+          new Error(`Task ${input.sessionID} does not belong to Session ${input.parent.id} in this Location`),
+        )
+      yield* createChild({
+        parent: input.parent,
+        sessionID: input.sessionID,
+        agent: input.agent,
+        model: input.model,
+        title: input.title,
+      })
+      if (!(yield* SessionInput.find(db, input.messageID))) {
+        const payload = SessionInputPayload.Payload.make({
+          version: 1,
+          agent: input.agent,
+          model: input.model,
+          parts: [SessionInputPayload.TextPart.make({ type: "text", text: input.prompt })],
+        })
+        yield* SessionInput.admit(db, events, {
+          id: input.messageID,
+          sessionID: input.sessionID,
+          prompt: SessionInputPayload.toPrompt(payload),
+          payload,
+          delivery: "steer",
+        })
+      }
+      yield* input.execution
+        .resume(input.sessionID)
+        .pipe(Effect.onInterrupt(() => input.execution.interrupt(input.sessionID)))
+      return {
+        sessionID: input.sessionID,
+        result: (yield* getContext(input.sessionID))
+          .filter((message): message is SessionMessage.Assistant => message.type === "assistant")
+          .flatMap((message) =>
+            message.content.flatMap((item) => (item.type === "text" && item.text.trim() ? [item.text] : [])),
+          )
+          .join("\n")
+          .trim(),
+      }
+    })
+
+    const runSubtask = Effect.fn("SessionRunner.runSubtask")(function* (input: {
+      session: SessionSchema.Info
+      payload: SessionInputPayload.Payload
+      user: SessionMessage.User
+      part: SessionInputPayload.Part & { type: "subtask" }
+      execution: {
+        readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, RunError>
+        readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+        readonly queueDrainPaused: (sessionID: SessionSchema.ID) => Effect.Effect<boolean>
+      }
+    }) {
+      const callID = `subtask_${input.user.id}`
+      const recorded = (yield* getContext(input.session.id))
+        .filter((message): message is SessionMessage.Assistant => message.type === "assistant")
+        .flatMap((message) =>
+          message.content.flatMap((item) => (item.type === "tool" && item.id === callID ? [{ message, item }] : [])),
+        )
+        .at(-1)
+      if (recorded?.item.state.status === "completed" || recorded?.item.state.status === "error") return false
+
+      const childSessionID =
+        recorded?.item.state.status === "running" && typeof recorded.item.state.input.sessionID === "string"
+          ? SessionSchema.ID.make(recorded.item.state.input.sessionID)
+          : SessionSchema.ID.create()
+      const childMessageID =
+        recorded?.item.state.status === "running" && typeof recorded.item.state.input.messageID === "string"
+          ? SessionMessage.ID.make(recorded.item.state.input.messageID)
+          : SessionMessage.ID.create()
+      const assistantMessageID = recorded?.message.id ?? SessionMessage.ID.create()
+      const childModel = input.part.model ?? input.payload.model
+      const toolInput = {
+        sessionID: childSessionID,
+        messageID: childMessageID,
+        agent: input.part.agent,
+        description: input.part.description,
+        command: input.part.command,
+        prompt: input.part.prompt,
+      }
+      if (!recorded) {
+        yield* events.publish(SessionEvent.Step.Started, {
+          sessionID: input.session.id,
+          timestamp: yield* DateTime.now,
+          assistantMessageID,
+          agent: input.payload.agent,
+          model: {
+            providerID: input.payload.model.providerID,
+            id: ModelV2.ID.make(input.payload.model.modelID),
+            variant: input.payload.model.variant,
+          },
+        })
+        yield* events.publish(SessionEvent.Tool.Input.Started, {
+          sessionID: input.session.id,
+          timestamp: yield* DateTime.now,
+          assistantMessageID,
+          callID,
+          name: "task",
+        })
+        yield* events.publish(SessionEvent.Tool.Input.Ended, {
+          sessionID: input.session.id,
+          timestamp: yield* DateTime.now,
+          assistantMessageID,
+          callID,
+          text: JSON.stringify(toolInput),
+        })
+        yield* events.publish(SessionEvent.Tool.Called, {
+          sessionID: input.session.id,
+          timestamp: yield* DateTime.now,
+          assistantMessageID,
+          callID,
+          tool: "task",
+          input: toolInput,
+          provider: { executed: false },
+        })
+      }
+
+      const childExit = yield* executeChild({
+        parent: input.session,
+        sessionID: childSessionID,
+        messageID: childMessageID,
+        agent: input.part.agent,
+        model: childModel,
+        title: input.part.description || `Task from ${input.session.id}`,
+        prompt: input.part.prompt,
+        execution: input.execution,
+      }).pipe(Effect.exit)
+      if (childExit._tag === "Failure") {
+        if (Cause.hasInterrupts(childExit.cause)) return yield* Effect.interrupt
+        const error = Cause.squash(childExit.cause)
+        yield* events.publish(SessionEvent.Tool.Failed, {
+          sessionID: input.session.id,
+          timestamp: yield* DateTime.now,
+          assistantMessageID,
+          callID,
+          error: { type: "unknown", message: error instanceof Error ? error.message : String(error) },
+          provider: { executed: false },
+        })
+      } else {
+        yield* events.publish(SessionEvent.Tool.Success, {
+          sessionID: input.session.id,
+          timestamp: yield* DateTime.now,
+          assistantMessageID,
+          callID,
+          structured: childExit.value,
+          content: [{ type: "text", text: childExit.value.result }],
+          result: childExit.value.result,
+          provider: { executed: false },
+        })
+      }
+      yield* events.publish(SessionEvent.Step.Ended, {
+        sessionID: input.session.id,
+        timestamp: yield* DateTime.now,
+        assistantMessageID,
+        finish: "tool-calls",
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+      return true
+    })
+
     const runTurnAttempt = Effect.fn("SessionRunner.runTurn")(function* (
       sessionID: SessionSchema.ID,
       promotion: SessionInput.Delivery | undefined,
       step: number,
+      execution: {
+        readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, RunError>
+        readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+        readonly queueDrainPaused: (sessionID: SessionSchema.ID) => Effect.Effect<boolean>
+      },
       recoverOverflow?: typeof compaction.compactAfterOverflow,
     ) {
       const session = yield* getSession(sessionID)
       if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
         return yield* Effect.interrupt
-      const agent = yield* agents.select(session.agent)
-      const initialized = yield* SessionContextEpoch.initialize(db, loadSystemContext(agent), session.id)
       const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
       let needsContinuation = false
       let currentStep = step
-      if (promotion) {
-        const cutoff = yield* EventV2.latestSequence(db, session.id)
+      const cutoff = promotion ? yield* EventV2.latestSequence(db, session.id) : undefined
+      const pending =
+        promotion && cutoff !== undefined
+          ? yield* SessionInput.nextForPromotion(db, session.id, promotion, cutoff)
+          : undefined
+      if (pending !== undefined && session.revert)
+        yield* SessionRevert.commit(session).pipe(Effect.provideService(EventV2.Service, events))
+      const contextBeforePromotion = yield* getContext(session.id)
+      const payload =
+        pending === undefined
+          ? contextBeforePromotion.findLast((message) => message.type === "user")?.payload
+          : pending.payload
+      const selectedSession =
+        payload === undefined
+          ? session
+          : {
+              ...session,
+              agent: AgentV2.ID.make(payload.agent),
+              model: {
+                providerID: payload.model.providerID,
+                id: payload.model.modelID,
+                ...(payload.model.variant === undefined ? {} : { variant: payload.model.variant }),
+              },
+            }
+      const agent = yield* agents.select(selectedSession.agent)
+      const initialized = yield* SessionContextEpoch.initialize(db, loadSystemContext(agent), session.id)
+      const system =
+        initialized ?? (yield* SessionContextEpoch.prepare(db, events, loadSystemContext(agent), session.id))
+      if (promotion && cutoff !== undefined) {
         let promoted = 0
         if (promotion === "steer") promoted = yield* SessionInput.promoteSteers(db, events, session.id, cutoff)
         if (promotion === "queue") {
-          promoted += Number(yield* SessionInput.promoteNextQueued(db, events, session.id))
+          promoted += Number(yield* SessionInput.promoteNextQueued(db, events, session.id, cutoff))
           promoted += yield* SessionInput.promoteSteers(db, events, session.id, cutoff)
         }
         if (promoted > 0) currentStep = 1
       }
-      const system =
-        initialized ?? (yield* SessionContextEpoch.prepare(db, events, loadSystemContext(agent), session.id))
-      const model = yield* models.resolve(session)
+      const user = (yield* getContext(session.id)).findLast(
+        (message): message is SessionMessage.User => message.type === "user",
+      )
+      const subtask = payload?.parts.find(
+        (part): part is SessionInputPayload.Part & { type: "subtask" } => part.type === "subtask",
+      )
+      if (
+        payload &&
+        user &&
+        subtask &&
+        (yield* runSubtask({
+          session,
+          payload,
+          user,
+          part: subtask,
+          execution,
+        }))
+      )
+        return { needsContinuation: true, step: currentStep }
+      const model = yield* models.resolve(selectedSession)
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
-      const context = entries.map((entry) => entry.message)
+      const history = entries.map((entry) => entry.message)
       const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
-      const toolMaterialization = isLastStep ? undefined : yield* tools.materialize(agent.info?.permissions)
+      const permissions = [
+        ...(agent.info?.permissions ?? []),
+        ...(payload?.permissions?.map((permission) => ({
+          action: permission.permission,
+          resource: permission.pattern,
+          effect: permission.action,
+        })) ?? []),
+      ]
+      const toolMaterialization = isLastStep ? undefined : yield* tools.materialize(permissions)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
       const request = LLM.request({
         model,
         providerOptions: { openai: { promptCacheKey } },
-        system: [agent.info?.system, system.baseline]
+        system: [agent.info?.system, payload?.system, system.baseline]
           .filter((part): part is string => part !== undefined && part.length > 0)
           .map(SystemPart.make),
-        messages: [...toLLMMessages(context, model), ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : [])],
-        tools: toolMaterialization?.definitions ?? [],
+        messages: [...toLLMMessages(history, model), ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : [])],
+        tools:
+          toolMaterialization?.definitions.filter((definition) => payload?.tools?.[definition.name] !== false) ?? [],
         toolChoice: isLastStep ? "none" : undefined,
+        responseFormat:
+          payload?.format?.type === "json_schema"
+            ? { type: "json", schema: payload.format.schema }
+            : payload?.format?.type === "text"
+              ? { type: "text" }
+              : undefined,
       })
       if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
         return yield* Effect.die(continueAfterCompaction(currentStep))
@@ -221,7 +527,7 @@ const layer = Layer.effect(
         model: {
           id: ModelV2.ID.make(model.id),
           providerID: ProviderV2.ID.make(model.provider),
-          ...(session.model?.variant === undefined ? {} : { variant: session.model.variant }),
+          ...(selectedSession.model?.variant === undefined ? {} : { variant: selectedSession.model.variant }),
         },
         snapshot: startSnapshot,
       })
@@ -229,50 +535,128 @@ const layer = Layer.effect(
       const publish = (event: LLMEvent, outputPaths: ReadonlyArray<string> = []) =>
         withPublication(publisher.publish(event, outputPaths))
       let overflowFailure: ProviderErrorEvent | undefined
-      const providerStream = llm.stream(request).pipe(
-        Stream.runForEach((event) =>
-          Effect.gen(function* () {
-            if (overflowFailure || publisher.hasProviderError()) return
-            if (LLMEvent.is.providerError(event)) {
-              if (isContextOverflowFailure(event) && !publisher.hasAssistantStarted()) {
-                overflowFailure = event
+      const providerStream = llm
+        .stream(request, {
+          onPrepared: (prepared) => {
+            const systemPrompt = prepared.metadata?.systemPrompt
+            const toolDefinitions = prepared.metadata?.toolDefinitions
+            return publisher.setPreparedContext({
+              ...(typeof systemPrompt === "string" ? { systemPrompt } : {}),
+              ...(typeof toolDefinitions === "string" ? { toolDefinitions } : {}),
+            })
+          },
+        })
+        .pipe(
+          Stream.runForEach((event) =>
+            Effect.gen(function* () {
+              if (overflowFailure || publisher.hasProviderError()) return
+              if (LLMEvent.is.providerError(event)) {
+                if (isContextOverflowFailure(event) && !publisher.hasAssistantStarted()) {
+                  overflowFailure = event
+                  return
+                }
+              }
+              yield* publish(event)
+              if (event.type !== "tool-call" || event.providerExecuted) return
+              if (!toolMaterialization) {
+                yield* withPublication(publisher.failUnsettledTools("Tools are disabled after the maximum agent steps"))
                 return
               }
-            }
-            yield* publish(event)
-            if (event.type !== "tool-call" || event.providerExecuted) return
-            if (!toolMaterialization) {
-              yield* withPublication(publisher.failUnsettledTools("Tools are disabled after the maximum agent steps"))
-              return
-            }
-            needsContinuation = true
-            const assistantMessageID = yield* publisher.assistantMessageID(event.id)
-            yield* Effect.uninterruptibleMask((restore) =>
-              restore(
-                toolMaterialization.settle({
-                  sessionID: session.id,
-                  agent: agent.id,
-                  assistantMessageID,
-                  call: event,
-                }),
-              ).pipe(
-                Effect.flatMap((settlement) =>
-                  publish(
-                    LLMEvent.toolResult({
-                      id: event.id,
-                      name: event.name,
-                      result: settlement.result,
-                      output: settlement.output,
-                    }),
-                    settlement.outputPaths ?? [],
+              needsContinuation = true
+              const assistantMessageID = yield* publisher.assistantMessageID(event.id)
+              yield* Effect.uninterruptibleMask((restore) =>
+                restore(
+                  toolMaterialization.settle({
+                    sessionID: session.id,
+                    agent: agent.id,
+                    assistantMessageID,
+                    call: event,
+                    task: (input) =>
+                      Effect.gen(function* () {
+                        const childAgent = yield* agents.get(AgentV2.ID.make(input.subagentType))
+                        if (!childAgent)
+                          return yield* Effect.fail(
+                            new Tool.Failure({ message: `Unknown subagent type: ${input.subagentType}` }),
+                          )
+                        const model = childAgent.model ?? selectedSession.model
+                        if (!model)
+                          return yield* Effect.fail(
+                            new Tool.Failure({ message: "No model selected for subagent task" }),
+                          )
+                        return yield* executeChild({
+                          parent: session,
+                          sessionID: input.taskID ? SessionSchema.ID.make(input.taskID) : SessionSchema.ID.create(),
+                          messageID: SessionMessage.ID.create(),
+                          agent: childAgent.id,
+                          model: {
+                            providerID: model.providerID,
+                            modelID: model.id,
+                            variant: model.variant,
+                          },
+                          title: input.description || `Task from ${session.id}`,
+                          prompt: input.prompt,
+                          execution,
+                        }).pipe(
+                          Effect.mapError(
+                            (error) =>
+                              new Tool.Failure({
+                                message: error instanceof Error ? error.message : String(error),
+                              }),
+                          ),
+                        )
+                      }),
+                    transition: (input) =>
+                      Effect.gen(function* () {
+                        const messageID = SessionMessage.ID.create()
+                        const timestamp = yield* DateTime.now
+                        const transitionModel = {
+                          providerID: ProviderV2.ID.make(model.provider),
+                          modelID: ModelV2.ID.make(model.id),
+                          ...(selectedSession.model?.variant === undefined
+                            ? {}
+                            : { variant: selectedSession.model.variant }),
+                        }
+                        const payload = SessionInputPayload.Payload.make({
+                          version: 1,
+                          agent: input.agent,
+                          model: transitionModel,
+                          parts: [
+                            SessionInputPayload.TextPart.make({ type: "text", text: input.text, synthetic: true }),
+                          ],
+                        })
+                        yield* events.publish(SessionEvent.AgentSwitched, {
+                          sessionID: session.id,
+                          messageID: SessionMessage.ID.create(),
+                          timestamp,
+                          agent: input.agent,
+                        })
+                        yield* SessionInput.admit(db, events, {
+                          id: messageID,
+                          sessionID: session.id,
+                          prompt: SessionInputPayload.toPrompt(payload),
+                          payload,
+                          delivery: "steer",
+                        })
+                      }),
+                  }),
+                ).pipe(
+                  Effect.flatMap((settlement) =>
+                    publish(
+                      LLMEvent.toolResult({
+                        id: event.id,
+                        name: event.name,
+                        result: settlement.result,
+                        output: settlement.output,
+                      }),
+                      settlement.outputPaths ?? [],
+                    ),
                   ),
                 ),
-              ),
-            ).pipe(FiberSet.run(toolFibers))
-          }),
-        ),
-        Effect.ensuring(withPublication(publisher.flush())),
-      )
+              ).pipe(FiberSet.run(toolFibers))
+            }),
+          ),
+          Effect.ensuring(withPublication(publisher.flush())),
+        )
 
       return yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
@@ -290,7 +674,7 @@ const layer = Layer.effect(
           const llmFailure = failure instanceof LLMError ? failure : undefined
           if (llmFailure && !publisher.hasProviderError()) {
             yield* withPublication(publisher.failUnsettledTools("Provider did not return a tool result", true))
-            yield* withPublication(publisher.failAssistant(llmFailure.reason.message))
+            yield* withPublication(publisher.failAssistant({ type: "unknown", message: llmFailure.reason.message }))
           }
           if (stream._tag === "Failure" && Cause.hasInterrupts(stream.cause)) yield* FiberSet.clear(toolFibers)
           const settled = yield* restore(awaitToolFibers(toolFibers)).pipe(Effect.exit)
@@ -306,7 +690,9 @@ const layer = Layer.effect(
             yield* FiberSet.clear(toolFibers)
             yield* withPublication(publisher.failUnsettledTools("Tool execution interrupted"))
             if (publisher.hasActiveAssistant())
-              yield* withPublication(publisher.failAssistant("Provider turn interrupted"))
+              yield* withPublication(
+                publisher.failAssistant({ type: "interrupted", message: "Provider turn interrupted" }),
+              )
           }
           if (settled._tag === "Failure" && !Cause.hasInterrupts(settled.cause)) {
             const failure = Cause.squash(settled.cause)
@@ -322,6 +708,21 @@ const layer = Layer.effect(
                     .files({ from: startSnapshot, to: endSnapshot })
                     .pipe(Effect.catch(() => Effect.succeed(undefined)))
                 : undefined
+            const diffs =
+              startSnapshot && endSnapshot
+                ? yield* snapshots.diff({ from: startSnapshot, to: endSnapshot }).pipe(
+                    Effect.map((items) =>
+                      items.map((item) => ({
+                        file: item.path,
+                        patch: item.patch,
+                        additions: item.additions,
+                        deletions: item.deletions,
+                        status: item.status,
+                      })),
+                    ),
+                    Effect.catch(() => Effect.succeed(undefined)),
+                  )
+                : undefined
             yield* withPublication(
               events.publish(SessionEvent.Step.Ended, {
                 sessionID: session.id,
@@ -332,6 +733,7 @@ const layer = Layer.effect(
                 tokens: stepSettlement.tokens,
                 snapshot: endSnapshot,
                 files,
+                diffs,
               }),
             )
           }
@@ -350,31 +752,36 @@ const layer = Layer.effect(
       sessionID: SessionSchema.ID,
       promotion: SessionInput.Delivery | undefined,
       step: number,
+      execution: {
+        readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, RunError>
+        readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+        readonly queueDrainPaused: (sessionID: SessionSchema.ID) => Effect.Effect<boolean>
+      },
     ) => Effect.Effect<{ readonly needsContinuation: boolean; readonly step: number }, RunError>
 
-    const runAfterOverflowCompaction: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step) {
-      return yield* runTurnAttempt(sessionID, promotion, step).pipe(
+    const runAfterOverflowCompaction: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step, execution) {
+      return yield* runTurnAttempt(sessionID, promotion, step, execution).pipe(
         Effect.catchDefect(
           Effect.fnUntraced(function* (defect) {
             if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
             if (defect.transition._tag === "ContinueAfterOverflowCompaction")
               return yield* Effect.die("Post-compaction provider attempt cannot recover another overflow")
             yield* Effect.yieldNow
-            return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step)
+            return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step, execution)
           }),
         ),
       )
     })
 
-    const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step) {
-      return yield* runTurnAttempt(sessionID, promotion, step, compaction.compactAfterOverflow).pipe(
+    const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step, execution) {
+      return yield* runTurnAttempt(sessionID, promotion, step, execution, compaction.compactAfterOverflow).pipe(
         Effect.catchDefect(
           Effect.fnUntraced(function* (defect) {
             if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
             yield* Effect.yieldNow
             if (defect.transition._tag === "ContinueAfterOverflowCompaction")
-              return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step)
-            return yield* runTurn(sessionID, undefined, defect.transition.step)
+              return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step, execution)
+            return yield* runTurn(sessionID, undefined, defect.transition.step, execution)
           }),
         ),
       )
@@ -383,9 +790,17 @@ const layer = Layer.effect(
     const run = Effect.fn("SessionRunner.run")(function* (input: {
       readonly sessionID: SessionSchema.ID
       readonly force: boolean
+      readonly execution: {
+        readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, RunError>
+        readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+        readonly queueDrainPaused: (sessionID: SessionSchema.ID) => Effect.Effect<boolean>
+      }
     }) {
       const hasSteer = yield* SessionInput.hasPending(db, input.sessionID, "steer")
-      const hasQueue = hasSteer ? false : yield* SessionInput.hasPending(db, input.sessionID, "queue")
+      const hasQueue =
+        hasSteer || (yield* input.execution.queueDrainPaused(input.sessionID))
+          ? false
+          : yield* SessionInput.hasPending(db, input.sessionID, "queue")
       if (!input.force && !hasSteer && !hasQueue) return
       yield* failInterruptedTools(input.sessionID)
       let promotion: SessionInput.Delivery | undefined = hasSteer ? "steer" : hasQueue ? "queue" : undefined
@@ -394,17 +809,19 @@ const layer = Layer.effect(
         let needsContinuation = true
         let step = 1
         while (needsContinuation) {
-          const result = yield* runTurn(input.sessionID, promotion, step)
+          if (promotion === "queue" && (yield* input.execution.queueDrainPaused(input.sessionID))) return
+          const result = yield* runTurn(input.sessionID, promotion, step, input.execution)
           needsContinuation = result.needsContinuation
           step = result.step + 1
           promotion = "steer"
           if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
         }
-        shouldRun = yield* SessionInput.hasPending(db, input.sessionID, "queue")
+        shouldRun =
+          !(yield* input.execution.queueDrainPaused(input.sessionID)) &&
+          (yield* SessionInput.hasPending(db, input.sessionID, "queue"))
         promotion = shouldRun ? "queue" : undefined
       }
     })
-
     return Service.of({
       run,
     })

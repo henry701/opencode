@@ -9,6 +9,7 @@ import { DateTimeUtcFromMillis, optional, RelativePath } from "./schema"
 import { SessionEvent } from "./session-event"
 import { SessionID } from "./session-id"
 import { Revert } from "./revert"
+import { FileDiff } from "./file-diff"
 
 export const ID = SessionID
 export type ID = SessionID
@@ -38,9 +39,16 @@ export const Info = Schema.Struct({
     archived: DateTimeUtcFromMillis.pipe(optional),
   }),
   title: Schema.String,
+  share: Schema.Struct({ url: Schema.String }).pipe(optional),
   location: Location.Ref,
   subpath: RelativePath.pipe(optional),
   revert: Revert.State.pipe(optional),
+  summary: Schema.Struct({
+    additions: Schema.Finite,
+    deletions: Schema.Finite,
+    files: Schema.Finite,
+    diffs: Schema.Array(FileDiff.Info),
+  }).pipe(optional),
 }).annotate({ identifier: "SessionV2.Info" })
 
 export const ListAnchor = Schema.Struct({

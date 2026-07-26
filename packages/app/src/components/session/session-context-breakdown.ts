@@ -1,4 +1,4 @@
-import type { Message, Part } from "@opencode-ai/sdk/v2/client"
+import type { SessionMessage } from "@opencode-ai/schema/session-message"
 
 export type SessionContextBreakdownKey = "system" | "user" | "assistant" | "tool" | "toolDefs" | "other"
 
@@ -13,23 +13,33 @@ const estimateTokens = (chars: number) => Math.ceil(chars / 4)
 const toPercent = (tokens: number, input: number) => (tokens / input) * 100
 const toPercentLabel = (tokens: number, input: number) => Math.round(toPercent(tokens, input) * 10) / 10
 
-const charsFromUserPart = (part: Part) => {
-  if (part.type === "text") return part.text.length
-  if (part.type === "file") return part.source?.text.value.length ?? 0
-  if (part.type === "agent") return part.source?.value.length ?? 0
-  return 0
+const userChars = (message: SessionMessage.User) => {
+  if (!message.payload) {
+    return (
+      message.text.length +
+      (message.files ?? []).reduce((sum, file) => sum + (file.name?.length ?? 0) + file.uri.length, 0) +
+      (message.agents ?? []).reduce((sum, agent) => sum + agent.name.length + (agent.source?.text.length ?? 0), 0)
+    )
+  }
+  return message.payload.parts.reduce((sum, part) => {
+    if (part.type === "text") return sum + part.text.length
+    if (part.type === "file") return sum + (part.source?.text.value.length ?? part.url.length)
+    if (part.type === "agent") return sum + (part.source?.value.length ?? part.name.length)
+    return sum + part.prompt.length
+  }, 0)
 }
 
-const charsFromAssistantPart = (part: Part) => {
-  if (part.type === "text") return { assistant: part.text.length, tool: 0 }
-  if (part.type === "reasoning") return { assistant: part.text.length, tool: 0 }
-  if (part.type !== "tool") return { assistant: 0, tool: 0 }
-
-  const input = Object.keys(part.state.input).length * 16
-  if (part.state.status === "pending") return { assistant: 0, tool: input + part.state.raw.length }
-  if (part.state.status === "completed") return { assistant: 0, tool: input + part.state.output.length }
-  if (part.state.status === "error") return { assistant: 0, tool: input + part.state.error.length }
-  return { assistant: 0, tool: input }
+const contentChars = (content: SessionMessage.AssistantContent) => {
+  if (content.type === "text" || content.type === "reasoning") return { assistant: content.text.length, tool: 0 }
+  const input =
+    typeof content.state.input === "string" ? content.state.input.length : JSON.stringify(content.state.input).length
+  if (content.state.status === "pending") return { assistant: 0, tool: input }
+  const output = content.state.content.reduce(
+    (sum, item) => sum + (item.type === "text" ? item.text.length : item.uri.length + (item.name?.length ?? 0)),
+    0,
+  )
+  if (content.state.status === "error") return { assistant: 0, tool: input + output + content.state.error.message.length }
+  return { assistant: 0, tool: input + output }
 }
 
 const build = (
@@ -37,68 +47,43 @@ const build = (
   input: number,
 ) => {
   return [
-    {
-      key: "system",
-      tokens: tokens.system,
-    },
-    {
-      key: "toolDefs",
-      tokens: tokens.toolDefs,
-    },
-    {
-      key: "user",
-      tokens: tokens.user,
-    },
-    {
-      key: "assistant",
-      tokens: tokens.assistant,
-    },
-    {
-      key: "tool",
-      tokens: tokens.tool,
-    },
-    {
-      key: "other",
-      tokens: tokens.other,
-    },
+    { key: "system", tokens: tokens.system },
+    { key: "toolDefs", tokens: tokens.toolDefs },
+    { key: "user", tokens: tokens.user },
+    { key: "assistant", tokens: tokens.assistant },
+    { key: "tool", tokens: tokens.tool },
+    { key: "other", tokens: tokens.other },
   ]
-    .filter((x) => x.tokens > 0)
-    .map((x) => ({
-      key: x.key,
-      tokens: x.tokens,
-      width: toPercent(x.tokens, input),
-      percent: toPercentLabel(x.tokens, input),
+    .filter((item) => item.tokens > 0)
+    .map((item) => ({
+      key: item.key,
+      tokens: item.tokens,
+      width: toPercent(item.tokens, input),
+      percent: toPercentLabel(item.tokens, input),
     })) as SessionContextBreakdownSegment[]
 }
 
 export function estimateSessionContextBreakdown(args: {
-  messages: Message[]
-  parts: Record<string, Part[] | undefined>
+  messages: readonly SessionMessage.Message[]
   input: number
   systemPrompt?: string
+  toolDefinitions?: string
 }) {
   if (!args.input) return []
 
-  const toolDefsChars = (() => {
-    for (let i = args.messages.length - 1; i >= 0; i--) {
-      const msg = args.messages[i]
-      if (msg.role === "assistant" && msg.tool_defs) return msg.tool_defs.length
-    }
-    return 0
-  })()
-
   const counts = args.messages.reduce(
-    (acc, msg) => {
-      const parts = args.parts[msg.id] ?? []
-      if (msg.role === "user") {
-        const user = parts.reduce((sum, part) => sum + charsFromUserPart(part), 0)
-        return { ...acc, user: acc.user + user }
-      }
-
-      if (msg.role !== "assistant") return acc
-      const assistant = parts.reduce(
-        (sum, part) => {
-          const next = charsFromAssistantPart(part)
+    (acc, message) => {
+      if (message.type === "user") return { ...acc, user: acc.user + userChars(message) }
+      if (message.type === "shell")
+        return {
+          ...acc,
+          user: acc.user + message.command.length,
+          tool: acc.tool + message.output.length,
+        }
+      if (message.type !== "assistant") return acc
+      const content = message.content.reduce(
+        (sum, item) => {
+          const next = contentChars(item)
           return {
             assistant: sum.assistant + next.assistant,
             tool: sum.tool + next.tool,
@@ -108,8 +93,8 @@ export function estimateSessionContextBreakdown(args: {
       )
       return {
         ...acc,
-        assistant: acc.assistant + assistant.assistant,
-        tool: acc.tool + assistant.tool,
+        assistant: acc.assistant + content.assistant,
+        tool: acc.tool + content.tool,
       }
     },
     {
@@ -117,7 +102,7 @@ export function estimateSessionContextBreakdown(args: {
       user: 0,
       assistant: 0,
       tool: 0,
-      toolDefs: toolDefsChars,
+      toolDefs: args.toolDefinitions?.length ?? 0,
     },
   )
 
@@ -130,9 +115,7 @@ export function estimateSessionContextBreakdown(args: {
   }
   const estimated = tokens.system + tokens.user + tokens.assistant + tokens.tool + tokens.toolDefs
 
-  if (estimated <= args.input) {
-    return build({ ...tokens, other: args.input - estimated }, args.input)
-  }
+  if (estimated <= args.input) return build({ ...tokens, other: args.input - estimated }, args.input)
 
   const scale = args.input / estimated
   const scaled = {

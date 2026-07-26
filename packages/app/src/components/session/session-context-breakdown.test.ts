@@ -1,37 +1,44 @@
 import { describe, expect, test } from "bun:test"
-import type { Message, Part } from "@opencode-ai/sdk/v2/client"
+import type { SessionMessage } from "@opencode-ai/schema/session-message"
 import { estimateSessionContextBreakdown } from "./session-context-breakdown"
 import { getSessionSystemPrompt } from "./session-context-system"
 
 const user = (id: string) => {
   return {
-    id,
-    role: "user",
+    id: id as SessionMessage.ID,
+    type: "user",
+    text: "hello world",
+    files: [],
+    agents: [],
     time: { created: 1 },
-  } as unknown as Message
+  } as unknown as SessionMessage.User
 }
 
-const assistant = (id: string, toolDefs?: string, systemPrompt?: string) => {
+const assistant = (
+  id: string,
+  content: SessionMessage.Assistant["content"] = [],
+  toolDefinitions?: string,
+  systemPrompt?: string,
+) => {
   return {
-    id,
-    role: "assistant",
+    id: id as SessionMessage.ID,
+    type: "assistant",
+    agent: "build",
+    model: { providerID: "test", id: "model" },
+    content,
+    tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     time: { created: 1 },
-    tool_defs: toolDefs,
-    system_prompt: systemPrompt,
-  } as unknown as Message
+    toolDefinitions,
+    systemPrompt,
+  } as unknown as SessionMessage.Assistant
 }
 
 describe("estimateSessionContextBreakdown", () => {
   test("estimates tokens and keeps remaining tokens as other", () => {
-    const messages = [user("u1"), assistant("a1")]
-    const parts = {
-      u1: [{ type: "text", text: "hello world" }] as unknown as Part[],
-      a1: [{ type: "text", text: "assistant response" }] as unknown as Part[],
-    }
+    const messages = [user("msg_u1"), assistant("msg_a1", [{ id: "txt_1", type: "text", text: "assistant response" }])]
 
     const output = estimateSessionContextBreakdown({
       messages,
-      parts,
       input: 20,
       systemPrompt: "system prompt",
     })
@@ -44,15 +51,13 @@ describe("estimateSessionContextBreakdown", () => {
   })
 
   test("scales segments when estimates exceed input", () => {
-    const messages = [user("u1"), assistant("a1")]
-    const parts = {
-      u1: [{ type: "text", text: "x".repeat(400) }] as unknown as Part[],
-      a1: [{ type: "text", text: "y".repeat(400) }] as unknown as Part[],
-    }
+    const messages = [
+      { ...user("msg_u1"), text: "x".repeat(400) },
+      assistant("msg_a1", [{ id: "txt_1", type: "text", text: "y".repeat(400) }]),
+    ]
 
     const output = estimateSessionContextBreakdown({
       messages,
-      parts,
       input: 10,
       systemPrompt: "z".repeat(200),
     })
@@ -63,39 +68,37 @@ describe("estimateSessionContextBreakdown", () => {
   })
 
   test("counts the latest assistant tool definitions separately", () => {
-    const firstToolDefs = "old tool definitions"
-    const latestToolDefs = "new tool definitions"
-    const messages = [user("u1"), assistant("a1", firstToolDefs), assistant("a2", latestToolDefs)]
-    const parts = {
-      u1: [{ type: "text", text: "hello" }] as unknown as Part[],
-      a1: [{ type: "text", text: "first response" }] as unknown as Part[],
-      a2: [{ type: "text", text: "latest response" }] as unknown as Part[],
-    }
+    const storedToolDefs = "stored tool definitions"
+    const selectedToolDefs = "selected tool definitions"
+    const messages = [
+      user("msg_u1"),
+      assistant("msg_a1", [{ id: "txt_1", type: "text", text: "first response" }], storedToolDefs),
+    ]
 
     const output = estimateSessionContextBreakdown({
       messages,
-      parts,
       input: 100,
       systemPrompt: "system",
+      toolDefinitions: selectedToolDefs,
     })
 
     const map = Object.fromEntries(output.map((segment) => [segment.key, segment.tokens]))
-    expect(map.toolDefs).toBe(Math.ceil(latestToolDefs.length / 4))
+    expect(map.toolDefs).toBe(Math.ceil(selectedToolDefs.length / 4))
   })
 
   test("uses persisted assistant context metadata for system and tool definition segments", () => {
     const systemPrompt = "persisted assistant system prompt"
     const toolDefs = "persisted tool definitions"
-    const messages = [user("u1"), assistant("a1", toolDefs, systemPrompt)]
+    const messages = [
+      user("msg_u1"),
+      assistant("msg_a1", [{ id: "txt_1", type: "text", text: "answer" }], toolDefs, systemPrompt),
+    ]
 
     const output = estimateSessionContextBreakdown({
       messages,
-      parts: {
-        u1: [{ type: "text", text: "hello" }] as unknown as Part[],
-        a1: [{ type: "text", text: "answer" }] as unknown as Part[],
-      },
       input: 100,
       systemPrompt: getSessionSystemPrompt(messages),
+      toolDefinitions: toolDefs,
     })
 
     const map = Object.fromEntries(output.map((segment) => [segment.key, segment.tokens]))

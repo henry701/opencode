@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { createMemo } from "solid-js"
-import { QueueDock, type QueuedItem } from "@/queue/queue-dock"
+import { QueueDock } from "@opencode-ai/tui/queue/queue-dock"
+import type { QueuedItem } from "./queue.preview"
 import type { RunFooterTheme } from "./theme"
 import { printableBinding } from "./prompt.shared"
 import type { FooterKeybinds } from "./types"
@@ -37,6 +38,9 @@ export function RunQueueDock(props: {
       disabled={props.disabled}
       editing={props.editing}
       editingMessageID={props.editingMessageID}
+      editingActions="send-and-queue"
+      collapseGlyphs={{ collapsed: "▾", expanded: "▴" }}
+      showSendNowWhileEditing
       onEdit={props.onEdit}
       onSendNow={props.onSendNow}
       onRemove={props.onRemove}

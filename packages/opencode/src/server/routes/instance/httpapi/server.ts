@@ -33,7 +33,6 @@ import { Instruction } from "@/session/instruction"
 import { LLM } from "@/session/llm"
 import { SessionProcessor } from "@/session/processor"
 import { SessionPrompt } from "@/session/prompt"
-import { SessionPromptQueue } from "@/session/prompt-queue"
 import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
 import { Session } from "@/session/session"
@@ -41,6 +40,7 @@ import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
 import { SessionShare } from "@/share/session"
+import { SessionSharingCurrent } from "@/share/current"
 import { ShareNext } from "@/share/share-next"
 import { Skill } from "@/skill"
 import { Discovery } from "@/skill/discovery"
@@ -244,7 +244,6 @@ const app = LayerNode.group([
   SessionCompaction.node,
   SessionRevert.node,
   SessionSummary.node,
-  SessionPromptQueue.node,
   SessionPrompt.node,
   Instruction.node,
   LLM.node,
@@ -262,6 +261,7 @@ const app = LayerNode.group([
   Installation.node,
   ShareNext.node,
   SessionShare.node,
+  SessionSharingCurrent.node,
   InstanceStore.node,
   httpClient,
   EventV2.node,
@@ -305,7 +305,7 @@ export function createRoutes(
     ),
     Layer.provide(locationServiceMapV2),
 
-    Layer.provide(AppNodeBuilderV1.build(app)),
+    Layer.provide(AppNodeBuilderV1.build(app, [[SessionExecution.node, SessionExecutionLocal.node]])),
     // Must stay last: layers provided later in this pipe build beneath earlier ones,
     // so Observability must come after every service graph. Otherwise eagerly forked
     // fibers (e.g. the ModelsDev background refresh) capture Effect's default stdout

@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test"
-import type { PermissionRequest } from "@opencode-ai/sdk/v2"
 import {
   createPermissionBodyState,
   permissionAlwaysLines,
@@ -9,52 +8,56 @@ import {
   permissionReject,
   permissionRun,
 } from "@/cli/cmd/run/permission.shared"
+import type { PermissionRequest } from "@/cli/cmd/run/types"
 
 function req(input: Partial<PermissionRequest> = {}): PermissionRequest {
   return {
     id: "perm-1",
     sessionID: "session-1",
-    permission: "read",
-    patterns: [],
+    action: "read",
+    resources: [],
     metadata: {},
-    always: [],
+    save: [],
     ...input,
   }
 }
 
 describe("run permission shared", () => {
   test("replies immediately for allow once", () => {
-    const out = permissionRun(createPermissionBodyState("perm-1"), "perm-1", "once")
+    const out = permissionRun(createPermissionBodyState(req()), "once")
 
     expect(out.reply).toEqual({
+      sessionID: "session-1",
       requestID: "perm-1",
       reply: "once",
     })
   })
 
   test("requires confirmation for allow always", () => {
-    const next = permissionRun(createPermissionBodyState("perm-1"), "perm-1", "always")
+    const next = permissionRun(createPermissionBodyState(req()), "always")
     expect(next.state.stage).toBe("always")
     expect(next.state.selected).toBe("confirm")
     expect(next.reply).toBeUndefined()
 
-    expect(permissionRun(next.state, "perm-1", "confirm").reply).toEqual({
+    expect(permissionRun(next.state, "confirm").reply).toEqual({
+      sessionID: "session-1",
       requestID: "perm-1",
       reply: "always",
     })
 
-    expect(permissionRun(next.state, "perm-1", "cancel").state).toMatchObject({
+    expect(permissionRun(next.state, "cancel").state).toMatchObject({
       stage: "permission",
       selected: "always",
     })
   })
 
   test("builds trimmed reject replies and stage transitions", () => {
-    const next = permissionRun(createPermissionBodyState("perm-1"), "perm-1", "reject")
+    const next = permissionRun(createPermissionBodyState(req()), "reject")
     expect(next.state.stage).toBe("reject")
 
-    const out = permissionReject({ ...next.state, message: "  use rg  " }, "perm-1")
+    const out = permissionReject({ ...next.state, message: "  use rg  " })
     expect(out).toEqual({
+      sessionID: "session-1",
       requestID: "perm-1",
       reply: "reject",
       message: "use rg",
@@ -65,7 +68,7 @@ describe("run permission shared", () => {
       selected: "reject",
     })
 
-    expect(permissionEscape(createPermissionBodyState("perm-1"))).toMatchObject({
+    expect(permissionEscape(createPermissionBodyState(req()))).toMatchObject({
       stage: "reject",
       selected: "reject",
     })
@@ -80,7 +83,7 @@ describe("run permission shared", () => {
     expect(
       permissionInfo(
         req({
-          permission: "bash",
+          action: "bash",
           metadata: {
             input: {
               command: "git status --short",
@@ -96,7 +99,7 @@ describe("run permission shared", () => {
     expect(
       permissionInfo(
         req({
-          permission: "task",
+          action: "task",
           metadata: {
             description: "investigate stream",
             subagent_type: "general",
@@ -111,8 +114,8 @@ describe("run permission shared", () => {
     expect(
       permissionInfo(
         req({
-          permission: "external_directory",
-          patterns: ["/tmp/work/**/*.ts", "/tmp/work/**/*.tsx"],
+          action: "external_directory",
+          resources: ["/tmp/work/**/*.ts", "/tmp/work/**/*.tsx"],
         }),
       ),
     ).toMatchObject({
@@ -120,22 +123,22 @@ describe("run permission shared", () => {
       lines: ["- /tmp/work/**/*.ts", "- /tmp/work/**/*.tsx"],
     })
 
-    expect(permissionInfo(req({ permission: "doom_loop" }))).toMatchObject({
+    expect(permissionInfo(req({ action: "doom_loop" }))).toMatchObject({
       title: "Continue after repeated failures",
     })
 
-    expect(permissionInfo(req({ permission: "custom_tool" }))).toMatchObject({
+    expect(permissionInfo(req({ action: "custom_tool" }))).toMatchObject({
       title: "Call tool custom_tool",
       lines: ["Tool: custom_tool"],
     })
   })
 
   test("formats always-allow copy for wildcard and explicit patterns", () => {
-    expect(permissionAlwaysLines(req({ permission: "bash", always: ["*"] }))).toEqual([
+    expect(permissionAlwaysLines(req({ action: "bash", save: ["*"] }))).toEqual([
       "This will allow bash until OpenCode is restarted.",
     ])
 
-    expect(permissionAlwaysLines(req({ always: ["src/**/*.ts", "src/**/*.tsx"] }))).toEqual([
+    expect(permissionAlwaysLines(req({ save: ["src/**/*.ts", "src/**/*.tsx"] }))).toEqual([
       "This will allow the following patterns until OpenCode is restarted.",
       "- src/**/*.ts",
       "- src/**/*.tsx",

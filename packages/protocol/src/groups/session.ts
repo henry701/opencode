@@ -1,6 +1,6 @@
 import { SessionMessage } from "@opencode-ai/schema/session-message"
 import { SessionInput } from "@opencode-ai/schema/session-input"
-import { PromptInput } from "@opencode-ai/schema/prompt-input"
+import { SessionInputPayload } from "@opencode-ai/schema/session-input-payload"
 import { Session } from "@opencode-ai/schema/session"
 import { Project } from "@opencode-ai/schema/project"
 import { AbsolutePath, NonNegativeInt, PositiveInt, RelativePath, statics } from "@opencode-ai/schema/schema"
@@ -8,10 +8,13 @@ import { Workspace } from "@opencode-ai/schema/workspace"
 import { Context, Effect, Encoding, Result, Schema, Struct } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import {
+  AgentNotFoundError,
+  CommandNotFoundError,
   ConflictError,
   InvalidCursorError,
   InvalidRequestError,
   MessageNotFoundError,
+  QueueItemNotFoundError,
   ServiceUnavailableError,
   SessionNotFoundError,
   UnknownError,
@@ -21,6 +24,7 @@ import { Model } from "@opencode-ai/schema/model"
 import { Location } from "@opencode-ai/schema/location"
 import { Revert } from "@opencode-ai/schema/revert"
 import { SessionEvent } from "@opencode-ai/schema/session-event"
+import { Prompt } from "@opencode-ai/schema/prompt"
 
 const SessionsQueryFields = {
   workspace: Workspace.ID.pipe(Schema.optional),
@@ -170,6 +174,44 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         ),
     )
     .add(
+      HttpApiEndpoint.patch("session.update", "/api/session/:sessionID", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({ title: Schema.String.pipe(Schema.optional) }),
+        success: Schema.Struct({ data: Session.Info }),
+        error: SessionNotFoundError,
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(OpenApi.annotations({ identifier: "v2.session.update", summary: "Update session" })),
+    )
+    .add(
+      HttpApiEndpoint.post("session.fork", "/api/session/:sessionID/fork", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({ messageID: SessionMessage.ID.pipe(Schema.optional) }),
+        success: Schema.Struct({ data: Session.Info }),
+        error: [SessionNotFoundError, UnknownError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(OpenApi.annotations({ identifier: "v2.session.fork", summary: "Fork session" })),
+    )
+    .add(
+      HttpApiEndpoint.post("session.share", "/api/session/:sessionID/share", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ data: Session.Info }),
+        error: [SessionNotFoundError, ServiceUnavailableError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(OpenApi.annotations({ identifier: "v2.session.share", summary: "Share session" })),
+    )
+    .add(
+      HttpApiEndpoint.delete("session.unshare", "/api/session/:sessionID/share", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ data: Session.Info }),
+        error: [SessionNotFoundError, ServiceUnavailableError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(OpenApi.annotations({ identifier: "v2.session.unshare", summary: "Unshare session" })),
+    )
+    .add(
       HttpApiEndpoint.post("session.switchAgent", "/api/session/:sessionID/agent", {
         params: { sessionID: Session.ID },
         payload: Schema.Struct({ agent: Agent.ID }),
@@ -206,12 +248,13 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         params: { sessionID: Session.ID },
         payload: Schema.Struct({
           id: SessionMessage.ID.pipe(Schema.optional),
-          prompt: PromptInput.Prompt,
+          prompt: Prompt.pipe(Schema.optional),
+          payload: SessionInputPayload.Payload.pipe(Schema.optional),
           delivery: SessionInput.Delivery.pipe(Schema.optional),
           resume: Schema.Boolean.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: SessionInput.Admitted }),
-        error: [ConflictError, SessionNotFoundError],
+        error: [ConflictError, InvalidRequestError, SessionNotFoundError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -219,6 +262,140 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
             identifier: "v2.session.prompt",
             summary: "Send message",
             description: "Durably admit one session input and schedule agent-loop execution unless resume is false.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.command", "/api/session/:sessionID/command", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({
+          id: SessionMessage.ID.pipe(Schema.optional),
+          name: Schema.String,
+          arguments: Schema.String,
+          payload: SessionInputPayload.Payload,
+          delivery: SessionInput.Delivery.pipe(Schema.optional),
+          resume: Schema.Boolean.pipe(Schema.optional),
+        }),
+        success: Schema.Struct({ data: SessionInput.Admitted }),
+        error: [AgentNotFoundError, CommandNotFoundError, ConflictError, SessionNotFoundError, ServiceUnavailableError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.command",
+            summary: "Run session command",
+            description: "Expand a configured command into one durable current-session input and schedule execution.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.get("session.queueList", "/api/session/:sessionID/queue", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ data: Schema.Array(SessionInput.Queued) }),
+        error: SessionNotFoundError,
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(OpenApi.annotations({ identifier: "v2.session.queue.list", summary: "List queued inputs" })),
+    )
+    .add(
+      HttpApiEndpoint.post("session.queueEnqueue", "/api/session/:sessionID/queue", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({
+          id: SessionMessage.ID.pipe(Schema.optional),
+          payload: SessionInputPayload.Payload,
+          resume: Schema.Boolean.pipe(Schema.optional),
+        }),
+        success: Schema.Struct({ data: SessionInput.Queued }),
+        error: [ConflictError, SessionNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.queue.enqueue",
+            summary: "Enqueue input",
+            description: "Durably enqueue an input without starting an idle drain unless resume is true.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.queueDrainPause", "/api/session/:sessionID/queue/drain-pause", {
+        params: { sessionID: Session.ID },
+        success: HttpApiSchema.NoContent,
+        error: SessionNotFoundError,
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({ identifier: "v2.session.queue.drain.pause", summary: "Pause queue drain" }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.queueDrainResume", "/api/session/:sessionID/queue/drain-resume", {
+        params: { sessionID: Session.ID },
+        success: HttpApiSchema.NoContent,
+        error: SessionNotFoundError,
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({ identifier: "v2.session.queue.drain.resume", summary: "Resume queue drain" }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.get("session.queueGet", "/api/session/:sessionID/queue/:messageID", {
+        params: { sessionID: Session.ID, messageID: SessionMessage.ID },
+        success: Schema.Struct({ data: SessionInput.Queued }),
+        error: [SessionNotFoundError, QueueItemNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(OpenApi.annotations({ identifier: "v2.session.queue.get", summary: "Get queued input" })),
+    )
+    .add(
+      HttpApiEndpoint.patch("session.queueUpdate", "/api/session/:sessionID/queue/:messageID", {
+        params: { sessionID: Session.ID, messageID: SessionMessage.ID },
+        payload: Schema.Struct({ payload: SessionInputPayload.Payload }),
+        success: HttpApiSchema.NoContent,
+        error: [SessionNotFoundError, QueueItemNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(OpenApi.annotations({ identifier: "v2.session.queue.update", summary: "Update queued input" })),
+    )
+    .add(
+      HttpApiEndpoint.delete("session.queueRemove", "/api/session/:sessionID/queue/:messageID", {
+        params: { sessionID: Session.ID, messageID: SessionMessage.ID },
+        success: HttpApiSchema.NoContent,
+        error: [SessionNotFoundError, QueueItemNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(OpenApi.annotations({ identifier: "v2.session.queue.remove", summary: "Remove queued input" })),
+    )
+    .add(
+      HttpApiEndpoint.post("session.queueSend", "/api/session/:sessionID/queue/:messageID/send", {
+        params: { sessionID: Session.ID, messageID: SessionMessage.ID },
+        payload: Schema.Struct({ payload: SessionInputPayload.Payload.pipe(Schema.optional) }),
+        success: Schema.Struct({ data: SessionInput.Admitted }),
+        error: [SessionNotFoundError, QueueItemNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.queue.send",
+            summary: "Send queued input now",
+            description: "Atomically expedite a queued input into steer delivery and wake execution.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.shell", "/api/session/:sessionID/shell", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({ command: Schema.String }),
+        success: HttpApiSchema.NoContent,
+        error: [SessionNotFoundError, ServiceUnavailableError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.shell",
+            summary: "Run a session shell command",
+            description: "Run a shell command at the Session location and record its output in current Session history.",
           }),
         ),
     )

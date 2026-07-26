@@ -14,6 +14,8 @@ import { ProviderV2 } from "../provider"
 import { Reference } from "../reference"
 import type { DeepMutable } from "../schema"
 import { SkillV2 } from "../skill"
+import { Tool } from "../tool/tool"
+import { Tools } from "../tool/tools"
 
 const mutable = <T>(value: T) => value as DeepMutable<T>
 
@@ -25,6 +27,7 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Int
   const integration = yield* Integration.Service
   const reference = yield* Reference.Service
   const skill = yield* SkillV2.Service
+  const tools = yield* Tools.Service
 
   return {
     options: {},
@@ -99,6 +102,9 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Int
     command: {
       reload: commands.reload,
       transform: commands.transform,
+      execute: {
+        before: commands.execute.before,
+      },
     },
     integration: {
       reload: integration.reload,
@@ -214,6 +220,25 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Int
             list: draft.list,
           }),
         ),
+    },
+    tool: {
+      register: (definitions) =>
+        tools
+          .register(
+            Object.fromEntries(
+              Object.entries(definitions).map(([name, definition]) => [
+                name,
+                Tool.make({
+                  description: definition.description,
+                  input: definition.input,
+                  output: definition.output,
+                  execute: definition.execute,
+                  toModelOutput: definition.toModelOutput,
+                }),
+              ]),
+            ),
+          )
+          .pipe(Effect.orDie),
     },
   } satisfies Interface
 })

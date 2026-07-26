@@ -2,6 +2,7 @@ import fs from "fs/promises"
 import path from "path"
 import { fileURLToPath } from "url"
 import { describe, expect, test } from "bun:test"
+import type { Diagnostic } from "vscode-languageserver-types"
 import { Effect, Layer } from "effect"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
@@ -9,6 +10,7 @@ import { FileMutation } from "@opencode-ai/core/file-mutation"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Location } from "@opencode-ai/core/location"
 import { LocationMutation } from "@opencode-ai/core/location-mutation"
+import { LSP } from "@opencode-ai/core/lsp"
 import { PermissionV2 } from "@opencode-ai/core/permission"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
@@ -26,6 +28,7 @@ const writes: string[] = []
 let reads = 0
 let denyAction: string | undefined
 let afterRead = (_target: string, _content: Uint8Array): Effect.Effect<void> => Effect.void
+let lspDiagnostics: Record<string, Diagnostic[]> = {}
 
 const permission = Layer.succeed(
   PermissionV2.Service,
@@ -50,7 +53,17 @@ const reset = () => {
   reads = 0
   denyAction = undefined
   afterRead = () => Effect.void
+  lspDiagnostics = {}
 }
+
+const lsp = Layer.succeed(
+  LSP.Service,
+  LSP.Service.of({
+    ...LSP.inert,
+    touchFile: () => Effect.void,
+    diagnostics: () => Effect.succeed(lspDiagnostics),
+  }),
+)
 
 const filesystem = Layer.effect(
   FSUtil.Service,
@@ -97,6 +110,7 @@ const withTool = <A, E, R>(directory: string, body: (registry: ToolRegistry.Inte
           [FSUtil.node, filesystem],
           [Location.node, activeLocation],
           [PermissionV2.node, permission],
+          [LSP.node, lsp],
           [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
         ],
       ),
@@ -361,6 +375,107 @@ describe("EditTool", () => {
     ),
   )
 
+  it.live("corrects indentation-only drift while preserving the file's indentation", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        const target = path.join(tmp.path, "indent.ts")
+        return Effect.promise(() => fs.writeFile(target, "function run() {\n  return true\n}\n")).pipe(
+          Effect.andThen(
+            withTool(tmp.path, (registry) =>
+              executeTool(
+                registry,
+                call({
+                  path: "indent.ts",
+                  oldString: "function run() {\n    return true\n}",
+                  newString: "function run() {\n    return false\n}",
+                }),
+              ),
+            ),
+          ),
+          Effect.andThen((result) =>
+            Effect.gen(function* () {
+              expect(result.type).toBe("text")
+              expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe(
+                "function run() {\n    return false\n}\n",
+              )
+            }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("reports fresh LSP errors after a successful edit", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        const target = path.join(tmp.path, "diagnostic.ts")
+        lspDiagnostics = {
+          [target]: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } },
+              severity: 1,
+              source: "fixture",
+              message: "invalid edit",
+            },
+          ],
+        }
+        return Effect.promise(() => fs.writeFile(target, "before\n")).pipe(
+          Effect.andThen(
+            withTool(tmp.path, (registry) =>
+              executeTool(registry, call({ path: "diagnostic.ts", oldString: "before", newString: "after" })),
+            ),
+          ),
+          Effect.tap((result) =>
+            Effect.sync(() => {
+              expect(result).toEqual({
+                type: "text",
+                value: expect.stringContaining("LSP errors detected in this file"),
+              })
+            }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("rejects a loose anchor match whose middle is unrelated", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        const target = path.join(tmp.path, "danger.ts")
+        const original = "function reset() {\n  removeAllUserData()\n}\n"
+        return Effect.promise(() => fs.writeFile(target, original)).pipe(
+          Effect.andThen(
+            withTool(tmp.path, (registry) =>
+              executeTool(
+                registry,
+                call({
+                  path: "danger.ts",
+                  oldString: "function reset() {\n  const enabled = true\n}",
+                  newString: "function reset() {\n  const enabled = false\n}",
+                }),
+              ),
+            ),
+          ),
+          Effect.andThen((result) =>
+            Effect.gen(function* () {
+              expect(result.type).toBe("error")
+              expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe(original)
+            }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
   it.live("preserves BOM and CRLF line endings", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
@@ -411,7 +526,7 @@ describe("EditTool", () => {
   )
 })
 
-test("keeps the locked edit schema, semantics docstring, and deferred TODOs visible", async () => {
+test("keeps the locked edit schema, semantics docstring, and remaining TODOs visible", async () => {
   const source = (await fs.readFile(new URL("../src/tool/edit.ts", import.meta.url), "utf8")).replaceAll("\r\n", "\n")
   const definition = await Effect.runPromise(
     withTool(path.dirname(fileURLToPath(import.meta.url)), (registry) => toolDefinitions(registry)),
@@ -423,11 +538,9 @@ test("keeps the locked edit schema, semantics docstring, and deferred TODOs visi
     "absolute external paths retain mutation capability through a separate\n * external_directory approval before edit approval.",
   )
   for (const todo of [
-    "Port V1 fuzzy correction strategies only after exact-edit behavior is established: line-trimmed matching, block-anchor fallback, indentation correction, and similarity-threshold review.",
     "Add formatter integration after V2 formatter runtime exists.",
     "Publish watcher/file-edit events after V2 watcher integration exists.",
     "Add snapshots / undo after design exists.",
-    "Add LSP notification and diagnostics after V2 LSP runtime exists.",
   ]) {
     expect(source).toContain(`TODO: ${todo}`)
   }

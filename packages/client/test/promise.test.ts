@@ -23,6 +23,7 @@ test("exposes every standard HTTP API group", () => {
     "questions",
     "references",
     "projectCopies",
+    "mcp",
   ])
   expect(Object.keys(client.messages)).toEqual(["list"])
   expect(Object.keys(client.integrations)).toEqual([
@@ -122,7 +123,7 @@ test("session methods use the public HTTP contract", async () => {
   })
   const admitted = await client.sessions.prompt({
     sessionID: "ses_test",
-    prompt: { text: "Hello" },
+    payload: promptPayload,
     resume: false,
   })
   await client.sessions.compact({ sessionID: "ses_test" })
@@ -166,7 +167,7 @@ test("session methods use the public HTTP contract", async () => {
   const body = requests.find((request) => request.url.endsWith("/api/session/ses_test/prompt"))?.init?.body
   if (typeof body !== "string") throw new Error("Expected JSON request body")
   expect(JSON.parse(body)).toEqual({
-    prompt: { text: "Hello" },
+    payload: promptPayload,
     resume: false,
   })
 })
@@ -234,6 +235,13 @@ const admission = {
     timeCreated: 1_717_171_717_000,
   },
 }
+
+const promptPayload = {
+  version: 1,
+  agent: "build",
+  model: { providerID: "anthropic", modelID: "claude" },
+  parts: [{ type: "text", text: "Hello" }],
+} as const
 
 const modelSwitchedMessage = {
   id: "msg_model",

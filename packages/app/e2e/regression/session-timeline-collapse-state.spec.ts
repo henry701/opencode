@@ -1,5 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test"
+import { event, type TimelineEvent } from "../performance/timeline-stability/fixture"
 import { mockOpenCodeServer } from "../utils/mock-server"
+import { installSseTransport } from "../utils/sse-transport"
 import { expectAppVisible, expectSessionTitle } from "../utils/waits"
 
 const directory = "C:/OpenCode/TimelineStateRegression"
@@ -12,11 +14,6 @@ const textPartID = "prt_9999_text"
 const title = "Timeline collapse state regression"
 const model = { providerID: "opencode", modelID: "claude-opus-4-6", variant: "max" }
 
-type EventPayload = {
-  directory: string
-  payload: Record<string, unknown>
-}
-
 declare global {
   interface Window {
     __timelineDiffProbe: {
@@ -27,39 +24,32 @@ declare global {
 }
 
 const userMessage = {
-  info: {
-    id: userMessageID,
-    sessionID,
-    role: "user",
-    time: { created: 1700000000000 },
-    summary: { diffs: [] },
+  id: userMessageID,
+  type: "user" as const,
+  text: "Please edit the file.",
+  files: [],
+  agents: [],
+  time: { created: 1700000000000 },
+  payload: {
+    version: 1 as const,
     agent: "build",
     model,
+    parts: [{ id: "prt_user_text", type: "text" as const, text: "Please edit the file." }],
   },
-  parts: [
-    {
-      id: "prt_user_text",
-      sessionID,
-      messageID: userMessageID,
-      type: "text",
-      text: "Please edit the file.",
-    },
-  ],
 }
 
 const editPart = {
   id: editPartID,
-  sessionID,
-  messageID: assistantMessageID,
-  type: "tool",
-  callID: "call_edit_regression",
-  tool: "edit",
+  type: "tool" as const,
+  name: "edit",
+  time: { created: 1700000001000, completed: 1700000002000 },
   state: {
-    status: "completed",
+    status: "completed" as const,
     input: { filePath: "src/regression.ts" },
-    output: "Edited src/regression.ts",
-    title: "src/regression.ts",
-    metadata: {
+    content: [{ type: "text" as const, text: "Edited src/regression.ts" }],
+    result: "Edited src/regression.ts",
+    structured: {
+      title: "src/regression.ts",
       filediff: {
         file: "src/regression.ts",
         additions: 1,
@@ -75,38 +65,28 @@ const editPart = {
 
 const streamedTextPart = {
   id: textPartID,
-  sessionID,
-  messageID: assistantMessageID,
-  type: "text",
+  type: "text" as const,
   text: "Streaming added a later assistant text part.",
 }
 
 const assistantMessage = {
-  info: {
-    id: assistantMessageID,
-    sessionID,
-    role: "assistant",
-    time: { created: 1700000001000 },
-    parentID: userMessageID,
-    modelID: model.modelID,
-    providerID: model.providerID,
-    mode: "build",
-    agent: "build",
-    path: { cwd: directory, root: directory },
-    cost: 0.01,
-    tokens: { input: 100, output: 200, reasoning: 0, cache: { read: 0, write: 0 } },
-    variant: "max",
-  },
-  parts: [editPart],
+  id: assistantMessageID,
+  type: "assistant" as const,
+  time: { created: 1700000001000 },
+  model: { providerID: model.providerID, id: model.modelID, variant: model.variant },
+  agent: "build",
+  cost: 0.01,
+  tokens: { input: 100, output: 200, reasoning: 0, cache: { read: 0, write: 0 } },
+  content: [editPart],
 }
 
 test.describe("regression: session timeline local row state", () => {
   test("keeps a manually collapsed tool collapsed when later assistant content streams", async ({ page }) => {
-    const events: EventPayload[] = []
-    await mockServer(page, events)
+    const transport = await mockServer(page)
     await configurePage(page)
 
     await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
+    await transport.waitForConnection()
     await expectSessionTitle(page, title)
 
     const wrapper = page.locator(`[data-timeline-part-id="${editPartID}"]`).first()
@@ -119,13 +99,21 @@ test.describe("regression: session timeline local row state", () => {
     await wrapper.locator('[data-slot="collapsible-trigger"]').first().click()
     await expectExpanded(wrapper, false)
 
-    events.push({
-      directory,
-      payload: {
-        type: "message.part.updated",
-        properties: { part: streamedTextPart },
-      },
-    })
+    await transport.burst([
+      event("session.next.text.started", {
+        timestamp: 1700000003000,
+        sessionID,
+        assistantMessageID,
+        textID: streamedTextPart.id,
+      }),
+      event("session.next.text.ended", {
+        timestamp: 1700000003001,
+        sessionID,
+        assistantMessageID,
+        textID: streamedTextPart.id,
+        text: streamedTextPart.text,
+      }),
+    ])
 
     await expect(page.locator(`[data-timeline-part-id="${textPartID}"]`).first()).toBeVisible({ timeout: 10_000 })
 
@@ -137,12 +125,12 @@ test.describe("regression: session timeline local row state", () => {
   })
 
   test("does not remount an edit diff when sibling parts or diff counts update", async ({ page }) => {
-    const events: EventPayload[] = []
+    const transport = await mockServer(page)
     await installDiffProbe(page)
-    await mockServer(page, events)
     await configurePage(page)
 
     await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
+    await transport.waitForConnection()
     await expectSessionTitle(page, title)
 
     const wrapper = page.locator(`[data-timeline-part-id="${editPartID}"]`).first()
@@ -151,33 +139,47 @@ test.describe("regression: session timeline local row state", () => {
     await expectAppVisible(file)
     await markDiffProbe(page)
 
-    events.push({
-      directory,
-      payload: {
-        type: "message.part.updated",
-        properties: { part: streamedTextPart },
-      },
-    })
+    await transport.burst([
+      event("session.next.text.started", {
+        timestamp: 1700000003000,
+        sessionID,
+        assistantMessageID,
+        textID: streamedTextPart.id,
+      }),
+      event("session.next.text.ended", {
+        timestamp: 1700000003001,
+        sessionID,
+        assistantMessageID,
+        textID: streamedTextPart.id,
+        text: streamedTextPart.text,
+      }),
+    ])
 
     await expect(page.locator(`[data-timeline-part-id="${textPartID}"]`).first()).toBeVisible({ timeout: 10_000 })
     const siblingProbe = await readDiffProbe(page)
     expect(siblingProbe).toEqual({
       fileMarker: "before",
       frameMarker: "before",
-      rowKey: `assistant-part:${userMessageID}:part:${assistantMessageID}:${editPartID}`,
+      rowKey: `assistant-part:${userMessageID}:current:${assistantMessageID}:${editPartID}`,
       rowMarker: "before",
       shadowRoots: 0,
       toolMarker: "before",
     })
 
     await markDiffProbe(page)
-    events.push({
-      directory,
-      payload: {
-        type: "message.part.updated",
-        properties: { part: editPartWithAdditions(2) },
-      },
-    })
+    const updated = editPartWithAdditions(2)
+    await transport.send(
+      event("session.next.tool.success", {
+        timestamp: 1700000004000,
+        sessionID,
+        assistantMessageID,
+        callID: updated.id,
+        structured: updated.state.structured,
+        content: updated.state.content,
+        result: updated.state.result,
+        provider: { executed: true },
+      }),
+    )
 
     await expect(wrapper.locator('[data-slot="diff-changes-additions"]').filter({ hasText: "+2" }).first()).toBeVisible(
       { timeout: 10_000 },
@@ -185,7 +187,7 @@ test.describe("regression: session timeline local row state", () => {
     expect(await readDiffProbe(page)).toEqual({
       fileMarker: "before",
       frameMarker: "before",
-      rowKey: `assistant-part:${userMessageID}:part:${assistantMessageID}:${editPartID}`,
+      rowKey: `assistant-part:${userMessageID}:current:${assistantMessageID}:${editPartID}`,
       rowMarker: "before",
       shadowRoots: 0,
       toolMarker: "before",
@@ -193,7 +195,6 @@ test.describe("regression: session timeline local row state", () => {
   })
 
   test("keeps a sticky edit header aligned with a multi-hunk diff", async ({ page }) => {
-    const events: EventPayload[] = []
     const lines = Array.from({ length: 1_000 }, (_, index) => `export const value${index} = ${index}\n`).join("")
     const after = [100, 300, 500, 700, 900].reduce(
       (result, index) =>
@@ -204,8 +205,8 @@ test.describe("regression: session timeline local row state", () => {
       ...editPart,
       state: {
         ...editPart.state,
-        metadata: {
-          ...editPart.state.metadata,
+        structured: {
+          ...editPart.state.structured,
           filediff: {
             file: "src/regression.ts",
             additions: 1,
@@ -216,10 +217,11 @@ test.describe("regression: session timeline local row state", () => {
         },
       },
     }
-    await mockServer(page, events, [userMessage, { ...assistantMessage, parts: [part] }])
+    const transport = await mockServer(page, [userMessage, { ...assistantMessage, content: [part] }])
     await configurePage(page)
 
     await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
+    await transport.waitForConnection()
     await expectSessionTitle(page, title)
 
     const wrapper = page.locator(`[data-timeline-part-id="${editPartID}"]`).first()
@@ -360,10 +362,10 @@ function editPartWithAdditions(additions: number) {
     ...editPart,
     state: {
       ...editPart.state,
-      metadata: {
-        ...editPart.state.metadata,
+      structured: {
+        ...editPart.state.structured,
         filediff: {
-          ...editPart.state.metadata.filediff,
+          ...editPart.state.structured.filediff,
           additions,
         },
       },
@@ -385,16 +387,20 @@ function readExpanded(element: Element) {
   return !!content && content.getBoundingClientRect().height > 0
 }
 
-async function mockServer(page: Page, events: EventPayload[], messages = [userMessage, assistantMessage]) {
+async function mockServer(page: Page, messages = [userMessage, assistantMessage]) {
+  const transport = await installSseTransport<TimelineEvent>(page, {
+    server: `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`,
+    path: `/api/session/${sessionID}/event`,
+    retry: 16,
+  })
   await mockOpenCodeServer(page, {
     directory,
     project: project(),
     provider: provider(),
     sessions: [session()],
-    pageMessages: () => ({ items: messages }),
-    events: () => events.splice(0, 1),
-    eventRetry: 16,
+    currentPageMessages: () => ({ items: messages.toReversed(), throughSeq: 0 }),
   })
+  return transport
 }
 
 function project() {

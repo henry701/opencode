@@ -16,7 +16,6 @@
 import type { TextareaRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { For, Show, createEffect, createMemo, createSignal } from "solid-js"
-import type { QuestionRequest } from "@opencode-ai/sdk/v2"
 import {
   createQuestionBodyState,
   questionConfirm,
@@ -42,7 +41,7 @@ import {
 } from "./question.shared"
 import { footerWidthPolicy } from "./footer.width"
 import type { RunFooterTheme } from "./theme"
-import type { QuestionReject, QuestionReply } from "./types"
+import type { QuestionReject, QuestionReply, QuestionRequest } from "./types"
 
 export function RunQuestionBody(props: {
   request: QuestionRequest
@@ -51,7 +50,7 @@ export function RunQuestionBody(props: {
   onReject: (input: QuestionReject) => void | Promise<void>
 }) {
   const dims = useTerminalDimensions()
-  const [state, setState] = createSignal(createQuestionBodyState(props.request.id))
+  const [state, setState] = createSignal(createQuestionBodyState(props.request))
   const single = createMemo(() => questionSingle(props.request))
   const confirm = createMemo(() => questionConfirm(props.request, state()))
   const info = createMemo(() => questionInfo(props.request, state()))
@@ -78,7 +77,7 @@ export function RunQuestionBody(props: {
   let area: TextareaRenderable | undefined
 
   createEffect(() => {
-    setState((prev) => questionSync(prev, props.request.id))
+    setState((prev) => questionSync(prev, props.request))
   })
 
   const setTab = (tab: number) => {

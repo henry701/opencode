@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test"
-import type { QuestionRequest } from "@opencode-ai/sdk/v2"
 import {
   createQuestionBodyState,
   questionConfirm,
@@ -11,6 +10,7 @@ import {
   questionSubmit,
   questionSync,
 } from "@/cli/cmd/run/question.shared"
+import type { QuestionRequest } from "@/cli/cmd/run/types"
 
 function req(input: Partial<QuestionRequest> = {}): QuestionRequest {
   return {
@@ -30,9 +30,10 @@ function req(input: Partial<QuestionRequest> = {}): QuestionRequest {
 
 describe("run question shared", () => {
   test("replies immediately for a single-select question", () => {
-    const out = questionSelect(createQuestionBodyState("question-1"), req())
+    const out = questionSelect(createQuestionBodyState(req()), req())
 
     expect(out.reply).toEqual({
+      sessionID: "session-1",
       requestID: "question-1",
       answers: [["chunked"]],
     })
@@ -59,13 +60,14 @@ describe("run question shared", () => {
       ],
     })
 
-    let state = questionSelect(createQuestionBodyState("question-1"), ask).state
+    let state = questionSelect(createQuestionBodyState(ask), ask).state
     expect(state.tab).toBe(1)
 
     state = questionSetSelected(state, 1)
     state = questionSelect(state, ask).state
     expect(questionConfirm(ask, state)).toBe(true)
     expect(questionSubmit(ask, state)).toEqual({
+      sessionID: "session-1",
       requestID: "question-1",
       answers: [["chunked"], ["no"]],
     })
@@ -83,7 +85,7 @@ describe("run question shared", () => {
       ],
     })
 
-    let state = questionSelect(createQuestionBodyState("question-1"), ask).state
+    let state = questionSelect(createQuestionBodyState(ask), ask).state
     expect(state.answers).toEqual([["bug"]])
 
     state = questionSelect(state, ask).state
@@ -91,24 +93,26 @@ describe("run question shared", () => {
   })
 
   test("stores and submits custom answers", () => {
-    let state = questionSetSelected(createQuestionBodyState("question-1"), 1)
+    let state = questionSetSelected(createQuestionBodyState(req()), 1)
     let next = questionSelect(state, req())
     expect(next.state.editing).toBe(true)
 
     state = questionStoreCustom(next.state, 0, "  custom mode  ")
     next = questionSave(state, req())
     expect(next.reply).toEqual({
+      sessionID: "session-1",
       requestID: "question-1",
       answers: [["custom mode"]],
     })
   })
 
   test("resets state when the request id changes and builds reject payloads", () => {
-    const state = questionSetSelected(createQuestionBodyState("question-1"), 1)
+    const state = questionSetSelected(createQuestionBodyState(req()), 1)
 
-    expect(questionSync(state, "question-1")).toBe(state)
-    expect(questionSync(state, "question-2")).toEqual(createQuestionBodyState("question-2"))
+    expect(questionSync(state, req())).toBe(state)
+    expect(questionSync(state, req({ id: "question-2" }))).toEqual(createQuestionBodyState(req({ id: "question-2" })))
     expect(questionReject(req())).toEqual({
+      sessionID: "session-1",
       requestID: "question-1",
     })
   })

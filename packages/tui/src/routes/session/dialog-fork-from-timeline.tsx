@@ -1,16 +1,14 @@
 import { createMemo, onMount } from "solid-js"
-import { useSync } from "../../context/sync"
+import { useData } from "../../context/data"
 import { DialogSelect, type DialogSelectOption } from "../../ui/dialog-select"
-import type { TextPart } from "@opencode-ai/sdk/v2"
 import { Locale } from "../../util/locale"
 import { useSDK } from "../../context/sdk"
 import { useRoute } from "../../context/route"
 import { useDialog, type DialogContext } from "../../ui/dialog"
-import type { PromptInfo } from "../../component/prompt/history"
-import { stripPromptPartIDs as strip } from "../../prompt/part"
+import { currentPrompt } from "./current-prompt"
 
 export function DialogForkFromTimeline(props: { sessionID: string; onMove: (messageID?: string) => void }) {
-  const sync = useSync()
+  const data = useData()
   const dialog = useDialog()
   const sdk = useSDK()
   const route = useRoute()
@@ -20,14 +18,14 @@ export function DialogForkFromTimeline(props: { sessionID: string; onMove: (mess
   })
 
   const options = createMemo((): DialogSelectOption<string | undefined>[] => {
-    const messages = sync.data.message[props.sessionID] ?? []
+    const messages = data.session.message.list(props.sessionID) ?? []
     const fullSession = {
       title: "Full session",
       value: undefined,
       onSelect: async (dialog: DialogContext) => {
-        const forked = await sdk.client.session.fork({ sessionID: props.sessionID })
+        const forked = await sdk.next.sessions.fork({ sessionID: props.sessionID })
         route.navigate({
-          sessionID: forked.data!.id,
+          sessionID: forked.id,
           type: "session",
         })
         dialog.clear()
@@ -35,33 +33,20 @@ export function DialogForkFromTimeline(props: { sessionID: string; onMove: (mess
     } satisfies DialogSelectOption<string | undefined>
     const result = [] as DialogSelectOption<string | undefined>[]
     for (const message of messages) {
-      if (message.role !== "user") continue
-      const part = (sync.data.part[message.id] ?? []).find(
-        (x) => x.type === "text" && !x.synthetic && !x.ignored,
-      ) as TextPart
-      if (!part) continue
+      if (message.type !== "user") continue
+      const prompt = currentPrompt(message)
+      if (!prompt.input) continue
       result.push({
-        title: part.text.replace(/\n/g, " "),
+        title: prompt.input.replace(/\n/g, " "),
         value: message.id,
         footer: Locale.time(message.time.created),
         onSelect: async (dialog) => {
-          const forked = await sdk.client.session.fork({
+          const forked = await sdk.next.sessions.fork({
             sessionID: props.sessionID,
             messageID: message.id,
           })
-          const parts = sync.data.part[message.id] ?? []
-          const prompt = parts.reduce(
-            (agg, part) => {
-              if (part.type === "text") {
-                if (!part.synthetic) agg.input += part.text
-              }
-              if (part.type === "file") agg.parts.push(strip(part))
-              return agg
-            },
-            { input: "", parts: [] as PromptInfo["parts"] },
-          )
           route.navigate({
-            sessionID: forked.data!.id,
+            sessionID: forked.id,
             type: "session",
             prompt,
           })

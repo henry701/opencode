@@ -407,6 +407,14 @@ test("renders admitted prompts only after they become model-visible", async () =
         messageID: "msg_user_1",
         timestamp: 0,
         prompt: { text: "hello" },
+        payload: {
+          version: 1,
+          agent: "review",
+          model: { providerID: "openai", modelID: "gpt-5", variant: "high" },
+          system: "queued system",
+          tools: { bash: false },
+          parts: [{ id: "part_user_1", type: "text", text: "hello" }],
+        },
         delivery: "steer",
       },
     })
@@ -420,6 +428,14 @@ test("renders admitted prompts only after they become model-visible", async () =
         messageID: "msg_user_1",
         timestamp: 0,
         prompt: { text: "hello" },
+        payload: {
+          version: 1,
+          agent: "review",
+          model: { providerID: "openai", modelID: "gpt-5", variant: "high" },
+          system: "queued system",
+          tools: { bash: false },
+          parts: [{ id: "part_user_1", type: "text", text: "hello" }],
+        },
         delivery: "steer",
       },
     })
@@ -428,7 +444,17 @@ test("renders admitted prompts only after they become model-visible", async () =
     const message = sync.session.message.list("session-1")?.[0]
     expect(message?.type).toBe("user")
     if (message?.type !== "user") return
-    expect(message).toMatchObject({ id: "msg_user_1", text: "hello" })
+    expect(JSON.parse(JSON.stringify(message))).toMatchObject({
+      id: "msg_user_1",
+      text: "hello",
+      payload: {
+        agent: "review",
+        model: { providerID: "openai", modelID: "gpt-5", variant: "high" },
+        system: "queued system",
+        tools: { bash: false },
+        parts: [{ id: "part_user_1", type: "text", text: "hello" }],
+      },
+    })
   } finally {
     app.renderer.destroy()
   }
@@ -480,6 +506,69 @@ test("projects live context updates with their message ID", async () => {
       type: "system",
       text: "Updated context",
     })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("message hydration does not overwrite native events received while the request is in flight", async () => {
+  const events = createEventSource()
+  let resolveMessages!: (response: Response) => void
+  let requested!: () => void
+  const started = new Promise<void>((resolve) => {
+    requested = resolve
+  })
+  const calls = createFetch((url) => {
+    if (url.pathname !== "/api/session/session-race/message") return
+    requested()
+    return new Promise<Response>((resolve) => {
+      resolveMessages = resolve
+    })
+  }, events)
+  let data!: ReturnType<typeof useData>
+  let ready!: () => void
+  const mounted = new Promise<void>((resolve) => {
+    ready = resolve
+  })
+
+  function Probe() {
+    data = useData()
+    onMount(ready)
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </SDKProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await mounted
+    const refresh = data.session.message.refresh("session-race")
+    await started
+    emitEvent(events, {
+      id: "evt_prompted_race",
+      type: "session.next.prompted",
+      properties: {
+        sessionID: "session-race",
+        messageID: "msg_live",
+        timestamp: 2,
+        prompt: { text: "live" },
+        delivery: "steer",
+      },
+    })
+    await wait(() => data.session.message.list("session-race")?.some((message) => message.id === "msg_live") === true)
+    resolveMessages(json({ data: [], cursor: {} }))
+    await refresh
+
+    expect(data.session.message.list("session-race")?.map((message) => message.id)).toEqual(["msg_live"])
   } finally {
     app.renderer.destroy()
   }

@@ -123,6 +123,9 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
         )
       },
       "session.next.moved": () => Effect.void,
+      "session.next.updated": () => Effect.void,
+      "session.next.message.imported": () => Effect.void,
+      "session.next.command.executed": () => Effect.void,
       "session.next.prompted": (event) => {
         return adapter.appendMessage(
           SessionMessage.User.make({
@@ -132,11 +135,15 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
             text: event.data.prompt.text,
             files: event.data.prompt.files,
             agents: event.data.prompt.agents,
+            payload: event.data.payload,
             time: { created: event.data.timestamp },
           }),
         )
       },
       "session.next.prompt.admitted": () => Effect.void,
+      "session.next.prompt.revised": () => Effect.void,
+      "session.next.prompt.discarded": () => Effect.void,
+      "session.next.prompt.expedited": () => Effect.void,
       "session.next.context.updated": (event) =>
         adapter.appendMessage(
           SessionMessage.System.make({
@@ -199,6 +206,8 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
               type: "assistant",
               agent: event.data.agent,
               model: event.data.model,
+              systemPrompt: event.data.systemPrompt,
+              toolDefinitions: event.data.toolDefinitions,
               time: { created: event.data.timestamp },
               content: [],
               snapshot: event.data.snapshot ? { start: event.data.snapshot } : undefined,
@@ -212,11 +221,12 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
           draft.finish = event.data.finish
           draft.cost = event.data.cost
           draft.tokens = event.data.tokens
-          if (event.data.snapshot || event.data.files)
+          if (event.data.snapshot || event.data.files || event.data.diffs)
             draft.snapshot = {
               ...draft.snapshot,
               end: event.data.snapshot,
               files: event.data.files ? Array.from(event.data.files) : undefined,
+              diffs: event.data.diffs ? Array.from(event.data.diffs) : undefined,
             }
         })
       },
@@ -297,24 +307,36 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       "session.next.tool.success": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
           const match = latestTool(draft, event.data.callID)
-          if (match && match.state.status === "running") {
+          if (!match) return
+          if (match.state.status === "completed") {
             match.provider = {
               executed: event.data.provider.executed || match.provider?.executed === true,
               metadata: match.provider?.metadata,
               resultMetadata: event.data.provider.metadata,
             }
-            match.time.completed = event.data.timestamp
-            match.state = castDraft(
-              SessionMessage.ToolStateCompleted.make({
-                status: "completed",
-                input: match.state.input,
-                structured: event.data.structured,
-                content: [...event.data.content],
-                outputPaths: event.data.outputPaths ? [...event.data.outputPaths] : [],
-                result: event.data.result,
-              }),
-            )
+            match.state.structured = event.data.structured
+            match.state.content = [...event.data.content]
+            match.state.outputPaths = event.data.outputPaths ? [...event.data.outputPaths] : []
+            match.state.result = event.data.result
+            return
           }
+          if (match.state.status !== "running") return
+          match.provider = {
+            executed: event.data.provider.executed || match.provider?.executed === true,
+            metadata: match.provider?.metadata,
+            resultMetadata: event.data.provider.metadata,
+          }
+          match.time.completed = event.data.timestamp
+          match.state = castDraft(
+            SessionMessage.ToolStateCompleted.make({
+              status: "completed",
+              input: match.state.input,
+              structured: event.data.structured,
+              content: [...event.data.content],
+              outputPaths: event.data.outputPaths ? [...event.data.outputPaths] : [],
+              result: event.data.result,
+            }),
+          )
         })
       },
       "session.next.tool.failed": (event) => {

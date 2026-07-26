@@ -136,10 +136,10 @@ export function createAutoScroll(options: AutoScrollOptions) {
 
     if (layoutScrollFrame) return
 
-    if (!canScroll(el)) {
-      if (store.userScrolled) setStore("userScrolled", false)
-      return
-    }
+    // Transient virtualizer remounts can report no overflow for a frame.
+    // Clearing userScrolled here lets settling auto-follow yank the viewport
+    // back to the bottom after the user intentionally scrolled away.
+    if (!canScroll(el)) return
 
     if (distanceFromBottom(el) < threshold()) {
       if (store.userScrolled) setStore("userScrolled", false)
@@ -185,10 +185,10 @@ export function createAutoScroll(options: AutoScrollOptions) {
       markLayoutScroll()
       const el = store.scrollRef
       if (el) markLayoutScroll()
-      if (el && !canScroll(el)) {
-        if (store.userScrolled) setStore("userScrolled", false)
-        return
-      }
+      // Transient virtualizer remounts can report no overflow for a frame.
+      // Clearing userScrolled here lets settling auto-follow yank the viewport
+      // after the user intentionally scrolled away (e.g. model-switch relayout).
+      if (el && !canScroll(el)) return
       if (!active()) return
       if (store.userScrolled) return
       const scrollEl = store.scrollRef

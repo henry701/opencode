@@ -31,6 +31,11 @@ export interface RouteBody<Body> {
   readonly schema: Schema.Codec<Body, unknown>
   /** Build the provider-native body from a common `LLMRequest`. */
   readonly from: (request: LLMRequest) => Effect.Effect<Body, LLMError>
+  /** Extract the exact model-visible system and tool definitions from the validated provider body. */
+  readonly context: (body: Body) => {
+    readonly systemPrompt?: string
+    readonly toolDefinitions?: string
+  }
 }
 
 export interface Route<Body, Prepared = unknown> {
@@ -155,7 +160,11 @@ export interface Interface {
 }
 
 export interface StreamMethod {
-  (request: LLMRequest): Stream.Stream<LLMEvent, LLMError>
+  (request: LLMRequest, options?: StreamOptions): Stream.Stream<LLMEvent, LLMError>
+}
+
+export interface StreamOptions {
+  readonly onPrepared?: (request: PreparedRequest) => Effect.Effect<void>
 }
 
 export interface GenerateMethod {
@@ -349,32 +358,36 @@ const compile = Effect.fn("LLM.compile")(function* (request: LLMRequest) {
     .from(resolved)
     .pipe(Effect.flatMap(ProviderShared.validateWith(Schema.decodeUnknownEffect(route.body.schema))))
   const prepared = yield* route.prepareTransport(body, resolved)
+  const description = new PreparedRequest({
+    id: resolved.id ?? "request",
+    route: route.id,
+    protocol: route.protocol,
+    model: resolved.model,
+    body,
+    metadata: {
+      transport: route.transport.id,
+      ...route.body.context(body),
+    },
+  })
 
   return {
     request: resolved,
     route,
     body,
     prepared,
+    description,
   }
 })
 
 const prepareWith = Effect.fn("LLMClient.prepare")(function* (request: LLMRequest) {
-  const compiled = yield* compile(request)
-
-  return new PreparedRequest({
-    id: compiled.request.id ?? "request",
-    route: compiled.route.id,
-    protocol: compiled.route.protocol,
-    model: compiled.request.model,
-    body: compiled.body,
-    metadata: { transport: compiled.route.transport.id },
-  })
+  return (yield* compile(request)).description
 })
 
-const streamRequestWith = (runtime: TransportRuntime) => (request: LLMRequest) =>
+const streamRequestWith = (runtime: TransportRuntime) => (request: LLMRequest, options?: StreamOptions) =>
   Stream.unwrap(
     Effect.gen(function* () {
       const compiled = yield* compile(request)
+      if (options?.onPrepared) yield* options.onPrepared(compiled.description)
       return compiled.route.streamPrepared(compiled.prepared, compiled.request, runtime)
     }),
   )
@@ -393,10 +406,10 @@ const generateWith = (stream: Interface["stream"]) =>
 export const prepare = <Body = unknown>(request: LLMRequest) =>
   prepareWith(request) as Effect.Effect<PreparedRequestOf<Body>, LLMError>
 
-export function stream(request: LLMRequest): Stream.Stream<LLMEvent, LLMError> {
+export function stream(request: LLMRequest, options?: StreamOptions): Stream.Stream<LLMEvent, LLMError> {
   return Stream.unwrap(
     Effect.gen(function* () {
-      return (yield* Service).stream(request)
+      return (yield* Service).stream(request, options)
     }),
   ) as Stream.Stream<LLMEvent, LLMError>
 }
@@ -407,10 +420,10 @@ export function generate(request: LLMRequest): Effect.Effect<LLMResponse, LLMErr
   }) as Effect.Effect<LLMResponse, LLMError>
 }
 
-export const streamRequest = (request: LLMRequest) =>
+export const streamRequest = (request: LLMRequest, options?: StreamOptions) =>
   Stream.unwrap(
     Effect.gen(function* () {
-      return (yield* Service).stream(request)
+      return (yield* Service).stream(request, options)
     }),
   )
 

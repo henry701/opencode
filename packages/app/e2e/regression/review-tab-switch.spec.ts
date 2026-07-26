@@ -97,7 +97,7 @@ async function setup(page: Page) {
     },
     sessions: [session(sessionA, titleA, 1700000000000), session(sessionB, titleB, 1700000001000)],
     vcsDiff: diffs,
-    pageMessages: () => ({ items: [] }),
+    currentPageMessages: () => ({ items: [], throughSeq: 0 }),
   })
 
   await page.addInitScript(

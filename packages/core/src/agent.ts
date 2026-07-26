@@ -1,7 +1,7 @@
 export * as AgentV2 from "./agent"
 
 import { makeLocationNode } from "./effect/app-node"
-import { Array, Context, Effect, Layer, Types } from "effect"
+import { Array, Context, Effect, Layer, Schema, Types } from "effect"
 import { Agent } from "@opencode-ai/schema/agent"
 import { State } from "./state"
 
@@ -13,6 +13,11 @@ export const Color = Agent.Color
 
 export const Info = Agent.Info
 export type Info = Agent.Info
+
+export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Agent.NotFoundError", {
+  agent: Schema.String,
+  available: Schema.Array(Schema.String),
+}) {}
 
 export interface Selection {
   readonly id: ID

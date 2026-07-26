@@ -1,4 +1,4 @@
-import type { AssistantMessage, Part, Provider, UserMessage } from "@opencode-ai/sdk/v2"
+import type { AssistantMessage, Part, Provider, SessionMessage, UserMessage } from "@opencode-ai/sdk/v2"
 import { Locale } from "./locale"
 import * as Model from "./model"
 
@@ -41,6 +41,49 @@ export function formatTranscript(
   }
 
   return transcript
+}
+
+export function formatCurrentTranscript(
+  session: SessionInfo,
+  messages: readonly SessionMessage[],
+  options: TranscriptOptions,
+) {
+  const providers = Model.index(options.providers)
+  const body = messages
+    .flatMap((message) => {
+      if (message.type === "user") {
+        const text = message.payload?.parts
+          .flatMap((part) => (part.type === "text" && !part.synthetic ? [part.text] : []))
+          .join("\n\n")
+        return [`## User\n\n${text || message.text}\n\n---\n\n`]
+      }
+      if (message.type !== "assistant") return []
+      const duration = message.time.completed
+        ? ((Number(message.time.completed) - Number(message.time.created)) / 1000).toFixed(1) + "s"
+        : ""
+      const header = options.assistantMetadata
+        ? `## Assistant (${Locale.titlecase(message.agent)} · ${Model.name(providers, message.model.providerID, message.model.id)}${duration ? ` · ${duration}` : ""})\n\n`
+        : "## Assistant\n\n"
+      const content = message.content
+        .map((part) => {
+          if (part.type === "text") return `${part.text}\n\n`
+          if (part.type === "reasoning") return options.thinking ? `_Thinking:_\n\n${part.text}\n\n` : ""
+          let result = `**Tool: ${part.name}**\n`
+          if (options.toolDetails && part.state.status !== "pending")
+            result += `\n**Input:**\n\`\`\`json\n${JSON.stringify(part.state.input, null, 2)}\n\`\`\`\n`
+          if (options.toolDetails && part.state.status === "completed") {
+            const output = part.state.content.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n")
+            if (output) result += `\n**Output:**\n\`\`\`\n${output}\n\`\`\`\n`
+          }
+          if (options.toolDetails && part.state.status === "error")
+            result += `\n**Error:**\n\`\`\`\n${part.state.error.message}\n\`\`\`\n`
+          return result + "\n"
+        })
+        .join("")
+      return [header + content + "---\n\n"]
+    })
+    .join("")
+  return `# ${session.title}\n\n**Session ID:** ${session.id}\n**Created:** ${new Date(session.time.created).toLocaleString()}\n**Updated:** ${new Date(session.time.updated).toLocaleString()}\n\n---\n\n${body}`
 }
 
 export function formatMessage(

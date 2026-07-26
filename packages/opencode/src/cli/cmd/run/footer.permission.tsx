@@ -14,7 +14,6 @@
 import type { TextareaRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal } from "solid-js"
-import type { PermissionRequest } from "@opencode-ai/sdk/v2"
 import {
   createPermissionBodyState,
   permissionAlwaysLines,
@@ -32,7 +31,7 @@ import {
 import { footerWidthPolicy } from "./footer.width"
 import { toolFiletype } from "./tool"
 import { transparent, type RunBlockTheme, type RunFooterTheme } from "./theme"
-import type { PermissionReply, RunDiffStyle } from "./types"
+import type { PermissionReply, PermissionRequest, RunDiffStyle } from "./types"
 
 function buttons(
   list: PermissionOption[],
@@ -137,7 +136,7 @@ export function RunPermissionBody(props: {
   onReply: (input: PermissionReply) => void | Promise<void>
 }) {
   const dims = useTerminalDimensions()
-  const [state, setState] = createSignal(createPermissionBodyState(props.request.id))
+  const [state, setState] = createSignal(createPermissionBodyState(props.request))
   const info = createMemo(() => permissionInfo(props.request))
   const ft = createMemo(() => toolFiletype(info().file))
   const narrow = createMemo(() => footerWidthPolicy(dims().width).dialog.narrow)
@@ -156,12 +155,12 @@ export function RunPermissionBody(props: {
   })
 
   createEffect(() => {
-    const id = props.request.id
-    if (state().requestID === id) {
+    const request = props.request
+    if (state().requestID === request.id && state().sessionID === request.sessionID) {
       return
     }
 
-    setState(createPermissionBodyState(id))
+    setState(createPermissionBodyState(request))
   })
 
   const shift = (dir: -1 | 1) => {
@@ -186,7 +185,7 @@ export function RunPermissionBody(props: {
 
   const run = (option: PermissionOption) => {
     const cur = state()
-    const next = permissionRun(cur, props.request.id, option)
+    const next = permissionRun(cur, option)
     if (next.state !== cur) {
       setState(next.state)
     }
@@ -199,7 +198,7 @@ export function RunPermissionBody(props: {
   }
 
   const reject = () => {
-    const next = permissionReject(state(), props.request.id)
+    const next = permissionReject(state())
     if (!next) {
       return
     }

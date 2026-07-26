@@ -19,12 +19,18 @@ export type Event =
   | EventSessionNextAgentSwitched
   | EventSessionNextModelSwitched
   | EventSessionNextMoved
+  | EventSessionNextUpdated
+  | EventSessionNextMessageImported
   | EventSessionNextPrompted
   | EventSessionNextPromptAdmitted
+  | EventSessionNextPromptRevised
+  | EventSessionNextPromptDiscarded
+  | EventSessionNextPromptExpedited
   | EventSessionNextContextUpdated
   | EventSessionNextSynthetic
   | EventSessionNextShellStarted
   | EventSessionNextShellEnded
+  | EventSessionNextCommandExecuted
   | EventSessionNextStepStarted
   | EventSessionNextStepEnded
   | EventSessionNextStepFailed
@@ -642,6 +648,23 @@ export type Part =
   | RetryPart
   | CompactionPart
 
+export type SessionInputPayload = {
+  version: 1
+  agent: string
+  model: {
+    providerID: string
+    modelID: string
+    variant?: string
+  }
+  tools?: {
+    [key: string]: boolean
+  }
+  system?: string
+  format?: SessionInputPayloadFormat
+  parts: Array<SessionInputPayloadPart>
+  permissions?: Array<SessionInputPayloadPermission>
+}
+
 export type Prompt = {
   text: string
   files?: Array<PromptFileAttachment>
@@ -854,12 +877,32 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "session.next.updated"
+        properties: {
+          timestamp: number
+          sessionID: string
+          title?: string
+        }
+      }
+    | {
+        id: string
+        type: "session.next.message.imported"
+        properties: {
+          timestamp: number
+          sessionID: string
+          sourceSessionID: string
+          message: SessionMessage
+        }
+      }
+    | {
+        id: string
         type: "session.next.prompted"
         properties: {
           timestamp: number
           sessionID: string
           messageID: string
           prompt: Prompt
+          payload?: SessionInputPayload
           delivery: "steer" | "queue"
         }
       }
@@ -871,7 +914,39 @@ export type GlobalEvent = {
           sessionID: string
           messageID: string
           prompt: Prompt
+          payload?: SessionInputPayload
           delivery: "steer" | "queue"
+        }
+      }
+    | {
+        id: string
+        type: "session.next.prompt.revised"
+        properties: {
+          timestamp: number
+          sessionID: string
+          messageID: string
+          prompt: Prompt
+          payload: SessionInputPayload
+        }
+      }
+    | {
+        id: string
+        type: "session.next.prompt.discarded"
+        properties: {
+          timestamp: number
+          sessionID: string
+          messageID: string
+        }
+      }
+    | {
+        id: string
+        type: "session.next.prompt.expedited"
+        properties: {
+          timestamp: number
+          sessionID: string
+          messageID: string
+          prompt: Prompt
+          payload: SessionInputPayload
         }
       }
     | {
@@ -917,6 +992,17 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "session.next.command.executed"
+        properties: {
+          timestamp: number
+          sessionID: string
+          messageID: string
+          name: string
+          arguments: string
+        }
+      }
+    | {
+        id: string
         type: "session.next.step.started"
         properties: {
           timestamp: number
@@ -924,6 +1010,8 @@ export type GlobalEvent = {
           assistantMessageID: string
           agent: string
           model: ModelRef
+          systemPrompt?: string
+          toolDefinitions?: string
           snapshot?: string
         }
       }
@@ -947,6 +1035,7 @@ export type GlobalEvent = {
           }
           snapshot?: string
           files?: Array<string>
+          diffs?: Array<SnapshotFileDiff>
         }
       }
     | {
@@ -956,7 +1045,7 @@ export type GlobalEvent = {
           timestamp: number
           sessionID: string
           assistantMessageID: string
-          error: SessionErrorUnknown
+          error: SessionErrorUnknown | SessionErrorInterrupted
         }
       }
     | {
@@ -1626,12 +1715,18 @@ export type GlobalEvent = {
     | SyncEventSessionNextAgentSwitched
     | SyncEventSessionNextModelSwitched
     | SyncEventSessionNextMoved
+    | SyncEventSessionNextUpdated
+    | SyncEventSessionNextMessageImported
     | SyncEventSessionNextPrompted
     | SyncEventSessionNextPromptAdmitted
+    | SyncEventSessionNextPromptRevised
+    | SyncEventSessionNextPromptDiscarded
+    | SyncEventSessionNextPromptExpedited
     | SyncEventSessionNextContextUpdated
     | SyncEventSessionNextSynthetic
     | SyncEventSessionNextShellStarted
     | SyncEventSessionNextShellEnded
+    | SyncEventSessionNextCommandExecuted
     | SyncEventSessionNextStepStarted
     | SyncEventSessionNextStepEnded
     | SyncEventSessionNextStepFailed
@@ -2612,24 +2707,6 @@ export type SessionBusyError = {
   message: string
 }
 
-export type QueueItemDetail = {
-  id: string
-  version: 1
-  agent: string
-  model: {
-    providerID: string
-    modelID: string
-    variant?: string
-  }
-  tools?: {
-    [key: string]: boolean
-  }
-  system?: string
-  format?: OutputFormat
-  parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
-  permissions?: Array<PermissionRule>
-}
-
 export type EventTuiPromptAppend = {
   type: "tui.prompt.append"
   properties: {
@@ -2734,10 +2811,16 @@ export type SessionNotFoundError = {
   message: string
 }
 
-export type PromptInput = {
-  text: string
-  files?: Array<PromptInputFileAttachment>
-  agents?: Array<PromptAgentAttachment>
+export type UnknownError1 = {
+  _tag: "UnknownError"
+  message: string
+  ref?: string
+}
+
+export type ServiceUnavailableError = {
+  _tag: "ServiceUnavailableError"
+  message: string
+  service?: string
 }
 
 export type ConflictError = {
@@ -2746,10 +2829,25 @@ export type ConflictError = {
   resource?: string
 }
 
-export type ServiceUnavailableError = {
-  _tag: "ServiceUnavailableError"
+export type AgentNotFoundError = {
+  _tag: "AgentNotFoundError"
+  agent: string
+  available: Array<string>
   message: string
-  service?: string
+}
+
+export type CommandNotFoundError = {
+  _tag: "CommandNotFoundError"
+  command: string
+  available: Array<string>
+  message: string
+}
+
+export type QueueItemNotFoundError = {
+  _tag: "QueueItemNotFoundError"
+  sessionID: string
+  messageID: string
+  message: string
 }
 
 export type MessageNotFoundError = {
@@ -2759,22 +2857,22 @@ export type MessageNotFoundError = {
   message: string
 }
 
-export type UnknownError1 = {
-  _tag: "UnknownError"
-  message: string
-  ref?: string
-}
-
 export type SessionDurableEvent =
   | SessionNextAgentSwitched
   | SessionNextModelSwitched
   | SessionNextMoved
+  | SessionNextUpdated
+  | SessionNextMessageImported
   | SessionNextPrompted
   | SessionNextPromptAdmitted
+  | SessionNextPromptRevised
+  | SessionNextPromptDiscarded
+  | SessionNextPromptExpedited
   | SessionNextContextUpdated
   | SessionNextSynthetic
   | SessionNextShellStarted
   | SessionNextShellEnded
+  | SessionNextCommandExecuted
   | SessionNextStepStarted
   | SessionNextStepEnded
   | SessionNextStepFailed
@@ -2804,6 +2902,7 @@ export type SessionDurableEventStream = string
 
 export type SessionMessagesResponse = {
   data: Array<SessionMessage>
+  throughSeq: number
   cursor: {
     previous?: string
     next?: string
@@ -2896,12 +2995,18 @@ export type V2Event =
   | SessionNextAgentSwitched
   | SessionNextModelSwitched
   | SessionNextMoved
+  | SessionNextUpdated
+  | SessionNextMessageImported
   | SessionNextPrompted
   | SessionNextPromptAdmitted
+  | SessionNextPromptRevised
+  | SessionNextPromptDiscarded
+  | SessionNextPromptExpedited
   | SessionNextContextUpdated
   | SessionNextSynthetic
   | SessionNextShellStarted
   | SessionNextShellEnded
+  | SessionNextCommandExecuted
   | SessionNextStepStarted
   | SessionNextStepEnded
   | SessionNextStepFailed
@@ -3076,6 +3181,30 @@ export type LocationRef = {
   workspaceID?: string
 }
 
+export type SessionMessageAgentSwitched = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+  }
+  type: "agent-switched"
+  agent: string
+}
+
+export type SessionMessageModelSwitched = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+  }
+  type: "model-switched"
+  model: ModelRef
+}
+
 export type PromptSource = {
   start: number
   end: number
@@ -3095,15 +3224,202 @@ export type PromptAgentAttachment = {
   source?: PromptSource
 }
 
-export type SessionErrorUnknown = {
-  type: "unknown"
-  message: string
+export type SessionInputPayloadFormat =
+  | {
+      type: "text"
+    }
+  | {
+      type: "json_schema"
+      schema: {
+        [key: string]: unknown
+      }
+      retryCount?: number
+    }
+
+export type SessionInputPayloadTextPart = {
+  id?: string
+  type: "text"
+  text: string
+  synthetic?: boolean
+  ignored?: boolean
+  time?: {
+    start: number
+    end?: number
+  }
+  metadata?: {
+    [key: string]: unknown
+  }
+}
+
+export type SessionInputPayloadFileSource =
+  | {
+      type: "file"
+      path: string
+      text: {
+        value: string
+        start: number
+        end: number
+      }
+    }
+  | {
+      type: "symbol"
+      path: string
+      range: {
+        start: {
+          line: number
+          character: number
+        }
+        end: {
+          line: number
+          character: number
+        }
+      }
+      name: string
+      kind: number
+      text: {
+        value: string
+        start: number
+        end: number
+      }
+    }
+  | {
+      type: "resource"
+      clientName: string
+      uri: string
+      text: {
+        value: string
+        start: number
+        end: number
+      }
+    }
+
+export type SessionInputPayloadFilePart = {
+  id?: string
+  type: "file"
+  mime: string
+  filename?: string
+  url: string
+  source?: SessionInputPayloadFileSource
+}
+
+export type SessionInputPayloadAgentPart = {
+  id?: string
+  type: "agent"
+  name: string
+  source?: {
+    value: string
+    start: number
+    end: number
+  }
+}
+
+export type SessionInputPayloadSubtaskPart = {
+  id?: string
+  type: "subtask"
+  prompt: string
+  description: string
+  agent: string
+  model?: {
+    providerID: string
+    modelID: string
+    variant?: string
+  }
+  command?: string
+}
+
+export type SessionInputPayloadPart =
+  | SessionInputPayloadTextPart
+  | SessionInputPayloadFilePart
+  | SessionInputPayloadAgentPart
+  | SessionInputPayloadSubtaskPart
+
+export type SessionInputPayloadPermission = {
+  permission: string
+  pattern: string
+  action: "allow" | "deny" | "ask"
+}
+
+export type SessionMessageUser = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+  }
+  text: string
+  files?: Array<PromptFileAttachment>
+  agents?: Array<PromptAgentAttachment>
+  payload?: SessionInputPayload
+  type: "user"
+}
+
+export type SessionMessageSynthetic = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+  }
+  sessionID: string
+  text: string
+  type: "synthetic"
+}
+
+export type SessionMessageSystem = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+  }
+  type: "system"
+  text: string
+}
+
+export type SessionMessageShell = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    completed?: number
+  }
+  type: "shell"
+  callID: string
+  command: string
+  output: string
+}
+
+export type SessionMessageAssistantText = {
+  type: "text"
+  id: string
+  text: string
 }
 
 export type LlmProviderMetadata = {
   [key: string]: {
     [key: string]: unknown
   }
+}
+
+export type SessionMessageAssistantReasoning = {
+  type: "reasoning"
+  id: string
+  text: string
+  providerMetadata?: LlmProviderMetadata
+  time?: {
+    created: number
+    completed?: number
+  }
+}
+
+export type SessionMessageToolStatePending = {
+  status: "pending"
+  input: string
 }
 
 export type ToolTextContent = {
@@ -3119,6 +3435,135 @@ export type ToolFileContent = {
 }
 
 export type LlmToolContent = ToolTextContent | ToolFileContent
+
+export type SessionMessageToolStateRunning = {
+  status: "running"
+  input: {
+    [key: string]: unknown
+  }
+  structured: {
+    [key: string]: unknown
+  }
+  content: Array<LlmToolContent>
+}
+
+export type SessionMessageToolStateCompleted = {
+  status: "completed"
+  input: {
+    [key: string]: unknown
+  }
+  attachments?: Array<PromptFileAttachment>
+  content: Array<LlmToolContent>
+  outputPaths?: Array<string>
+  structured: {
+    [key: string]: unknown
+  }
+  result?: unknown
+}
+
+export type SessionErrorUnknown = {
+  type: "unknown"
+  message: string
+}
+
+export type SessionMessageToolStateError = {
+  status: "error"
+  input: {
+    [key: string]: unknown
+  }
+  content: Array<LlmToolContent>
+  structured: {
+    [key: string]: unknown
+  }
+  error: SessionErrorUnknown
+  result?: unknown
+}
+
+export type SessionMessageAssistantTool = {
+  type: "tool"
+  id: string
+  name: string
+  provider?: {
+    executed: boolean
+    metadata?: LlmProviderMetadata
+    resultMetadata?: LlmProviderMetadata
+  }
+  state:
+    | SessionMessageToolStatePending
+    | SessionMessageToolStateRunning
+    | SessionMessageToolStateCompleted
+    | SessionMessageToolStateError
+  time: {
+    created: number
+    ran?: number
+    completed?: number
+    pruned?: number
+  }
+}
+
+export type SessionErrorInterrupted = {
+  type: "interrupted"
+  message: string
+}
+
+export type SessionMessageAssistant = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    completed?: number
+  }
+  type: "assistant"
+  agent: string
+  model: ModelRef
+  systemPrompt?: string
+  toolDefinitions?: string
+  content: Array<SessionMessageAssistantText | SessionMessageAssistantReasoning | SessionMessageAssistantTool>
+  snapshot?: {
+    start?: string
+    end?: string
+    files?: Array<string>
+    diffs?: Array<SnapshotFileDiff>
+  }
+  finish?: string
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  error?: SessionErrorUnknown | SessionErrorInterrupted
+}
+
+export type SessionMessageCompaction = {
+  type: "compaction"
+  reason: "auto" | "manual"
+  summary: string
+  recent: string
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+  }
+}
+
+export type SessionMessage =
+  | SessionMessageAgentSwitched
+  | SessionMessageModelSwitched
+  | SessionMessageUser
+  | SessionMessageSynthetic
+  | SessionMessageSystem
+  | SessionMessageShell
+  | SessionMessageAssistant
+  | SessionMessageCompaction
 
 export type SessionNextRetryError = {
   message: string
@@ -3379,6 +3824,39 @@ export type SyncEventSessionNextMoved = {
   }
 }
 
+export type SyncEventSessionNextUpdated = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.updated.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      title?: string
+    }
+  }
+}
+
+export type SyncEventSessionNextMessageImported = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.message.imported.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      sourceSessionID: string
+      message: SessionMessage
+    }
+  }
+}
+
 export type SyncEventSessionNextPrompted = {
   type: "sync"
   id: string
@@ -3392,6 +3870,7 @@ export type SyncEventSessionNextPrompted = {
       sessionID: string
       messageID: string
       prompt: Prompt
+      payload?: SessionInputPayload
       delivery: "steer" | "queue"
     }
   }
@@ -3410,7 +3889,60 @@ export type SyncEventSessionNextPromptAdmitted = {
       sessionID: string
       messageID: string
       prompt: Prompt
+      payload?: SessionInputPayload
       delivery: "steer" | "queue"
+    }
+  }
+}
+
+export type SyncEventSessionNextPromptRevised = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.prompt.revised.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      messageID: string
+      prompt: Prompt
+      payload: SessionInputPayload
+    }
+  }
+}
+
+export type SyncEventSessionNextPromptDiscarded = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.prompt.discarded.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      messageID: string
+    }
+  }
+}
+
+export type SyncEventSessionNextPromptExpedited = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.prompt.expedited.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      messageID: string
+      prompt: Prompt
+      payload: SessionInputPayload
     }
   }
 }
@@ -3484,6 +4016,24 @@ export type SyncEventSessionNextShellEnded = {
   }
 }
 
+export type SyncEventSessionNextCommandExecuted = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.command.executed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      messageID: string
+      name: string
+      arguments: string
+    }
+  }
+}
+
 export type SyncEventSessionNextStepStarted = {
   type: "sync"
   id: string
@@ -3498,6 +4048,8 @@ export type SyncEventSessionNextStepStarted = {
       assistantMessageID: string
       agent: string
       model: ModelRef
+      systemPrompt?: string
+      toolDefinitions?: string
       snapshot?: string
     }
   }
@@ -3528,6 +4080,7 @@ export type SyncEventSessionNextStepEnded = {
       }
       snapshot?: string
       files?: Array<string>
+      diffs?: Array<SnapshotFileDiff>
     }
   }
 }
@@ -3544,7 +4097,7 @@ export type SyncEventSessionNextStepFailed = {
       timestamp: number
       sessionID: string
       assistantMessageID: string
-      error: SessionErrorUnknown
+      error: SessionErrorUnknown | SessionErrorInterrupted
     }
   }
 }
@@ -3954,16 +4507,18 @@ export type SessionV2Info = {
     archived?: number
   }
   title: string
+  share?: {
+    url: string
+  }
   location: LocationRef
   subpath?: string
   revert?: RevertState
-}
-
-export type PromptInputFileAttachment = {
-  uri: string
-  name?: string
-  description?: string
-  source?: PromptSource
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs: Array<SnapshotFileDiff>
+  }
 }
 
 export type SessionInputAdmitted = {
@@ -3971,226 +4526,21 @@ export type SessionInputAdmitted = {
   id: string
   sessionID: string
   prompt: Prompt
+  payload?: SessionInputPayload
   delivery: "steer" | "queue"
   timeCreated: number
   promotedSeq?: number
+  updatedSeq?: number
+  discardedSeq?: number
 }
 
-export type SessionMessageAgentSwitched = {
+export type SessionInputQueued = {
   id: string
-  metadata?: {
-    [key: string]: unknown
-  }
-  time: {
-    created: number
-  }
-  type: "agent-switched"
-  agent: string
-}
-
-export type SessionMessageModelSwitched = {
-  id: string
-  metadata?: {
-    [key: string]: unknown
-  }
-  time: {
-    created: number
-  }
-  type: "model-switched"
-  model: ModelRef
-}
-
-export type SessionMessageUser = {
-  id: string
-  metadata?: {
-    [key: string]: unknown
-  }
-  time: {
-    created: number
-  }
-  text: string
-  files?: Array<PromptFileAttachment>
-  agents?: Array<PromptAgentAttachment>
-  type: "user"
-}
-
-export type SessionMessageSynthetic = {
-  id: string
-  metadata?: {
-    [key: string]: unknown
-  }
-  time: {
-    created: number
-  }
   sessionID: string
-  text: string
-  type: "synthetic"
+  position: number
+  timeCreated: number
+  payload: SessionInputPayload
 }
-
-export type SessionMessageSystem = {
-  id: string
-  metadata?: {
-    [key: string]: unknown
-  }
-  time: {
-    created: number
-  }
-  type: "system"
-  text: string
-}
-
-export type SessionMessageShell = {
-  id: string
-  metadata?: {
-    [key: string]: unknown
-  }
-  time: {
-    created: number
-    completed?: number
-  }
-  type: "shell"
-  callID: string
-  command: string
-  output: string
-}
-
-export type SessionMessageAssistantText = {
-  type: "text"
-  id: string
-  text: string
-}
-
-export type SessionMessageAssistantReasoning = {
-  type: "reasoning"
-  id: string
-  text: string
-  providerMetadata?: LlmProviderMetadata
-  time?: {
-    created: number
-    completed?: number
-  }
-}
-
-export type SessionMessageToolStatePending = {
-  status: "pending"
-  input: string
-}
-
-export type SessionMessageToolStateRunning = {
-  status: "running"
-  input: {
-    [key: string]: unknown
-  }
-  structured: {
-    [key: string]: unknown
-  }
-  content: Array<LlmToolContent>
-}
-
-export type SessionMessageToolStateCompleted = {
-  status: "completed"
-  input: {
-    [key: string]: unknown
-  }
-  attachments?: Array<PromptFileAttachment>
-  content: Array<LlmToolContent>
-  outputPaths?: Array<string>
-  structured: {
-    [key: string]: unknown
-  }
-  result?: unknown
-}
-
-export type SessionMessageToolStateError = {
-  status: "error"
-  input: {
-    [key: string]: unknown
-  }
-  content: Array<LlmToolContent>
-  structured: {
-    [key: string]: unknown
-  }
-  error: SessionErrorUnknown
-  result?: unknown
-}
-
-export type SessionMessageAssistantTool = {
-  type: "tool"
-  id: string
-  name: string
-  provider?: {
-    executed: boolean
-    metadata?: LlmProviderMetadata
-    resultMetadata?: LlmProviderMetadata
-  }
-  state:
-    | SessionMessageToolStatePending
-    | SessionMessageToolStateRunning
-    | SessionMessageToolStateCompleted
-    | SessionMessageToolStateError
-  time: {
-    created: number
-    ran?: number
-    completed?: number
-    pruned?: number
-  }
-}
-
-export type SessionMessageAssistant = {
-  id: string
-  metadata?: {
-    [key: string]: unknown
-  }
-  time: {
-    created: number
-    completed?: number
-  }
-  type: "assistant"
-  agent: string
-  model: ModelRef
-  content: Array<SessionMessageAssistantText | SessionMessageAssistantReasoning | SessionMessageAssistantTool>
-  snapshot?: {
-    start?: string
-    end?: string
-    files?: Array<string>
-  }
-  finish?: string
-  cost?: number
-  tokens?: {
-    input: number
-    output: number
-    reasoning: number
-    cache: {
-      read: number
-      write: number
-    }
-  }
-  error?: SessionErrorUnknown
-}
-
-export type SessionMessageCompaction = {
-  type: "compaction"
-  reason: "auto" | "manual"
-  summary: string
-  recent: string
-  id: string
-  metadata?: {
-    [key: string]: unknown
-  }
-  time: {
-    created: number
-  }
-}
-
-export type SessionMessage =
-  | SessionMessageAgentSwitched
-  | SessionMessageModelSwitched
-  | SessionMessageUser
-  | SessionMessageSynthetic
-  | SessionMessageSystem
-  | SessionMessageShell
-  | SessionMessageAssistant
-  | SessionMessageCompaction
 
 export type SessionNextAgentSwitched = {
   id: string
@@ -4252,6 +4602,45 @@ export type SessionNextMoved = {
   }
 }
 
+export type SessionNextUpdated = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.updated"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    title?: string
+  }
+}
+
+export type SessionNextMessageImported = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.message.imported"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    sourceSessionID: string
+    message: SessionMessage
+  }
+}
+
 export type SessionNextPrompted = {
   id: string
   metadata?: {
@@ -4269,6 +4658,7 @@ export type SessionNextPrompted = {
     sessionID: string
     messageID: string
     prompt: Prompt
+    payload?: SessionInputPayload
     delivery: "steer" | "queue"
   }
 }
@@ -4290,7 +4680,69 @@ export type SessionNextPromptAdmitted = {
     sessionID: string
     messageID: string
     prompt: Prompt
+    payload?: SessionInputPayload
     delivery: "steer" | "queue"
+  }
+}
+
+export type SessionNextPromptRevised = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.prompt.revised"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+    prompt: Prompt
+    payload: SessionInputPayload
+  }
+}
+
+export type SessionNextPromptDiscarded = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.prompt.discarded"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+  }
+}
+
+export type SessionNextPromptExpedited = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.prompt.expedited"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+    prompt: Prompt
+    payload: SessionInputPayload
   }
 }
 
@@ -4375,6 +4827,27 @@ export type SessionNextShellEnded = {
   }
 }
 
+export type SessionNextCommandExecuted = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.command.executed"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+    name: string
+    arguments: string
+  }
+}
+
 export type SessionNextStepStarted = {
   id: string
   metadata?: {
@@ -4393,6 +4866,8 @@ export type SessionNextStepStarted = {
     assistantMessageID: string
     agent: string
     model: ModelRef
+    systemPrompt?: string
+    toolDefinitions?: string
     snapshot?: string
   }
 }
@@ -4426,6 +4901,7 @@ export type SessionNextStepEnded = {
     }
     snapshot?: string
     files?: Array<string>
+    diffs?: Array<SnapshotFileDiff>
   }
 }
 
@@ -4445,7 +4921,7 @@ export type SessionNextStepFailed = {
     timestamp: number
     sessionID: string
     assistantMessageID: string
-    error: SessionErrorUnknown
+    error: SessionErrorUnknown | SessionErrorInterrupted
   }
 }
 
@@ -5041,6 +5517,8 @@ export type CommandV2Info = {
   agent?: string
   model?: ModelRef
   subtask?: boolean
+  source?: "command" | "mcp" | "skill"
+  hints?: Array<string>
 }
 
 export type SkillV2Info = {
@@ -6332,6 +6810,27 @@ export type EventSessionNextMoved = {
   }
 }
 
+export type EventSessionNextUpdated = {
+  id: string
+  type: "session.next.updated"
+  properties: {
+    timestamp: number
+    sessionID: string
+    title?: string
+  }
+}
+
+export type EventSessionNextMessageImported = {
+  id: string
+  type: "session.next.message.imported"
+  properties: {
+    timestamp: number
+    sessionID: string
+    sourceSessionID: string
+    message: SessionMessage
+  }
+}
+
 export type EventSessionNextPrompted = {
   id: string
   type: "session.next.prompted"
@@ -6340,6 +6839,7 @@ export type EventSessionNextPrompted = {
     sessionID: string
     messageID: string
     prompt: Prompt
+    payload?: SessionInputPayload
     delivery: "steer" | "queue"
   }
 }
@@ -6352,7 +6852,42 @@ export type EventSessionNextPromptAdmitted = {
     sessionID: string
     messageID: string
     prompt: Prompt
+    payload?: SessionInputPayload
     delivery: "steer" | "queue"
+  }
+}
+
+export type EventSessionNextPromptRevised = {
+  id: string
+  type: "session.next.prompt.revised"
+  properties: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+    prompt: Prompt
+    payload: SessionInputPayload
+  }
+}
+
+export type EventSessionNextPromptDiscarded = {
+  id: string
+  type: "session.next.prompt.discarded"
+  properties: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+  }
+}
+
+export type EventSessionNextPromptExpedited = {
+  id: string
+  type: "session.next.prompt.expedited"
+  properties: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+    prompt: Prompt
+    payload: SessionInputPayload
   }
 }
 
@@ -6401,6 +6936,18 @@ export type EventSessionNextShellEnded = {
   }
 }
 
+export type EventSessionNextCommandExecuted = {
+  id: string
+  type: "session.next.command.executed"
+  properties: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+    name: string
+    arguments: string
+  }
+}
+
 export type EventSessionNextStepStarted = {
   id: string
   type: "session.next.step.started"
@@ -6410,6 +6957,8 @@ export type EventSessionNextStepStarted = {
     assistantMessageID: string
     agent: string
     model: ModelRef
+    systemPrompt?: string
+    toolDefinitions?: string
     snapshot?: string
   }
 }
@@ -6434,6 +6983,7 @@ export type EventSessionNextStepEnded = {
     }
     snapshot?: string
     files?: Array<string>
+    diffs?: Array<SnapshotFileDiff>
   }
 }
 
@@ -6444,7 +6994,7 @@ export type EventSessionNextStepFailed = {
     timestamp: number
     sessionID: string
     assistantMessageID: string
-    error: SessionErrorUnknown
+    error: SessionErrorUnknown | SessionErrorInterrupted
   }
 }
 
@@ -9869,7 +10419,6 @@ export type SessionPromptData = {
     format?: OutputFormat
     system?: string
     variant?: string
-    delivery?: "immediate" | "deferred" | "queue" | "steer"
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
   path: {
@@ -10217,7 +10766,6 @@ export type SessionPromptAsyncData = {
     format?: OutputFormat
     system?: string
     variant?: string
-    delivery?: "immediate" | "deferred" | "queue" | "steer"
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
   path: {
@@ -10540,306 +11088,6 @@ export type PartUpdateResponses = {
 }
 
 export type PartUpdateResponse = PartUpdateResponses[keyof PartUpdateResponses]
-
-export type SessionQueueListData = {
-  body?: never
-  path: {
-    sessionID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/session/{sessionID}/queue"
-}
-
-export type SessionQueueListErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-  /**
-   * NotFoundError
-   */
-  404: NotFoundError
-}
-
-export type SessionQueueListError = SessionQueueListErrors[keyof SessionQueueListErrors]
-
-export type SessionQueueListResponses = {
-  /**
-   * Queued prompt previews
-   */
-  200: Array<{
-    id: string
-    text: string
-  }>
-}
-
-export type SessionQueueListResponse = SessionQueueListResponses[keyof SessionQueueListResponses]
-
-export type SessionQueueEnqueueData = {
-  body?: {
-    messageID?: string
-    model?: {
-      providerID: string
-      modelID: string
-    }
-    agent?: string
-    noReply?: boolean
-    tools?: {
-      [key: string]: boolean
-    }
-    format?: OutputFormat
-    system?: string
-    variant?: string
-    delivery?: "immediate" | "deferred" | "queue" | "steer"
-    parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
-  }
-  path: {
-    sessionID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/session/{sessionID}/queue"
-}
-
-export type SessionQueueEnqueueErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-  /**
-   * NotFoundError
-   */
-  404: NotFoundError
-}
-
-export type SessionQueueEnqueueError = SessionQueueEnqueueErrors[keyof SessionQueueEnqueueErrors]
-
-export type SessionQueueEnqueueResponses = {
-  /**
-   * Queued prompt
-   */
-  200: {
-    id: string
-    text: string
-  }
-}
-
-export type SessionQueueEnqueueResponse = SessionQueueEnqueueResponses[keyof SessionQueueEnqueueResponses]
-
-export type SessionQueueRemoveData = {
-  body?: never
-  path: {
-    sessionID: string
-    queueID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/session/{sessionID}/queue/{queueID}"
-}
-
-export type SessionQueueRemoveErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-  /**
-   * NotFoundError
-   */
-  404: NotFoundError
-}
-
-export type SessionQueueRemoveError = SessionQueueRemoveErrors[keyof SessionQueueRemoveErrors]
-
-export type SessionQueueRemoveResponses = {
-  /**
-   * Successfully removed queued prompt
-   */
-  200: boolean
-}
-
-export type SessionQueueRemoveResponse = SessionQueueRemoveResponses[keyof SessionQueueRemoveResponses]
-
-export type SessionQueueGetData = {
-  body?: never
-  path: {
-    sessionID: string
-    queueID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/session/{sessionID}/queue/{queueID}"
-}
-
-export type SessionQueueGetErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-  /**
-   * NotFoundError
-   */
-  404: NotFoundError
-}
-
-export type SessionQueueGetError = SessionQueueGetErrors[keyof SessionQueueGetErrors]
-
-export type SessionQueueGetResponses = {
-  /**
-   * Queued prompt payload
-   */
-  200: QueueItemDetail
-}
-
-export type SessionQueueGetResponse = SessionQueueGetResponses[keyof SessionQueueGetResponses]
-
-export type SessionQueueUpdateData = {
-  body?: unknown
-  path: {
-    sessionID: string
-    queueID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/session/{sessionID}/queue/{queueID}"
-}
-
-export type SessionQueueUpdateErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-  /**
-   * NotFoundError
-   */
-  404: NotFoundError
-}
-
-export type SessionQueueUpdateError = SessionQueueUpdateErrors[keyof SessionQueueUpdateErrors]
-
-export type SessionQueueUpdateResponses = {
-  /**
-   * Successfully updated queued prompt
-   */
-  200: boolean
-}
-
-export type SessionQueueUpdateResponse = SessionQueueUpdateResponses[keyof SessionQueueUpdateResponses]
-
-export type SessionQueueSendData = {
-  body?: unknown
-  path: {
-    sessionID: string
-    queueID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/session/{sessionID}/queue/{queueID}/send"
-}
-
-export type SessionQueueSendErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-  /**
-   * NotFoundError
-   */
-  404: NotFoundError
-  /**
-   * SessionBusyError
-   */
-  409: SessionBusyError
-}
-
-export type SessionQueueSendError = SessionQueueSendErrors[keyof SessionQueueSendErrors]
-
-export type SessionQueueSendResponses = {
-  /**
-   * Assistant response after sending queued prompt now
-   */
-  200: unknown
-}
-
-export type SessionQueueDrainPauseData = {
-  body?: never
-  path: {
-    sessionID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/session/{sessionID}/queue/drain-pause"
-}
-
-export type SessionQueueDrainPauseErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-  /**
-   * NotFoundError
-   */
-  404: NotFoundError
-}
-
-export type SessionQueueDrainPauseError = SessionQueueDrainPauseErrors[keyof SessionQueueDrainPauseErrors]
-
-export type SessionQueueDrainPauseResponses = {
-  /**
-   * Queue auto-drain paused
-   */
-  200: boolean
-}
-
-export type SessionQueueDrainPauseResponse = SessionQueueDrainPauseResponses[keyof SessionQueueDrainPauseResponses]
-
-export type SessionQueueDrainResumeData = {
-  body?: never
-  path: {
-    sessionID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/session/{sessionID}/queue/drain-resume"
-}
-
-export type SessionQueueDrainResumeErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-  /**
-   * NotFoundError
-   */
-  404: NotFoundError
-}
-
-export type SessionQueueDrainResumeError = SessionQueueDrainResumeErrors[keyof SessionQueueDrainResumeErrors]
-
-export type SessionQueueDrainResumeResponses = {
-  /**
-   * Queue auto-drain resumed
-   */
-  200: boolean
-}
-
-export type SessionQueueDrainResumeResponse = SessionQueueDrainResumeResponses[keyof SessionQueueDrainResumeResponses]
 
 export type SyncStartData = {
   body?: never
@@ -11841,6 +12089,170 @@ export type V2SessionGetResponses = {
 
 export type V2SessionGetResponse = V2SessionGetResponses[keyof V2SessionGetResponses]
 
+export type V2SessionUpdateData = {
+  body: {
+    title?: string
+  }
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}"
+}
+
+export type V2SessionUpdateErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionUpdateError = V2SessionUpdateErrors[keyof V2SessionUpdateErrors]
+
+export type V2SessionUpdateResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: SessionV2Info
+  }
+}
+
+export type V2SessionUpdateResponse = V2SessionUpdateResponses[keyof V2SessionUpdateResponses]
+
+export type V2SessionForkData = {
+  body: {
+    messageID?: string
+  }
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/fork"
+}
+
+export type V2SessionForkErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * UnknownError
+   */
+  500: UnknownError1
+}
+
+export type V2SessionForkError = V2SessionForkErrors[keyof V2SessionForkErrors]
+
+export type V2SessionForkResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: SessionV2Info
+  }
+}
+
+export type V2SessionForkResponse = V2SessionForkResponses[keyof V2SessionForkResponses]
+
+export type V2SessionUnshareData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/share"
+}
+
+export type V2SessionUnshareErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2SessionUnshareError = V2SessionUnshareErrors[keyof V2SessionUnshareErrors]
+
+export type V2SessionUnshareResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: SessionV2Info
+  }
+}
+
+export type V2SessionUnshareResponse = V2SessionUnshareResponses[keyof V2SessionUnshareResponses]
+
+export type V2SessionShareData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/share"
+}
+
+export type V2SessionShareErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2SessionShareError = V2SessionShareErrors[keyof V2SessionShareErrors]
+
+export type V2SessionShareResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: SessionV2Info
+  }
+}
+
+export type V2SessionShareResponse = V2SessionShareResponses[keyof V2SessionShareResponses]
+
 export type V2SessionSwitchAgentData = {
   body: {
     agent: string
@@ -11918,7 +12330,8 @@ export type V2SessionSwitchModelResponse = V2SessionSwitchModelResponses[keyof V
 export type V2SessionPromptData = {
   body: {
     id?: string
-    prompt: PromptInput
+    prompt?: Prompt
+    payload?: SessionInputPayload
     delivery?: "steer" | "queue"
     resume?: boolean
   }
@@ -11960,6 +12373,405 @@ export type V2SessionPromptResponses = {
 }
 
 export type V2SessionPromptResponse = V2SessionPromptResponses[keyof V2SessionPromptResponses]
+
+export type V2SessionCommandData = {
+  body: {
+    id?: string
+    name: string
+    arguments: string
+    payload: SessionInputPayload
+    delivery?: "steer" | "queue"
+    resume?: boolean
+  }
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/command"
+}
+
+export type V2SessionCommandErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * AgentNotFoundError | CommandNotFoundError | SessionNotFoundError
+   */
+  404: AgentNotFoundError | CommandNotFoundError | SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2SessionCommandError = V2SessionCommandErrors[keyof V2SessionCommandErrors]
+
+export type V2SessionCommandResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: SessionInputAdmitted
+  }
+}
+
+export type V2SessionCommandResponse = V2SessionCommandResponses[keyof V2SessionCommandResponses]
+
+export type V2SessionQueueListData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/queue"
+}
+
+export type V2SessionQueueListErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionQueueListError = V2SessionQueueListErrors[keyof V2SessionQueueListErrors]
+
+export type V2SessionQueueListResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: Array<SessionInputQueued>
+  }
+}
+
+export type V2SessionQueueListResponse = V2SessionQueueListResponses[keyof V2SessionQueueListResponses]
+
+export type V2SessionQueueEnqueueData = {
+  body: {
+    id?: string
+    payload: SessionInputPayload
+    resume?: boolean
+  }
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/queue"
+}
+
+export type V2SessionQueueEnqueueErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type V2SessionQueueEnqueueError = V2SessionQueueEnqueueErrors[keyof V2SessionQueueEnqueueErrors]
+
+export type V2SessionQueueEnqueueResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: SessionInputQueued
+  }
+}
+
+export type V2SessionQueueEnqueueResponse = V2SessionQueueEnqueueResponses[keyof V2SessionQueueEnqueueResponses]
+
+export type V2SessionQueueDrainPauseData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/queue/drain-pause"
+}
+
+export type V2SessionQueueDrainPauseErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionQueueDrainPauseError = V2SessionQueueDrainPauseErrors[keyof V2SessionQueueDrainPauseErrors]
+
+export type V2SessionQueueDrainPauseResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type V2SessionQueueDrainPauseResponse =
+  V2SessionQueueDrainPauseResponses[keyof V2SessionQueueDrainPauseResponses]
+
+export type V2SessionQueueDrainResumeData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/queue/drain-resume"
+}
+
+export type V2SessionQueueDrainResumeErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionQueueDrainResumeError = V2SessionQueueDrainResumeErrors[keyof V2SessionQueueDrainResumeErrors]
+
+export type V2SessionQueueDrainResumeResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type V2SessionQueueDrainResumeResponse =
+  V2SessionQueueDrainResumeResponses[keyof V2SessionQueueDrainResumeResponses]
+
+export type V2SessionQueueRemoveData = {
+  body?: never
+  path: {
+    sessionID: string
+    messageID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/queue/{messageID}"
+}
+
+export type V2SessionQueueRemoveErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError | QueueItemNotFoundError
+   */
+  404: QueueItemNotFoundError | SessionNotFoundError
+}
+
+export type V2SessionQueueRemoveError = V2SessionQueueRemoveErrors[keyof V2SessionQueueRemoveErrors]
+
+export type V2SessionQueueRemoveResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type V2SessionQueueRemoveResponse = V2SessionQueueRemoveResponses[keyof V2SessionQueueRemoveResponses]
+
+export type V2SessionQueueGetData = {
+  body?: never
+  path: {
+    sessionID: string
+    messageID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/queue/{messageID}"
+}
+
+export type V2SessionQueueGetErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError | QueueItemNotFoundError
+   */
+  404: QueueItemNotFoundError | SessionNotFoundError
+}
+
+export type V2SessionQueueGetError = V2SessionQueueGetErrors[keyof V2SessionQueueGetErrors]
+
+export type V2SessionQueueGetResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: SessionInputQueued
+  }
+}
+
+export type V2SessionQueueGetResponse = V2SessionQueueGetResponses[keyof V2SessionQueueGetResponses]
+
+export type V2SessionQueueUpdateData = {
+  body: {
+    payload: SessionInputPayload
+  }
+  path: {
+    sessionID: string
+    messageID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/queue/{messageID}"
+}
+
+export type V2SessionQueueUpdateErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError | QueueItemNotFoundError
+   */
+  404: QueueItemNotFoundError | SessionNotFoundError
+}
+
+export type V2SessionQueueUpdateError = V2SessionQueueUpdateErrors[keyof V2SessionQueueUpdateErrors]
+
+export type V2SessionQueueUpdateResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type V2SessionQueueUpdateResponse = V2SessionQueueUpdateResponses[keyof V2SessionQueueUpdateResponses]
+
+export type V2SessionQueueSendData = {
+  body: {
+    payload?: SessionInputPayload
+  }
+  path: {
+    sessionID: string
+    messageID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/queue/{messageID}/send"
+}
+
+export type V2SessionQueueSendErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError | QueueItemNotFoundError
+   */
+  404: QueueItemNotFoundError | SessionNotFoundError
+}
+
+export type V2SessionQueueSendError = V2SessionQueueSendErrors[keyof V2SessionQueueSendErrors]
+
+export type V2SessionQueueSendResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: SessionInputAdmitted
+  }
+}
+
+export type V2SessionQueueSendResponse = V2SessionQueueSendResponses[keyof V2SessionQueueSendResponses]
+
+export type V2SessionShellData = {
+  body: {
+    command: string
+  }
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/shell"
+}
+
+export type V2SessionShellErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2SessionShellError = V2SessionShellErrors[keyof V2SessionShellErrors]
+
+export type V2SessionShellResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type V2SessionShellResponse = V2SessionShellResponses[keyof V2SessionShellResponses]
 
 export type V2SessionCompactData = {
   body?: never
@@ -13949,6 +14761,488 @@ export type V2ProjectCopyRefreshResponses = {
 }
 
 export type V2ProjectCopyRefreshResponse = V2ProjectCopyRefreshResponses[keyof V2ProjectCopyRefreshResponses]
+
+export type V2McpStatusData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/mcp"
+}
+
+export type V2McpStatusErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2McpStatusError = V2McpStatusErrors[keyof V2McpStatusErrors]
+
+export type V2McpStatusResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: {
+      [key: string]:
+        | {
+            status: "connected"
+          }
+        | {
+            status: "disabled"
+          }
+        | {
+            status: "failed"
+            error: string
+          }
+        | {
+            status: "needs_auth"
+          }
+        | {
+            status: "needs_client_registration"
+            error: string
+          }
+    }
+  }
+}
+
+export type V2McpStatusResponse = V2McpStatusResponses[keyof V2McpStatusResponses]
+
+export type V2McpAddData = {
+  body: {
+    name: string
+    server:
+      | {
+          type: "local"
+          command: Array<string>
+          cwd?: string
+          environment?: {
+            [key: string]: string
+          }
+          disabled?: boolean
+          timeout?: {
+            startup?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            request?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          }
+        }
+      | {
+          type: "remote"
+          url: string
+          headers?: {
+            [key: string]: string
+          }
+          oauth?:
+            | {
+                client_id?: string
+                client_secret?: string
+                scope?: string
+                callback_port?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                redirect_uri?: string
+              }
+            | false
+          disabled?: boolean
+          timeout?: {
+            startup?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            request?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          }
+        }
+  }
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/mcp"
+}
+
+export type V2McpAddErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2McpAddError = V2McpAddErrors[keyof V2McpAddErrors]
+
+export type V2McpAddResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: {
+      [key: string]:
+        | {
+            status: "connected"
+          }
+        | {
+            status: "disabled"
+          }
+        | {
+            status: "failed"
+            error: string
+          }
+        | {
+            status: "needs_auth"
+          }
+        | {
+            status: "needs_client_registration"
+            error: string
+          }
+    }
+  }
+}
+
+export type V2McpAddResponse = V2McpAddResponses[keyof V2McpAddResponses]
+
+export type V2McpConnectData = {
+  body?: never
+  path: {
+    name: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/mcp/{name}/connect"
+}
+
+export type V2McpConnectErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2McpConnectError = V2McpConnectErrors[keyof V2McpConnectErrors]
+
+export type V2McpConnectResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: boolean
+  }
+}
+
+export type V2McpConnectResponse = V2McpConnectResponses[keyof V2McpConnectResponses]
+
+export type V2McpAuthRemoveData = {
+  body?: never
+  path: {
+    name: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/mcp/{name}/auth"
+}
+
+export type V2McpAuthRemoveErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2McpAuthRemoveError = V2McpAuthRemoveErrors[keyof V2McpAuthRemoveErrors]
+
+export type V2McpAuthRemoveResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: boolean
+  }
+}
+
+export type V2McpAuthRemoveResponse = V2McpAuthRemoveResponses[keyof V2McpAuthRemoveResponses]
+
+export type V2McpAuthStartData = {
+  body?: never
+  path: {
+    name: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/mcp/{name}/auth"
+}
+
+export type V2McpAuthStartErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2McpAuthStartError = V2McpAuthStartErrors[keyof V2McpAuthStartErrors]
+
+export type V2McpAuthStartResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: {
+      authorizationUrl: string
+      oauthState: string
+    }
+  }
+}
+
+export type V2McpAuthStartResponse = V2McpAuthStartResponses[keyof V2McpAuthStartResponses]
+
+export type V2McpAuthCallbackData = {
+  body: {
+    code: string
+  }
+  path: {
+    name: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/mcp/{name}/auth/callback"
+}
+
+export type V2McpAuthCallbackErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2McpAuthCallbackError = V2McpAuthCallbackErrors[keyof V2McpAuthCallbackErrors]
+
+export type V2McpAuthCallbackResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data:
+      | {
+          status: "connected"
+        }
+      | {
+          status: "disabled"
+        }
+      | {
+          status: "failed"
+          error: string
+        }
+      | {
+          status: "needs_auth"
+        }
+      | {
+          status: "needs_client_registration"
+          error: string
+        }
+  }
+}
+
+export type V2McpAuthCallbackResponse = V2McpAuthCallbackResponses[keyof V2McpAuthCallbackResponses]
+
+export type V2McpDisconnectData = {
+  body?: never
+  path: {
+    name: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/mcp/{name}/disconnect"
+}
+
+export type V2McpDisconnectErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2McpDisconnectError = V2McpDisconnectErrors[keyof V2McpDisconnectErrors]
+
+export type V2McpDisconnectResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: boolean
+  }
+}
+
+export type V2McpDisconnectResponse = V2McpDisconnectResponses[keyof V2McpDisconnectResponses]
+
+export type V2McpResourcesData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+    server?: string
+  }
+  url: "/api/mcp/resource"
+}
+
+export type V2McpResourcesErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2McpResourcesError = V2McpResourcesErrors[keyof V2McpResourcesErrors]
+
+export type V2McpResourcesResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: Array<unknown>
+  }
+}
+
+export type V2McpResourcesResponse = V2McpResourcesResponses[keyof V2McpResourcesResponses]
+
+export type V2McpResourceTemplatesData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+    server?: string
+  }
+  url: "/api/mcp/resource-template"
+}
+
+export type V2McpResourceTemplatesErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2McpResourceTemplatesError = V2McpResourceTemplatesErrors[keyof V2McpResourceTemplatesErrors]
+
+export type V2McpResourceTemplatesResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: Array<unknown>
+  }
+}
+
+export type V2McpResourceTemplatesResponse = V2McpResourceTemplatesResponses[keyof V2McpResourceTemplatesResponses]
+
+export type V2McpResourceReadData = {
+  body: {
+    server: string
+    uri: string
+  }
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/mcp/resource/read"
+}
+
+export type V2McpResourceReadErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2McpResourceReadError = V2McpResourceReadErrors[keyof V2McpResourceReadErrors]
+
+export type V2McpResourceReadResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: unknown
+  }
+}
+
+export type V2McpResourceReadResponse = V2McpResourceReadResponses[keyof V2McpResourceReadResponses]
 
 export type PtyConnectData = {
   body?: never

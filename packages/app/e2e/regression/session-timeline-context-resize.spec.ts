@@ -1,4 +1,14 @@
 import { expect, test, type Page } from "@playwright/test"
+import {
+  assistantMessage,
+  event,
+  textPart,
+  toolPart,
+  type TimelineEvent,
+  type TimelineMessage,
+  userMessage,
+  userText,
+} from "../performance/timeline-stability/fixture"
 import { mockOpenCodeServer } from "../utils/mock-server"
 import { expectAppVisible, expectSessionTitle } from "../utils/waits"
 import {
@@ -16,11 +26,6 @@ const title = "Context resize regression"
 const model = { providerID: "opencode", modelID: "claude-opus-4-6", variant: "max" }
 const contextIDs = ["prt_0100_read", "prt_0101_glob", "prt_0102_grep", "prt_0103_list"]
 const followingTextID = "prt_0104_text"
-
-type Message = {
-  info: Record<string, unknown> & { id: string; role: "user" | "assistant" }
-  parts: Record<string, unknown>[]
-}
 
 const messages = [...Array.from({ length: 8 }, (_, index) => turn(index, false)).flat(), ...turn(10, true)]
 
@@ -46,7 +51,7 @@ test.describe("regression: session timeline context group resize", () => {
 
   test("paints a stable exploring to explored transition", async ({ page, browserName }) => {
     test.skip(browserName !== "chromium", "Visual stability probes require CDP")
-    const events: { directory: string; payload: Record<string, unknown> }[] = []
+    const events: TimelineEvent[] = []
     await page.setViewportSize({ width: 1400, height: 900 })
     await mockServer(page, events, [
       ...Array.from({ length: 8 }, (_, index) => turn(index, false)).flat(),
@@ -76,25 +81,29 @@ test.describe("regression: session timeline context group resize", () => {
     })
     await startVisualProbe(page, regions)
     for (const [index, delay] of [120, 350, 80, 500].entries()) {
-      events.push({
-        directory,
-        payload: {
-          type: "message.part.updated",
-          properties: {
-            part: contextTool(
-              contextIDs[index]!,
-              id("msg_assistant", 10),
-              ["read", "glob", "grep", "list"][index]!,
-              [
-                { filePath: "src/recent-a.ts" },
-                { path: directory, pattern: "**/*.ts" },
-                { path: directory, pattern: "Explored" },
-                { path: "src" },
-              ][index]!,
-            ),
-          },
-        },
-      })
+      const part = contextTool(
+        contextIDs[index]!,
+        ["read", "glob", "grep", "list"][index]!,
+        [
+          { filePath: "src/recent-a.ts" },
+          { path: directory, pattern: "**/*.ts" },
+          { path: directory, pattern: "Explored" },
+          { path: "src" },
+        ][index]!,
+      )
+      if (part.state.status !== "completed") throw new Error("expected completed context tool")
+      events.push(
+        event("session.next.tool.success", {
+          timestamp: 1700000003000 + index,
+          sessionID,
+          assistantMessageID: id("msg_assistant", 10),
+          callID: part.id,
+          structured: part.state.structured,
+          content: part.state.content,
+          result: part.state.result,
+          provider: { executed: true },
+        }),
+      )
       await page.waitForTimeout(delay)
     }
 
@@ -212,106 +221,53 @@ async function sampleExpansion(page: Page) {
   )
 }
 
-function turn(index: number, target: boolean, status: "running" | "completed" = "completed"): Message[] {
+function turn(index: number, target: boolean, status: "running" | "completed" = "completed"): TimelineMessage[] {
   const userID = id("msg_user", index)
   const assistantID = id("msg_assistant", index)
   return [
-    {
-      info: {
-        id: userID,
-        sessionID,
-        role: "user",
-        time: { created: 1700000000000 + index * 10_000 },
-        summary: { diffs: [] },
-        agent: "build",
-        model,
-      },
-      parts: [{ id: id("prt_user", index), sessionID, messageID: userID, type: "text", text: `User message ${index}` }],
-    },
-    {
-      info: {
-        id: assistantID,
-        sessionID,
-        role: "assistant",
-        time: { created: 1700000000000 + index * 10_000 + 1_000, completed: 1700000000000 + index * 10_000 + 2_000 },
-        parentID: userID,
-        modelID: model.modelID,
-        providerID: model.providerID,
-        mode: "build",
-        agent: "build",
-        path: { cwd: directory, root: directory },
-        cost: 0.01,
-        tokens: { input: 100, output: 200, reasoning: 0, cache: { read: 0, write: 0 } },
-        variant: "max",
-        finish: "stop",
-      },
-      parts: target
+    userMessage([userText(`User message ${index}`, { id: id("prt_user", index) })], {
+      id: userID,
+      created: 1700000000000 + index * 10_000,
+    }),
+    assistantMessage(
+      target
         ? [
             contextTool(
               contextIDs[0]!,
-              assistantID,
               "read",
               { filePath: "src/recent-a.ts", offset: 0, limit: 120 },
               status,
             ),
-            contextTool(contextIDs[1]!, assistantID, "glob", { path: directory, pattern: "**/*.ts" }, status),
+            contextTool(contextIDs[1]!, "glob", { path: directory, pattern: "**/*.ts" }, status),
             contextTool(
               contextIDs[2]!,
-              assistantID,
               "grep",
               { path: directory, pattern: "Explored", include: "*.ts" },
               status,
             ),
-            contextTool(contextIDs[3]!, assistantID, "list", { path: "src" }, status),
-            {
-              id: followingTextID,
-              sessionID,
-              messageID: assistantID,
-              type: "text",
-              text: "This assistant text is immediately after the explored context group.",
-            },
+            contextTool(contextIDs[3]!, "list", { path: "src" }, status),
+            textPart(followingTextID, "This assistant text is immediately after the explored context group."),
           ]
-        : [
-            {
-              id: id("prt_text", index),
-              sessionID,
-              messageID: assistantID,
-              type: "text",
-              text: `Assistant filler ${index}. ${"filler ".repeat(60)}`,
-            },
-          ],
-    },
+        : [textPart(id("prt_text", index), `Assistant filler ${index}. ${"filler ".repeat(60)}`)],
+      { id: assistantID, created: 1700000000000 + index * 10_000 + 1_000 },
+    ),
   ]
 }
 
 function contextTool(
   partID: string,
-  messageID: string,
   tool: string,
   input: Record<string, unknown>,
   status: "running" | "completed" = "completed",
 ) {
-  return {
-    id: partID,
-    sessionID,
-    messageID,
-    type: "tool",
-    callID: `call_${partID}`,
-    tool,
-    state: {
-      status,
-      input,
-      output: `Completed ${tool}.\n${"detail line\n".repeat(8)}`,
-      title: input.filePath || input.path || input.pattern || "completed",
-      metadata: {},
-      time: { start: 1700000000000, end: 1700000000100 },
-    },
-  }
+  const title = String(input.filePath || input.path || input.pattern || "completed")
+  if (status === "running") return toolPart(partID, tool, status, input, { title })
+  return toolPart(partID, tool, status, input, { title, output: `Completed ${tool}.\n${"detail line\n".repeat(8)}` })
 }
 
 async function mockServer(
   page: Page,
-  events: { directory: string; payload: Record<string, unknown> }[] = [],
+  events: TimelineEvent[] = [],
   fixtureMessages = messages,
 ) {
   await mockOpenCodeServer(page, {
@@ -319,8 +275,8 @@ async function mockServer(
     project: project(),
     provider: provider(),
     sessions: [session()],
-    pageMessages: () => ({ items: fixtureMessages }),
-    events: () => events.splice(0, 1),
+    currentPageMessages: () => ({ items: fixtureMessages.toReversed(), throughSeq: 0 }),
+    currentEvents: () => events.splice(0, 1),
     eventRetry: 50,
   })
 }

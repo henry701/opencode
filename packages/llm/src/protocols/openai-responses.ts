@@ -24,6 +24,7 @@ import { OpenAIOptions } from "./utils/openai-options"
 import { Lifecycle } from "./utils/lifecycle"
 import { ToolSchemaProjection } from "./utils/tool-schema"
 import { ToolStream } from "./utils/tool-stream"
+import { PreparedContext } from "./utils/prepared-context"
 
 const ADAPTER = "openai-responses"
 export const DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -961,6 +962,18 @@ export const protocol = Protocol.make({
   body: {
     schema: OpenAIResponsesBody,
     from: fromRequest,
+    context: (body) =>
+      PreparedContext.make(
+        [
+          ...(body.instructions ? [body.instructions] : []),
+          ...body.input.flatMap((item) => ("role" in item && item.role === "system" ? [item.content] : [])),
+        ],
+        (body.tools ?? []).map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.parameters,
+        })),
+      ),
   },
   stream: {
     event: Protocol.jsonEvent(OpenAIResponsesEvent),

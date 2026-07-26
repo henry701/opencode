@@ -2,6 +2,8 @@ import { describe, expect } from "bun:test"
 import { DateTime, Effect, Fiber, Layer, Stream } from "effect"
 import { eq } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
+import { AgentV2 } from "@opencode-ai/core/agent"
+import { CommandV2 } from "@opencode-ai/core/command"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -18,11 +20,18 @@ import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
+import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
+import { ModelV2 } from "@opencode-ai/core/model"
+import { ProviderV2 } from "@opencode-ai/core/provider"
+import { Config } from "@opencode-ai/core/config"
+import { SessionInputPayload } from "@opencode-ai/schema/session-input-payload"
 import { testEffect } from "./lib/effect"
 
 const executionCalls: SessionV2.ID[] = []
 const interruptCalls: SessionV2.ID[] = []
 const wakeCalls: SessionV2.ID[] = []
+const pauseQueueDrainCalls: SessionV2.ID[] = []
+const resumeQueueDrainCalls: SessionV2.ID[] = []
 const activeSessions = new Set<SessionV2.ID>()
 const execution = Layer.succeed(
   SessionExecution.Service,
@@ -40,12 +49,37 @@ const execution = Layer.succeed(
       Effect.sync(() => {
         wakeCalls.push(sessionID)
       }),
+    pauseQueueDrain: (sessionID) =>
+      Effect.sync(() => {
+        pauseQueueDrainCalls.push(sessionID)
+      }),
+    resumeQueueDrain: (sessionID) =>
+      Effect.sync(() => {
+        resumeQueueDrainCalls.push(sessionID)
+      }),
+    queueDrainPaused: () => Effect.succeed(false),
+  }),
+)
+const config = Layer.succeed(
+  Config.Service,
+  Config.Service.of({
+    entries: () => Effect.succeed([]),
   }),
 )
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SessionStore.node, SessionV2.node]),
-    [[SessionExecution.node, execution]],
+    LayerNode.group([
+      Database.node,
+      EventV2.node,
+      LocationServiceMap.node,
+      SessionProjector.node,
+      SessionStore.node,
+      SessionV2.node,
+    ]),
+    [
+      [SessionExecution.node, execution],
+      [Config.node, config],
+    ],
   ),
 )
 const sessionID = SessionV2.ID.make("ses_prompt_test")
@@ -140,6 +174,30 @@ describe("SessionV2.prompt", () => {
     }),
   )
 
+  it.effect("records shell commands and output in current Session history", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      yield* db
+        .update(SessionTable)
+        .set({ directory: process.cwd() })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      const session = yield* SessionV2.Service
+
+      yield* session.shell({ sessionID, command: "printf current-shell-output" })
+
+      expect(yield* session.messages({ sessionID, order: "asc" })).toMatchObject([
+        {
+          type: "shell",
+          command: "printf current-shell-output",
+          output: "current-shell-output",
+        },
+      ])
+    }),
+  )
+
   it.effect("durably admits one user message before transcript promotion", () =>
     Effect.gen(function* () {
       yield* setup
@@ -159,6 +217,38 @@ describe("SessionV2.prompt", () => {
         prompt: { text: "Fix the failing tests" },
         delivery: "steer",
       })
+    }),
+  )
+
+  it.effect("durably preserves the complete payload for a normal prompt", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const payload = SessionInputPayload.Payload.make({
+        version: 1,
+        agent: "reviewer",
+        model: {
+          providerID: SessionInputPayload.ProviderID.make("test"),
+          modelID: SessionInputPayload.ModelID.make("model"),
+          variant: SessionInputPayload.VariantID.make("careful"),
+        },
+        tools: { write: false },
+        system: "Review only",
+        format: { type: "json_schema", schema: { type: "object" }, retryCount: 1 },
+        permissions: [{ permission: "read", pattern: "*", action: "allow" }],
+        parts: [
+          { type: "text", text: "Inspect this" },
+          { type: "agent", name: "reviewer" },
+        ],
+      })
+
+      const message = yield* session.prompt({ sessionID, payload, resume: false })
+
+      expect(message).toMatchObject({
+        prompt: { text: "Inspect this", agents: [{ name: "reviewer" }] },
+        payload,
+      })
+      expect(yield* admitted(message.id)).toMatchObject({ payload })
     }),
   )
 
@@ -579,6 +669,310 @@ describe("SessionV2.prompt", () => {
 
       expect(executionCalls).toEqual([])
       expect(wakeCalls).toEqual([])
+    }),
+  )
+})
+
+describe("SessionV2.command", () => {
+  const payload = SessionInputPayload.Payload.make({
+    version: 1,
+    agent: "build",
+    model: {
+      providerID: SessionInputPayload.ProviderID.make("input"),
+      modelID: SessionInputPayload.ModelID.make("input-model"),
+      variant: SessionInputPayload.VariantID.make("input-variant"),
+    },
+    parts: [{ type: "text", text: "Discarded command text" }],
+  })
+
+  it.effect("reconciles exact retries before shell interpolation and emits one execution event", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      yield* db
+        .update(SessionTable)
+        .set({ directory: process.cwd() })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      const session = yield* SessionV2.Service
+      const location = (yield* session.get(sessionID)).location
+      const locations = yield* LocationServiceMap.Service
+      const command = yield* CommandV2.Service.pipe(Effect.provide(locations.get(location)))
+      const agents = yield* AgentV2.Service.pipe(Effect.provide(locations.get(location)))
+      yield* agents.transform((draft) => draft.update(AgentV2.ID.make("build"), () => undefined))
+      const sideEffect = `/tmp/opencode-command-retry-${crypto.randomUUID()}`
+      yield* command.transform((draft) =>
+        draft.update("retry-safe", (item) => {
+          item.template = `!` + "`" + `printf x >> '${sideEffect}'; printf expanded` + "`"
+        }),
+      )
+      const id = SessionMessage.ID.create()
+
+      const first = yield* session.command({
+        id,
+        sessionID,
+        name: "retry-safe",
+        arguments: "",
+        payload,
+        resume: false,
+      })
+      const second = yield* session.command({
+        id,
+        sessionID,
+        name: "retry-safe",
+        arguments: "",
+        payload,
+        resume: false,
+      })
+      const events = yield* EventV2.Service
+      yield* SessionInput.promoteSteers(db, events, sessionID, Number.MAX_SAFE_INTEGER)
+      yield* db.delete(SessionInputTable).where(eq(SessionInputTable.id, id)).run().pipe(Effect.orDie)
+      const historical = yield* session.command({
+        id,
+        sessionID,
+        name: "retry-safe",
+        arguments: "",
+        payload,
+        resume: false,
+      })
+      const conflict = yield* session
+        .command({
+          id,
+          sessionID,
+          name: "retry-safe",
+          arguments: "different",
+          payload,
+          resume: false,
+        })
+        .pipe(Effect.flip, Effect.orDie)
+
+      expect(second).toEqual(first)
+      expect(historical).toMatchObject({ id, payload: first.payload, promotedSeq: expect.any(Number) })
+      expect(conflict._tag).toBe("Session.PromptConflictError")
+      expect(yield* Effect.promise(() => Bun.file(sideEffect).text())).toBe("x")
+      expect(yield* eventCount("session.next.command.executed.1")).toBe(1)
+      yield* Effect.promise(() => Bun.file(sideEffect).delete())
+    }),
+  )
+
+  it.effect("applies the before hook, deduplicates references, and preserves the parent subtask envelope", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      yield* db
+        .update(SessionTable)
+        .set({ directory: process.cwd() })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      const session = yield* SessionV2.Service
+      const location = (yield* session.get(sessionID)).location
+      const locations = yield* LocationServiceMap.Service
+      const command = yield* CommandV2.Service.pipe(Effect.provide(locations.get(location)))
+      const agents = yield* AgentV2.Service.pipe(Effect.provide(locations.get(location)))
+      yield* agents.transform((draft) => {
+        draft.update(AgentV2.ID.make("build"), () => undefined)
+        draft.update(AgentV2.ID.make("review"), (agent) => {
+          agent.mode = "subagent"
+          agent.model = {
+            providerID: ProviderV2.ID.make("agent"),
+            id: ModelV2.ID.make("agent-model"),
+            variant: ModelV2.VariantID.make("agent-variant"),
+          }
+        })
+      })
+      yield* command.transform((draft) =>
+        draft.update("review", (item) => {
+          item.template = "Review $ARGUMENTS"
+          item.agent = "review"
+          item.description = "Review changes"
+        }),
+      )
+      let hookInput: CommandV2.BeforeInput | undefined
+      yield* command.execute.before((input, output) => {
+        hookInput = input
+        output.parts.push({ type: "agent", name: "hook-added" })
+      })
+
+      const admitted = yield* session.command({
+        sessionID,
+        name: "review",
+        arguments: "carefully",
+        payload,
+        resume: false,
+      })
+
+      expect(hookInput).toEqual({ command: "review", sessionID, arguments: "carefully" })
+      expect(admitted.payload).toMatchObject({
+        agent: payload.agent,
+        model: payload.model,
+      })
+      expect(admitted.payload?.parts[0]).toMatchObject({
+        type: "subtask",
+        agent: "review",
+        description: "Review changes",
+        command: "review",
+        prompt: "Review carefully",
+        model: {
+          providerID: "agent",
+          modelID: "agent-model",
+          variant: "agent-variant",
+        },
+      })
+      expect(admitted.payload?.parts[1]).toMatchObject({ type: "agent", name: "hook-added" })
+    }),
+  )
+
+  it.effect("reports typed command and agent lookup failures", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      yield* db
+        .update(SessionTable)
+        .set({ directory: process.cwd() })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      const session = yield* SessionV2.Service
+      expect(
+        (
+          yield* session
+            .command({
+              sessionID,
+              name: "missing",
+              arguments: "",
+              payload,
+              resume: false,
+            })
+            .pipe(Effect.flip, Effect.orDie)
+        )._tag,
+      ).toBe("Command.NotFoundError")
+
+      const location = (yield* session.get(sessionID)).location
+      const locations = yield* LocationServiceMap.Service
+      const command = yield* CommandV2.Service.pipe(Effect.provide(locations.get(location)))
+      yield* command.transform((draft) =>
+        draft.update("missing-agent", (item) => {
+          item.template = "Run"
+          item.agent = "does-not-exist"
+        }),
+      )
+      expect(
+        (
+          yield* session
+            .command({
+              sessionID,
+              name: "missing-agent",
+              arguments: "",
+              payload,
+              resume: false,
+            })
+            .pipe(Effect.flip, Effect.orDie)
+        )._tag,
+      ).toBe("Agent.NotFoundError")
+    }),
+  )
+})
+
+describe("SessionV2.queue", () => {
+  const payload = SessionInputPayload.Payload.make({
+    version: 1,
+    agent: "build",
+    model: {
+      providerID: SessionInputPayload.ProviderID.make("anthropic"),
+      modelID: SessionInputPayload.ModelID.make("claude-sonnet"),
+      variant: SessionInputPayload.VariantID.make("thinking"),
+    },
+    tools: { bash: true, write: false },
+    system: "Keep the response concise.",
+    format: {
+      type: "json_schema",
+      schema: { type: "object", properties: { answer: { type: "string" } } },
+      retryCount: 4,
+    },
+    permissions: [{ permission: "bash", pattern: "git *", action: "allow" }],
+    parts: [
+      { type: "text", text: "First" },
+      { type: "agent", name: "review", source: { value: "@review", start: 0, end: 7 } },
+      {
+        type: "subtask",
+        prompt: "Check the parser",
+        description: "Parser review",
+        agent: "review",
+        model: {
+          providerID: SessionInputPayload.ProviderID.make("openai"),
+          modelID: SessionInputPayload.ModelID.make("gpt-5"),
+        },
+        command: "review",
+      },
+    ],
+  })
+
+  it.effect("persists, revises, expedites, and tombstones queued payloads durably", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      wakeCalls.length = 0
+
+      const first = yield* session.queue.enqueue({ sessionID, payload })
+      const second = yield* session.queue.enqueue({
+        sessionID,
+        payload: SessionInputPayload.Payload.make({
+          ...payload,
+          parts: [{ type: "text", text: "Second" }],
+        }),
+      })
+
+      expect(wakeCalls).toEqual([])
+      expect((yield* session.queue.list(sessionID)).map((item) => [item.id, item.position])).toEqual([
+        [first.id, 0],
+        [second.id, 1],
+      ])
+      expect((yield* session.queue.get({ sessionID, messageID: first.id })).payload).toEqual(payload)
+
+      const revised = SessionInputPayload.Payload.make({
+        ...payload,
+        parts: [{ type: "text", text: "First edited" }],
+      })
+      yield* session.queue.update({ sessionID, messageID: first.id, payload: revised })
+      const sent = yield* session.queue.send({ sessionID, messageID: first.id })
+      expect(sent.delivery).toBe("steer")
+      expect(sent.payload).toEqual(revised)
+      expect(wakeCalls).toEqual([sessionID])
+
+      yield* session.queue.remove({ sessionID, messageID: second.id })
+      expect(yield* session.queue.list(sessionID)).toEqual([])
+      expect(yield* SessionInput.find((yield* Database.Service).db, second.id)).toMatchObject({
+        id: second.id,
+        discardedSeq: expect.any(Number),
+      })
+      expect(
+        (yield* session.history({ sessionID, limit: 20 })).events.map((event) => event.type),
+      ).toEqual([
+        "session.next.prompt.admitted",
+        "session.next.prompt.admitted",
+        "session.next.prompt.revised",
+        "session.next.prompt.expedited",
+        "session.next.prompt.discarded",
+      ])
+    }),
+  )
+
+  it.effect("delegates queue drain holds to process-global execution", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      pauseQueueDrainCalls.length = 0
+      resumeQueueDrainCalls.length = 0
+
+      yield* session.queue.pauseDrain(sessionID)
+      yield* session.queue.pauseDrain(sessionID)
+      yield* session.queue.resumeDrain(sessionID)
+      yield* session.queue.resumeDrain(sessionID)
+
+      expect(pauseQueueDrainCalls).toEqual([sessionID, sessionID])
+      expect(resumeQueueDrainCalls).toEqual([sessionID, sessionID])
     }),
   )
 })

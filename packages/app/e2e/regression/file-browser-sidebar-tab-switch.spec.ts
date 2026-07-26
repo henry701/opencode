@@ -119,7 +119,7 @@ async function setup(page: Page) {
       }))
     },
     fileContent: (path) => ({ type: "text", content: `contents:${path}` }),
-    pageMessages: () => ({ items: [] }),
+    currentPageMessages: () => ({ items: [], throughSeq: 0 }),
   })
 
   await page.addInitScript(

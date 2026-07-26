@@ -36,9 +36,22 @@ import { runScenario } from "./runner"
 import { disposeApps } from "./backend"
 import { runtime } from "./runtime"
 import { type Scenario } from "./types"
+import { SessionInputPayload } from "@opencode-ai/schema/session-input-payload"
 
 function cursor(input: Record<string, unknown>) {
   return Buffer.from(JSON.stringify(input)).toString("base64url")
+}
+
+function currentPayload(text: string) {
+  return SessionInputPayload.Payload.make({
+    version: 1,
+    agent: "build",
+    model: {
+      providerID: SessionInputPayload.ProviderID.make("opencode"),
+      modelID: SessionInputPayload.ModelID.make("big-pickle"),
+    },
+    parts: [{ type: "text", text }],
+  })
 }
 
 function data(validate: (value: any) => void) {
@@ -666,6 +679,65 @@ const scenarios: Scenario[] = [
   http.protected.get("/api/agent", "v2.agent.list").json(200, locationData(array)),
   http.protected.get("/api/model", "v2.model.list").json(200, locationData(array)),
   http.protected.get("/api/provider", "v2.provider.list").json(200, locationData(array)),
+  http.protected.get("/api/mcp", "v2.mcp.status").json(200, locationData(object)),
+  http.protected
+    .post("/api/mcp", "v2.mcp.add")
+    .mutating()
+    .at((ctx) => ({
+      path: "/api/mcp",
+      headers: ctx.headers(),
+      body: { name: "httpapi-v2-disabled", server: { type: "local", command: ["unused"], disabled: true } },
+    }))
+    .json(200, locationData(object), "status"),
+  http.protected
+    .post("/api/mcp/{name}/auth", "v2.mcp.auth.start")
+    .at((ctx) => ({
+      path: route("/api/mcp/{name}/auth", { name: "httpapi-missing" }),
+      headers: ctx.headers(),
+    }))
+    .json(400, object, "status"),
+  http.protected
+    .post("/api/mcp/{name}/auth/callback", "v2.mcp.auth.callback")
+    .at((ctx) => ({
+      path: route("/api/mcp/{name}/auth/callback", { name: "httpapi-missing" }),
+      headers: ctx.headers(),
+      body: { code: "code" },
+    }))
+    .json(400, object, "status"),
+  http.protected
+    .delete("/api/mcp/{name}/auth", "v2.mcp.auth.remove")
+    .mutating()
+    .at((ctx) => ({
+      path: route("/api/mcp/{name}/auth", { name: "httpapi-missing" }),
+      headers: ctx.headers(),
+    }))
+    .json(400, object, "status"),
+  http.protected
+    .post("/api/mcp/{name}/connect", "v2.mcp.connect")
+    .at((ctx) => ({
+      path: route("/api/mcp/{name}/connect", { name: "httpapi-missing" }),
+      headers: ctx.headers(),
+    }))
+    .json(400, object, "status"),
+  http.protected
+    .post("/api/mcp/{name}/disconnect", "v2.mcp.disconnect")
+    .at((ctx) => ({
+      path: route("/api/mcp/{name}/disconnect", { name: "httpapi-missing" }),
+      headers: ctx.headers(),
+    }))
+    .json(400, object, "status"),
+  http.protected.get("/api/mcp/resource", "v2.mcp.resources").json(200, locationData(array)),
+  http.protected
+    .get("/api/mcp/resource-template", "v2.mcp.resourceTemplates")
+    .json(200, locationData(array)),
+  http.protected
+    .post("/api/mcp/resource/read", "v2.mcp.resourceRead")
+    .at((ctx) => ({
+      path: "/api/mcp/resource/read",
+      headers: ctx.headers(),
+      body: { server: "httpapi-missing", uri: "resource://missing" },
+    }))
+    .json(400, object, "status"),
   http.protected.get("/api/integration", "v2.integration.list").json(200, locationData(array)),
   http.protected
     .get("/api/integration/{integrationID}", "v2.integration.get")
@@ -982,6 +1054,67 @@ const scenarios: Scenario[] = [
     }))
     .json(200, data(object)),
   http.protected
+    .patch("/api/session/{sessionID}", "v2.session.update")
+    .mutating()
+    .seeded((ctx) => ctx.session({ title: "Current before rename" }))
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: { title: "Current after rename" },
+    }))
+    .json(
+      200,
+      data((value) => {
+        object(value)
+        check(value.title === "Current after rename", "current session update should return the new title")
+      }),
+      "status",
+    ),
+  http.protected
+    .post("/api/session/{sessionID}/fork", "v2.session.fork")
+    .mutating()
+    .seeded((ctx) => ctx.session({ title: "Current fork source" }))
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/fork", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .json(
+      200,
+      data((value) => {
+        object(value)
+        check(typeof value.id === "string", "current session fork should return a Session")
+        check(value.parentID !== undefined, "current session fork should retain the source as parent")
+      }),
+      "status",
+    ),
+  http.protected
+    .post("/api/session/{sessionID}/share", "v2.session.share")
+    .mutating()
+    .inProject({ config: { share: "disabled" } })
+    .seeded((ctx) => ctx.session({ title: "Current share" }))
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/share", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+    }))
+    .json(
+      503,
+      (value) => {
+        object(value)
+        check(value._tag === "ServiceUnavailableError", "current share should fail closed without a remote service")
+      },
+      "status",
+    ),
+  http.protected
+    .delete("/api/session/{sessionID}/share", "v2.session.unshare")
+    .mutating()
+    .seeded((ctx) => ctx.session({ title: "Current unshare" }))
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/share", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+    }))
+    .json(200, data(object), "status"),
+  http.protected
     .post("/api/session/{sessionID}/agent", "v2.session.switchAgent")
     .seeded((ctx) => ctx.session({ title: "Switch agent" }))
     .at((ctx) => ({
@@ -997,6 +1130,212 @@ const scenarios: Scenario[] = [
       path: route("/api/session/{sessionID}/model", { sessionID: ctx.state.id }),
       headers: { ...ctx.headers(), "content-type": "application/json" },
       body: { model: { providerID: "opencode", id: "big-pickle" } },
+    }))
+    .status(204, undefined, "none"),
+  http.protected
+    .post("/api/session/{sessionID}/command", "v2.session.command")
+    .mutating()
+    .inProject({
+      config: {
+        command: {
+          "httpapi-current": {
+            template: "Expanded current command: $ARGUMENTS",
+            description: "Exercise the current command endpoint",
+          },
+        },
+      },
+    })
+    .seeded((ctx) => ctx.session({ title: "Current command" }))
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/command", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: {
+        name: "httpapi-current",
+        arguments: "argument",
+        payload: currentPayload("original command payload"),
+        resume: false,
+      },
+    }))
+    .json(
+      200,
+      data((value) => {
+        object(value)
+        check(value.delivery === "steer", "current command should admit steer delivery")
+        check(isRecord(value.payload), "current command should retain a current input payload")
+      }),
+      "status",
+    ),
+  http.protected
+    .get("/api/session/{sessionID}/queue", "v2.session.queue.list")
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Current queue list" })
+        const queued = yield* ctx.queue(session.id, currentPayload("listed queue item"))
+        return { session, queued }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/queue", { sessionID: ctx.state.session.id }),
+      headers: ctx.headers(),
+    }))
+    .json(
+      200,
+      data((value) => {
+        array(value)
+        check(value.length === 1, "current queue list should return the seeded item")
+      }),
+      "status",
+    ),
+  http.protected
+    .post("/api/session/{sessionID}/queue", "v2.session.queue.enqueue")
+    .mutating()
+    .seeded((ctx) => ctx.session({ title: "Current queue enqueue" }))
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/queue", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: { payload: currentPayload("enqueued over HTTP"), resume: false },
+    }))
+    .json(
+      200,
+      data((value) => {
+        object(value)
+        check(value.position === 0, "first current queue item should have position zero")
+        check(isRecord(value.payload), "current queue enqueue should return its payload")
+      }),
+      "status",
+    ),
+  http.protected
+    .post("/api/session/{sessionID}/queue/drain-pause", "v2.session.queue.drain.pause")
+    .mutating()
+    .seeded((ctx) => ctx.session({ title: "Current queue pause" }))
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/queue/drain-pause", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+    }))
+    .status(204, undefined, "none"),
+  http.protected
+    .post("/api/session/{sessionID}/queue/drain-resume", "v2.session.queue.drain.resume")
+    .mutating()
+    .seeded((ctx) => ctx.session({ title: "Current queue resume" }))
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/queue/drain-resume", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+    }))
+    .status(204, undefined, "none"),
+  http.protected
+    .get("/api/session/{sessionID}/queue/{messageID}", "v2.session.queue.get")
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Current queue get" })
+        const queued = yield* ctx.queue(session.id, currentPayload("get queue item"))
+        return { session, queued }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/queue/{messageID}", {
+        sessionID: ctx.state.session.id,
+        messageID: ctx.state.queued.id,
+      }),
+      headers: ctx.headers(),
+    }))
+    .json(
+      200,
+      data((value) => {
+        object(value)
+        check(value.position === 0, "current queue get should return the queued position")
+      }),
+      "status",
+    ),
+  http.protected
+    .patch("/api/session/{sessionID}/queue/{messageID}", "v2.session.queue.update")
+    .mutating()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Current queue update" })
+        const queued = yield* ctx.queue(session.id, currentPayload("before queue update"))
+        return { session, queued }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/queue/{messageID}", {
+        sessionID: ctx.state.session.id,
+        messageID: ctx.state.queued.id,
+      }),
+      headers: ctx.headers(),
+      body: { payload: currentPayload("after queue update") },
+    }))
+    .status(
+      204,
+      (ctx) =>
+        Effect.gen(function* () {
+          const [queued] = yield* ctx.queueList(ctx.state.session.id)
+          check(queued?.payload.parts[0]?.type === "text", "updated queue item should retain a text part")
+          check(queued?.payload.parts[0]?.text === "after queue update", "queue update should persist the new payload")
+        }),
+      "none",
+    ),
+  http.protected
+    .delete("/api/session/{sessionID}/queue/{messageID}", "v2.session.queue.remove")
+    .mutating()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Current queue remove" })
+        const queued = yield* ctx.queue(session.id, currentPayload("remove queue item"))
+        return { session, queued }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/queue/{messageID}", {
+        sessionID: ctx.state.session.id,
+        messageID: ctx.state.queued.id,
+      }),
+      headers: ctx.headers(),
+    }))
+    .status(
+      204,
+      (ctx) =>
+        ctx.queueList(ctx.state.session.id).pipe(
+          Effect.tap((queued) =>
+            Effect.sync(() => check(queued.length === 0, "queue remove should discard the pending item")),
+          ),
+          Effect.asVoid,
+        ),
+      "none",
+    ),
+  http.protected
+    .post("/api/session/{sessionID}/queue/{messageID}/send", "v2.session.queue.send")
+    .mutating()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Current queue send" })
+        const queued = yield* ctx.queue(session.id, currentPayload("send queue item"))
+        return { session, queued }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/queue/{messageID}/send", {
+        sessionID: ctx.state.session.id,
+        messageID: ctx.state.queued.id,
+      }),
+      headers: ctx.headers(),
+      body: { payload: currentPayload("sent queue item") },
+    }))
+    .json(
+      200,
+      data((value) => {
+        object(value)
+        check(value.delivery === "steer", "queue send should expedite the item as steer delivery")
+      }),
+      "status",
+    ),
+  http.protected
+    .post("/api/session/{sessionID}/shell", "v2.session.shell")
+    .mutating()
+    .seeded((ctx) => ctx.session({ title: "Current shell" }))
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/shell", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: { command: "printf current-shell" },
     }))
     .status(204, undefined, "none"),
   http.protected
@@ -1498,165 +1837,6 @@ const scenarios: Scenario[] = [
         yield* ctx.llmWait(1)
       }),
     ),
-  http.protected
-    .get("/session/{sessionID}/queue", "session.queue.list")
-    .seeded((ctx) =>
-      Effect.gen(function* () {
-        const session = yield* ctx.session({ title: "Queue list session" })
-        const queued = yield* ctx.queue(session.id, { text: "queued list" })
-        return { session, queued }
-      }),
-    )
-    .at((ctx) => ({
-      path: route("/session/{sessionID}/queue", { sessionID: ctx.state.session.id }),
-      headers: ctx.headers(),
-    }))
-    .json(200, (body, ctx) => {
-      array(body)
-      check(
-        body.some((item) => isRecord(item) && item.id === ctx.state.queued.id && item.text === "queued list"),
-        "queue list should include seeded prompt",
-      )
-    }),
-  http.protected
-    .get("/session/{sessionID}/queue/{queueID}", "session.queue.get")
-    .seeded((ctx) =>
-      Effect.gen(function* () {
-        const session = yield* ctx.session({ title: "Queue get session" })
-        const queued = yield* ctx.queue(session.id, { text: "queued detail" })
-        return { session, queued }
-      }),
-    )
-    .at((ctx) => ({
-      path: route("/session/{sessionID}/queue/{queueID}", {
-        sessionID: ctx.state.session.id,
-        queueID: ctx.state.queued.id,
-      }),
-      headers: ctx.headers(),
-    }))
-    .json(200, (body, ctx) => {
-      object(body)
-      check(body.id === ctx.state.queued.id, "queue get should return requested item")
-      check(
-        Array.isArray(body.parts) && body.parts.some((part) => isRecord(part) && part.text === "queued detail"),
-        "queue get should return full queued prompt parts",
-      )
-    }),
-  http.protected
-    .post("/session/{sessionID}/queue", "session.queue.enqueue")
-    .mutating()
-    .seeded((ctx) => ctx.session({ title: "Queue enqueue session" }))
-    .at((ctx) => ({
-      path: route("/session/{sessionID}/queue", { sessionID: ctx.state.id }),
-      headers: ctx.headers(),
-      body: {
-        agent: "build",
-        model: { providerID: "openai", modelID: "gpt-4" },
-        parts: [{ type: "text", text: "queued enqueue" }],
-      },
-    }))
-    .json(200, (body) => {
-      object(body)
-      check(typeof body.id === "string", "queue enqueue should return queue id")
-      check(body.text === "queued enqueue", "queue enqueue should return queued preview text")
-    }),
-  http.protected
-    .patch("/session/{sessionID}/queue/{queueID}", "session.queue.update")
-    .mutating()
-    .seeded((ctx) =>
-      Effect.gen(function* () {
-        const session = yield* ctx.session({ title: "Queue update session" })
-        const queued = yield* ctx.queue(session.id, { text: "queued before" })
-        return { session, queued }
-      }),
-    )
-    .at((ctx) => ({
-      path: route("/session/{sessionID}/queue/{queueID}", {
-        sessionID: ctx.state.session.id,
-        queueID: ctx.state.queued.id,
-      }),
-      headers: ctx.headers(),
-      body: {
-        agent: "build",
-        model: { providerID: "openai", modelID: "gpt-4" },
-        parts: [{ type: "text", text: "queued after" }],
-      },
-    }))
-    .json(200, (body) => {
-      check(body === true, "queue update should return true")
-    }),
-  http.protected
-    .delete("/session/{sessionID}/queue/{queueID}", "session.queue.remove")
-    .mutating()
-    .seeded((ctx) =>
-      Effect.gen(function* () {
-        const session = yield* ctx.session({ title: "Queue remove session" })
-        const queued = yield* ctx.queue(session.id, { text: "queued remove" })
-        return { session, queued }
-      }),
-    )
-    .at((ctx) => ({
-      path: route("/session/{sessionID}/queue/{queueID}", {
-        sessionID: ctx.state.session.id,
-        queueID: ctx.state.queued.id,
-      }),
-      headers: ctx.headers(),
-    }))
-    .json(200, (body) => {
-      check(body === true, "queue remove should return true")
-    }),
-  http.protected
-    .post("/session/{sessionID}/queue/{queueID}/send", "session.queue.send")
-    .preserveDatabase()
-    .withLlm()
-    .seeded((ctx) =>
-      Effect.gen(function* () {
-        const session = yield* ctx.session({ title: "Queue send session" })
-        const queued = yield* ctx.queue(session.id, { text: "queued send" })
-        yield* ctx.llmText("queue sent")
-        yield* ctx.llmText("queue sent")
-        return { session, queued }
-      }),
-    )
-    .at((ctx) => ({
-      path: route("/session/{sessionID}/queue/{queueID}/send", {
-        sessionID: ctx.state.session.id,
-        queueID: ctx.state.queued.id,
-      }),
-      headers: ctx.headers(),
-      body: {
-        agent: "build",
-        model: { providerID: "test", modelID: "test-model" },
-        parts: [{ type: "text", text: "queued send edited" }],
-      },
-    }))
-    .jsonEffect(200, (_body, ctx) =>
-      Effect.gen(function* () {
-        yield* ctx.llmWait(1)
-      }),
-    ),
-  http.protected
-    .post("/session/{sessionID}/queue/drain-pause", "session.queue.drain.pause")
-    .mutating()
-    .seeded((ctx) => ctx.session({ title: "Queue pause session" }))
-    .at((ctx) => ({
-      path: route("/session/{sessionID}/queue/drain-pause", { sessionID: ctx.state.id }),
-      headers: ctx.headers(),
-    }))
-    .json(200, (body) => {
-      check(body === true, "queue drain pause should return true")
-    }),
-  http.protected
-    .post("/session/{sessionID}/queue/drain-resume", "session.queue.drain.resume")
-    .mutating()
-    .seeded((ctx) => ctx.session({ title: "Queue resume session" }))
-    .at((ctx) => ({
-      path: route("/session/{sessionID}/queue/drain-resume", { sessionID: ctx.state.id }),
-      headers: ctx.headers(),
-    }))
-    .json(200, (body) => {
-      check(body === true, "queue drain resume should return true")
-    }),
   http.protected
     .post("/session/{sessionID}/command", "session.command")
     .preserveDatabase()

@@ -311,7 +311,6 @@ function history(count: number): TimelineMessage[] {
         [textPart(`prt_${String(index).padStart(4, "0")}_scroll`, `History ${index}. ${"content ".repeat(30)}`)],
         {
           id: `${prefix}_b_assistant`,
-          parentID: userID,
           created: 1690000001000 + index * 10_000,
         },
       ),

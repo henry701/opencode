@@ -13,7 +13,16 @@
 //         → OpenTUI split-footer renderer writes to terminal
 import type { KeyEvent, Renderable } from "@opentui/core"
 import type { Binding } from "@opentui/keymap"
-import type { OpencodeClient, PermissionRequest, QuestionRequest, ToolPart } from "@opencode-ai/sdk/v2"
+import type {
+  OpenCode,
+  PermissionsReplyInput,
+  QuestionsRejectInput,
+  QuestionsReplyInput,
+  EventsSubscribeOutput,
+  SessionsQueueEnqueueInput,
+  CommandsListOutput,
+} from "@opencode-ai/client"
+import type { OpencodeClient, ToolPart } from "@opencode-ai/sdk/v2"
 import type { TuiConfig } from "@opencode-ai/tui/config"
 
 export type RunFilePart = {
@@ -28,7 +37,7 @@ type PromptInput = Parameters<OpencodeClient["session"]["prompt"]>[0]
 
 export type RunPromptPart = NonNullable<PromptInput["parts"]>[number]
 
-export type RunCommand = NonNullable<Awaited<ReturnType<OpencodeClient["command"]["list"]>>["data"]>[number]
+export type RunCommand = CommandsListOutput["data"][number]
 
 export type RunProvider = NonNullable<Awaited<ReturnType<OpencodeClient["provider"]["list"]>>["data"]>["all"][number]
 
@@ -45,6 +54,7 @@ export type RunPrompt = {
   delivery?: "immediate" | "deferred"
   queued?: boolean
   queueID?: string
+  queuePayload?: SessionsQueueEnqueueInput["payload"]
 }
 
 export type QueuedPromptPreview = {
@@ -70,8 +80,15 @@ type RunResourceMap = NonNullable<Awaited<ReturnType<OpencodeClient["experimenta
 
 export type RunResource = RunResourceMap[string]
 
+export type PermissionRequest = Extract<EventsSubscribeOutput, { type: "permission.v2.asked" }>["data"]
+
+export type QuestionRequest = Extract<EventsSubscribeOutput, { type: "question.v2.asked" }>["data"]
+
+export type QuestionInfo = QuestionRequest["questions"][number]
+
 export type RunInput = {
   sdk: OpencodeClient
+  next: ReturnType<typeof OpenCode.make>
   directory: string
   sessionID: string
   sessionTitle?: string
@@ -298,11 +315,11 @@ export type FooterEvent =
       state: FooterSubagentState
     }
 
-export type PermissionReply = Parameters<OpencodeClient["permission"]["reply"]>[0]
+export type PermissionReply = PermissionsReplyInput
 
-export type QuestionReply = Parameters<OpencodeClient["question"]["reply"]>[0]
+export type QuestionReply = QuestionsReplyInput
 
-export type QuestionReject = Parameters<OpencodeClient["question"]["reject"]>[0]
+export type QuestionReject = QuestionsRejectInput
 
 type FooterBinding = Binding<Renderable, KeyEvent>
 

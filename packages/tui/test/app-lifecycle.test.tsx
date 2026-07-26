@@ -65,6 +65,10 @@ test("app.exit prints the session epilogue after scoped cleanup", async () => {
   const core = await import("@opentui/core")
   mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
   const events = createEventSource()
+  let resolveCurrent!: () => void
+  const currentReady = new Promise<void>((resolve) => {
+    resolveCurrent = resolve
+  })
   const calls = createFetch((url) => {
     if (url.pathname === "/session")
       return json([
@@ -78,6 +82,24 @@ test("app.exit prints the session epilogue after scoped cleanup", async () => {
           time: { created: 0, updated: 0 },
         },
       ])
+    if (url.pathname === "/api/session/dummy") {
+      resolveCurrent()
+      return json({
+        data: {
+          id: "dummy",
+          title: "Demo session",
+          projectID: "project",
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          location: { directory },
+          time: { created: 0, updated: 0 },
+        },
+      })
+    }
+    if (url.pathname === "/api/session/dummy/message")
+      return json({ data: [], throughSeq: 0, cursor: {} })
+    if (url.pathname === "/api/session/dummy/queue") return json({ data: [] })
+    if (url.pathname === "/api/session/active") return json({ data: {} })
   })
   const originalWrite = process.stdout.write.bind(process.stdout)
   let stdout = ""
@@ -113,6 +135,8 @@ test("app.exit prints the session epilogue after scoped cleanup", async () => {
     )
 
     await ready
+    await currentReady
+    await Bun.sleep(50)
     await setup.renderOnce()
     await setup.renderOnce()
     api?.keymap.dispatchCommand("app.exit")

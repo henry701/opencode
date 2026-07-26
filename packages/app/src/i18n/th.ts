@@ -102,6 +102,7 @@ export const dict = {
   "dialog.provider.empty": "ไม่พบผู้ให้บริการ",
   "dialog.provider.group.popular": "ยอดนิยม",
   "dialog.provider.group.other": "อื่น ๆ",
+  "dialog.provider.custom.label": "ผู้ให้บริการแบบกำหนดเองที่เข้ากันได้กับ OpenAI",
   "dialog.provider.tag.recommended": "แนะนำ",
   "dialog.provider.opencode.note": "โมเดลที่คัดสรร รวมถึง Claude, GPT, Gemini และอื่น ๆ",
   "dialog.provider.opencode.tagline": "โมเดลที่เชื่อถือได้และปรับให้เหมาะสม",
@@ -122,6 +123,7 @@ export const dict = {
 
   "dialog.model.unpaid.freeModels.title": "โมเดลฟรีที่จัดหาให้โดย OpenCode",
   "dialog.model.unpaid.addMore.title": "เพิ่มโมเดลเพิ่มเติมจากผู้ให้บริการยอดนิยม",
+  "dialog.model.unpaid.viewMoreProviders": "ดูผู้ให้บริการเพิ่มเติมกว่า 70 ราย",
 
   "dialog.provider.viewAll": "แสดงผู้ให้บริการเพิ่มเติม",
 
@@ -669,6 +671,7 @@ export const dict = {
   "session.new.workspace.triggerLocal": "ในเครื่อง",
   "session.new.workspace.local": "รีโพซิทอรีในเครื่อง",
   "session.new.workspace.existing": "พื้นที่ทำงาน…",
+  "session.new.git.none": "ไม่มี Git",
   "session.new.lastModified": "แก้ไขล่าสุด",
 
   "session.header.search.placeholder": "ค้นหา {{project}}",

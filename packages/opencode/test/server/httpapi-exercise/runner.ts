@@ -1,7 +1,7 @@
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { Cause, Duration, Effect, Layer, Scope } from "effect"
+import { Cause, Duration, Effect, Layer, Schema, Scope } from "effect"
 import { TestLLMServer } from "../../lib/llm-server"
 import type { Config } from "../../../src/config/config"
 
@@ -13,6 +13,11 @@ import { runtime } from "./runtime"
 import type { ActiveScenario, Options, ProjectOptions, Result, Scenario, ScenarioContext, SeededContext } from "./types"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { Database } from "@opencode-ai/core/database/database"
+import { SessionInput } from "@opencode-ai/core/session/input"
+import { SessionMessage } from "@opencode-ai/core/session/message"
+import { SessionInputTable } from "@opencode-ai/core/session/sql"
+import { SessionInputPayload } from "@opencode-ai/schema/session-input-payload"
 
 export function runScenario(options: Options) {
   return (scenario: Scenario) => {
@@ -139,6 +144,33 @@ function withContext<A, E>(
             run(modules.Session.Service.use((svc) => svc.get(sessionID))).pipe(
               Effect.catchCause(() => Effect.succeed(undefined)),
             ),
+          queue: (sessionID, payload) =>
+            run(
+              Effect.gen(function* () {
+                const { db } = yield* Database.Service
+                const id = SessionMessage.ID.create()
+                yield* db
+                  .insert(SessionInputTable)
+                  .values({
+                    id,
+                    session_id: sessionID,
+                    admitted_seq: 0,
+                    prompt: SessionInputPayload.toPrompt(payload),
+                    payload: Schema.encodeSync(SessionInputPayload.Payload)(payload),
+                    delivery: "queue",
+                    time_created: Date.now(),
+                  })
+                  .run()
+                  .pipe(Effect.orDie)
+                const queued = yield* SessionInput.getQueued(db, sessionID, id)
+                if (!queued) return yield* Effect.die("failed to seed current queue item")
+                return queued
+              }),
+            ),
+          queueList: (sessionID) =>
+            run(
+              Database.Service.use(({ db }) => SessionInput.listQueued(db, sessionID)),
+            ),
           project: () =>
             Effect.sync(() => {
               if (!instance) throw new Error("scenario needs a project directory")
@@ -174,20 +206,6 @@ function withContext<A, E>(
               )
               return { info, part }
             }),
-          queue: (sessionID, input) =>
-            run(
-              modules.SessionPromptQueue.Service.use((svc) =>
-                svc.enqueue(sessionID, {
-                  version: 1,
-                  agent: "build",
-                  model: {
-                    providerID: ProviderV2.ID.opencode,
-                    modelID: ModelV2.ID.make("test"),
-                  },
-                  parts: [{ type: "text", text: input?.text ?? "queued" }],
-                }),
-              ),
-            ).pipe(Effect.map((item) => ({ id: item.id, text: input?.text ?? "queued" }))),
           messages: (sessionID) =>
             run(modules.Session.Service.use((svc) => svc.messages({ sessionID }).pipe(Effect.orDie))),
           todos: (sessionID, todos) => run(modules.Todo.Service.use((svc) => svc.update({ sessionID, todos }))),

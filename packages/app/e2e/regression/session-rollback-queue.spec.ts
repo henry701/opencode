@@ -22,66 +22,42 @@ const session = {
 
 const messages = [
   {
-    info: {
-      id: "msg_user_0001",
-      sessionID,
-      role: "user",
-      time: { created: 1700000000000 },
+    id: "msg_user_0001",
+    type: "user" as const,
+    text: "first user prompt",
+    files: [],
+    agents: [],
+    time: { created: 1700000000000 },
+    payload: {
+      version: 1 as const,
       agent: "build",
       model,
+      parts: [{ id: "prt_user_0001", type: "text" as const, text: "first user prompt" }],
     },
-    parts: [
-      {
-        id: "prt_user_0001",
-        sessionID,
-        messageID: "msg_user_0001",
-        type: "text",
-        text: "first user prompt",
-      },
-    ],
   },
   {
-    info: {
-      id: "msg_assistant_0001",
-      sessionID,
-      role: "assistant",
-      parentID: "msg_user_0001",
-      time: { created: 1700000001000, completed: 1700000002000 },
-      agent: "build",
-      providerID: model.providerID,
-      modelID: model.modelID,
-      path: { cwd: directory, root: directory },
-      cost: 0.01,
-      tokens: { input: 10, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
-    },
-    parts: [
-      {
-        id: "prt_assistant_0001",
-        sessionID,
-        messageID: "msg_assistant_0001",
-        type: "text",
-        text: "assistant response",
-      },
-    ],
+    id: "msg_assistant_0001",
+    type: "assistant" as const,
+    time: { created: 1700000001000, completed: 1700000002000 },
+    agent: "build",
+    model: { providerID: model.providerID, id: model.modelID },
+    cost: 0.01,
+    tokens: { input: 10, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+    content: [{ id: "prt_assistant_0001", type: "text" as const, text: "assistant response" }],
   },
   {
-    info: {
-      id: "msg_user_0002",
-      sessionID,
-      role: "user",
-      time: { created: 1700000003000 },
+    id: "msg_user_0002",
+    type: "user" as const,
+    text: "second user prompt",
+    files: [],
+    agents: [],
+    time: { created: 1700000003000 },
+    payload: {
+      version: 1 as const,
       agent: "build",
       model,
+      parts: [{ id: "prt_user_0002", type: "text" as const, text: "second user prompt" }],
     },
-    parts: [
-      {
-        id: "prt_user_0002",
-        sessionID,
-        messageID: "msg_user_0002",
-        type: "text",
-        text: "second user prompt",
-      },
-    ],
   },
 ]
 
@@ -109,8 +85,8 @@ test("preserves visible queued follow-ups when rolling back a message", async ({
     },
     sessions: [session],
     status: { [sessionID]: { type: "busy" } },
-    queue: { [sessionID]: [{ id: "pqu_web_rollback", text: queuedText }] },
-    pageMessages: () => ({ items: messages }),
+    queue: { [sessionID]: [{ id: "msg_queue_web_rollback", text: queuedText }] },
+    currentPageMessages: () => ({ items: messages.toReversed(), throughSeq: 0 }),
   })
 
   await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
@@ -118,7 +94,7 @@ test("preserves visible queued follow-ups when rolling back a message", async ({
   await expectAppVisible(page.locator('[data-component="session-followup-dock"]'))
   await expect(page.locator('[data-component="session-followup-dock"]')).toContainText(queuedText)
 
-  await page.getByRole("button", { name: "Revert message" }).first().click({ force: true })
+  await page.getByRole("button", { name: "Revert message", exact: true }).first().click({ force: true })
 
   await expectAppVisible(page.locator('[data-component="session-revert-dock"]'))
   await expect(page.locator('[data-component="session-followup-dock"]')).toContainText(queuedText)

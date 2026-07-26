@@ -3,10 +3,9 @@ import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import path from "path"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import os from "os"
-import { SessionID, MessageID, PartID, QueueItemID } from "./schema"
+import { SessionID, MessageID, PartID } from "./schema"
 import { MessageV2 } from "./message-v2"
 import { SessionRevert } from "./revert"
-import { SessionPromptQueue } from "./prompt-queue"
 import { Session } from "./session"
 import { Agent } from "../agent/agent"
 import { Provider } from "@/provider/provider"
@@ -57,11 +56,6 @@ import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
-import {
-  materializeQueuedItem,
-  queueDataFromMessage,
-  type QueueItem,
-} from "@/queue/prompt-queue"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -112,25 +106,11 @@ export interface Interface {
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
-  readonly queueEnqueue: (input: PromptInput) => Effect.Effect<QueueItem, Image.Error>
-  readonly queueUpdate: (input: PromptInput & { queueID: QueueItemID }) => Effect.Effect<boolean, Image.Error>
-  readonly queueSend: (input: { sessionID: SessionID; queueID: QueueItemID; prompt?: PromptInput }) => Effect.Effect<
-    SessionV1.WithParts,
-    Image.Error | QueueItemNotFoundError | Session.BusyError
-  >
-  readonly resumeQueueDrain: (sessionID: SessionID) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionPrompt") {}
 
-export class QueueItemNotFoundError extends Schema.TaggedErrorClass<QueueItemNotFoundError>()(
-  "SessionPrompt.QueueItemNotFound",
-  {
-    message: Schema.String,
-  },
-) {}
-
-export const layer = Layer.effect(
+const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const status = yield* SessionStatus.Service
@@ -153,7 +133,6 @@ export const layer = Layer.effect(
     const scope = yield* Scope.Scope
     const instruction = yield* Instruction.Service
     const state = yield* SessionRunState.Service
-    const promptQueue = yield* SessionPromptQueue.Service
     const revert = yield* SessionRevert.Service
     const summary = yield* SessionSummary.Service
     const sys = yield* SystemPrompt.Service
@@ -653,10 +632,7 @@ export const layer = Layer.effect(
       return yield* provider.defaultModel().pipe(Effect.orDie)
     })
 
-    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (
-      input: PromptInput,
-      opts?: { persist?: boolean },
-    ) {
+    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: PromptInput) {
       const agentName = input.agent
       const ag = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
       if (!ag) {
@@ -691,7 +667,6 @@ export const layer = Layer.effect(
         },
         system: input.system,
         format: input.format,
-        ...(input.delivery === "deferred" ? { delivery: "deferred" as const } : {}),
       }
 
       const current = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
@@ -1068,10 +1043,8 @@ export const layer = Layer.effect(
         })
       }
 
-      if (opts?.persist !== false) {
-        yield* sessions.updateMessage(info)
-        for (const part of parts) yield* sessions.updatePart(part)
-      }
+      yield* sessions.updateMessage(info)
+      for (const part of parts) yield* sessions.updatePart(part)
       return { info, parts }
     }, Effect.scoped)
 
@@ -1096,67 +1069,6 @@ export const layer = Layer.effect(
       return yield* loop({ sessionID: input.sessionID })
     })
 
-    const queueEnqueue = Effect.fn("SessionPrompt.queueEnqueue")(function* (input: PromptInput) {
-      const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
-      yield* revert.cleanup(session)
-      const message = yield* createUserMessage(input, { persist: false })
-      yield* sessions.touch(input.sessionID)
-      return yield* promptQueue.enqueue(input.sessionID, queueDataFromMessage(message))
-    })
-
-    const queueUpdate = Effect.fn("SessionPrompt.queueUpdate")(function* (input: PromptInput & { queueID: QueueItemID }) {
-      const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
-      yield* revert.cleanup(session)
-      const message = yield* createUserMessage(input, { persist: false })
-      return yield* promptQueue.update(input.sessionID, input.queueID, queueDataFromMessage(message))
-    })
-
-    const persistQueuedItem = Effect.fn("SessionPrompt.persistQueuedItem")(function* (item: QueueItem) {
-      const message = materializeQueuedItem(item)
-      const exit = yield* Effect.gen(function* () {
-        yield* sessions.updateMessage(message.info)
-        for (const part of message.parts) yield* sessions.updatePart(part)
-      }).pipe(Effect.exit)
-      if (Exit.isSuccess(exit)) return
-      yield* promptQueue.enqueue(item.sessionID, item.data).pipe(Effect.ignore)
-      return yield* Effect.failCause(exit.cause)
-    })
-
-    const resumeQueueDrain = Effect.fn("SessionPrompt.resumeQueueDrain")(function* (sessionID: SessionID) {
-      yield* promptQueue.resumeDrain(sessionID)
-      const pending = yield* promptQueue.peek(sessionID)
-      if (!pending) return
-      yield* loop({ sessionID }).pipe(Effect.ignore, Effect.forkIn(scope))
-    })
-
-    const sendQueuedNow = Effect.fn("SessionPrompt.sendQueuedNow")(function* (
-      sessionID: SessionID,
-      queueID: QueueItemID,
-    ) {
-      const items = yield* promptQueue.list(sessionID)
-      const item = items.find((entry) => entry.id === queueID)
-      if (!item) return yield* new QueueItemNotFoundError({ message: "Queued message not found" })
-      const removed = yield* promptQueue.remove(sessionID, queueID)
-      if (!removed) return yield* new QueueItemNotFoundError({ message: "Queued message not found" })
-      yield* persistQueuedItem(item)
-      return yield* loop({ sessionID })
-    })
-
-    const queueSend = Effect.fn("SessionPrompt.queueSend")(function* (input: {
-      sessionID: SessionID
-      queueID: QueueItemID
-      prompt?: PromptInput
-    }) {
-      if (input.prompt) {
-        const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
-        yield* revert.cleanup(session)
-        const message = yield* createUserMessage({ ...input.prompt, sessionID: input.sessionID }, { persist: false })
-        const ok = yield* promptQueue.update(input.sessionID, input.queueID, queueDataFromMessage(message))
-        if (!ok) return yield* new QueueItemNotFoundError({ message: "Queued message not found" })
-      }
-      return yield* sendQueuedNow(input.sessionID, input.queueID)
-    })
-
     const lastAssistant = Effect.fnUntraced(function* (sessionID: SessionID) {
       const match = yield* sessions.findMessage(sessionID, (m) => m.info.role !== "user").pipe(Effect.orDie)
       if (Option.isSome(match)) return match.value
@@ -1179,16 +1091,6 @@ export const layer = Layer.effect(
           let msgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
             Effect.provideService(Database.Service, database),
           )
-
-          const pendingQueued = !!(yield* promptQueue.peek(sessionID))
-          const queueDrainPaused = yield* promptQueue.drainPaused(sessionID)
-          if (!queueDrainPaused && !MessageV2.immediateTurnUnsettled(msgs) && pendingQueued) {
-            const next = yield* promptQueue.dequeue(sessionID)
-            if (next) {
-              yield* persistQueuedItem(next)
-              continue
-            }
-          }
 
           const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
 
@@ -1584,10 +1486,6 @@ export const layer = Layer.effect(
       shell,
       command,
       resolvePromptParts,
-      queueEnqueue,
-      queueUpdate,
-      queueSend,
-      resumeQueueDrain,
     })
   }),
 )
@@ -1610,7 +1508,6 @@ export const PromptInput = Schema.Struct({
   format: Schema.optional(SessionV1.Format),
   system: Schema.optional(Schema.String),
   variant: Schema.optional(Schema.String),
-  delivery: Schema.optional(Schema.Literals(["immediate", "deferred", "queue", "steer"])),
   parts: Schema.Array(
     Schema.Union([
       SessionV1.TextPartInput,
@@ -1721,7 +1618,6 @@ export const node = LayerNode.make({
     Instruction.node,
     SessionRunState.node,
     SessionRevert.node,
-    SessionPromptQueue.node,
     SessionSummary.node,
     SystemPrompt.node,
     LLM.node,

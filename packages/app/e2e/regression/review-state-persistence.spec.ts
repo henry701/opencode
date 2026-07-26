@@ -46,7 +46,7 @@ test("restores review mode and selected file per session", async ({ page }) => {
 
 async function selectMode(page: Page, current: string, next: string) {
   await page.getByRole("button", { name: current }).click()
-  await page.getByRole("option", { name: next }).click()
+  await page.getByRole("option", { name: next }).dispatchEvent("click")
 }
 
 async function selectFile(page: Page, file: string) {
@@ -65,6 +65,7 @@ async function switchSession(page: Page, title: string) {
 
 async function setup(page: Page) {
   await mockOpenCodeServer(page, {
+    protocol: "v2",
     directory,
     project: {
       id: projectID,
@@ -86,24 +87,26 @@ async function setup(page: Page) {
       default: { providerID: "opencode", modelID: "test" },
     },
     sessions: [session(sessionA, titleA, 1700000000000), session(sessionB, titleB, 1700000001000)],
-    pageMessages: () => ({ items: [] }),
+    currentPageMessages: () => ({ items: [], throughSeq: 0 }),
   })
   await page.route(/\/vcs(?:\?.*)?$/, (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ branch: "feature", default_branch: "dev" }),
+      body: JSON.stringify({ location: { directory }, data: { branch: "feature", defaultBranch: "dev" } }),
     }),
   )
   await page.route("**/vcs/diff**", (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(
-        new URL(route.request().url()).searchParams.get("mode") === "branch"
-          ? [diff("src/alpha.ts"), diff("src/beta.ts")]
-          : [diff("src/alpha.ts"), diff("src/gamma.ts")],
-      ),
+      body: JSON.stringify({
+        location: { directory },
+        data:
+          new URL(route.request().url()).searchParams.get("mode") === "branch"
+            ? [diff("src/alpha.ts"), diff("src/beta.ts")]
+            : [diff("src/alpha.ts"), diff("src/gamma.ts")],
+      }),
     }),
   )
   await page.addInitScript(

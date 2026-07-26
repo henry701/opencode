@@ -1,4 +1,4 @@
-import type { AssistantMessage, Message } from "@opencode-ai/sdk/v2/client"
+import type { SessionMessage } from "@opencode-ai/schema/session-message"
 
 type Provider = {
   id: string
@@ -14,7 +14,7 @@ type Model = {
 }
 
 type Context = {
-  message: AssistantMessage
+  message: SessionMessage.Assistant
   provider?: Provider
   model?: Model
   providerLabel: string
@@ -25,25 +25,30 @@ type Context = {
   usage: number | null
 }
 
-const tokenTotal = (msg: AssistantMessage) => {
-  return msg.tokens.input + msg.tokens.output + msg.tokens.reasoning + msg.tokens.cache.read + msg.tokens.cache.write
+const tokenTotal = (message: SessionMessage.Assistant) => {
+  const tokens = message.tokens
+  if (!tokens) return 0
+  return tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
 }
 
-const lastAssistantWithTokens = (messages: Message[]) => {
+const lastAssistantWithTokens = (messages: readonly SessionMessage.Message[]) => {
   for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i]
-    if (msg.role !== "assistant") continue
-    if (tokenTotal(msg) <= 0) continue
-    return msg
+    const message = messages[i]
+    if (message?.type !== "assistant") continue
+    if (tokenTotal(message) <= 0) continue
+    return message
   }
 }
 
-const build = (messages: Message[] = [], providers: Provider[] = []): Context | undefined => {
+const build = (
+  messages: readonly SessionMessage.Message[] = [],
+  providers: Provider[] = [],
+): Context | undefined => {
   const message = lastAssistantWithTokens(messages)
-  if (!message) return undefined
+  if (!message?.tokens) return
 
-  const provider = providers.find((item) => item.id === message.providerID)
-  const model = provider?.models[message.modelID]
+  const provider = providers.find((item) => item.id === message.model.providerID)
+  const model = provider?.models[message.model.id]
   const limit = model?.limit.context
   const total = tokenTotal(message)
 
@@ -51,8 +56,8 @@ const build = (messages: Message[] = [], providers: Provider[] = []): Context | 
     message,
     provider,
     model,
-    providerLabel: provider?.name ?? message.providerID,
-    modelLabel: model?.name ?? message.modelID,
+    providerLabel: provider?.name ?? message.model.providerID,
+    modelLabel: model?.name ?? message.model.id,
     limit,
     input: message.tokens.input,
     total,
@@ -60,6 +65,9 @@ const build = (messages: Message[] = [], providers: Provider[] = []): Context | 
   }
 }
 
-export function getSessionContext(messages: Message[] = [], providers: Provider[] = []) {
+export function getSessionContext(
+  messages: readonly SessionMessage.Message[] = [],
+  providers: Provider[] = [],
+) {
   return build(messages, providers)
 }

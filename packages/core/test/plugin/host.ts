@@ -28,6 +28,9 @@ export function host(overrides: Overrides = {}): PluginContext {
     command: overrides.command ?? {
       transform: () => Effect.die("unused command.transform"),
       reload: () => Effect.die("unused command.reload"),
+      execute: {
+        before: () => Effect.die("unused command.execute.before"),
+      },
     },
     integration: overrides.integration ?? {
       transform: () => Effect.die("unused integration.transform"),
@@ -48,6 +51,9 @@ export function host(overrides: Overrides = {}): PluginContext {
     skill: overrides.skill ?? {
       transform: () => Effect.die("unused skill.transform"),
       reload: () => Effect.die("unused skill.reload"),
+    },
+    tool: overrides.tool ?? {
+      register: () => Effect.die("unused tool.register"),
     },
   }
 }

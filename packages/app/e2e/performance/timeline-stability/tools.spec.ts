@@ -13,7 +13,6 @@ import {
   session,
   sessionID,
   setupTimeline,
-  status,
   textPart,
   toolPart,
   userMessage,
@@ -46,7 +45,7 @@ test.describe("timeline tool state stability", () => {
       sessions: [session(), session({ id: childID, parentID: sessionID, title: "Inspect timeline" })],
       cpuRate: 4,
     })
-    await timeline.send(status("busy"), 120)
+    await timeline.sendStatus("busy", 120)
     for (const id of ids) await timeline.waitForPart(`prt_state_${id}`)
     await expect(page.locator(`[data-timeline-part-id="${questionID}"]`)).toHaveCount(0)
     await expect(page.locator(`[data-timeline-part-id="${todoID}"]`)).toHaveCount(0)
@@ -88,7 +87,7 @@ test.describe("timeline tool state stability", () => {
       350,
     )
     await timeline.waitForPart(questionID)
-    await timeline.send(status("idle"), 500)
+    await timeline.sendStatus("idle", 500)
     const trace = await stopVisualProbe<keyof typeof regions>(page)
     await reportVisualStability(
       testInfo,
@@ -131,7 +130,7 @@ test.describe("timeline tool state stability", () => {
       ],
       cpuRate: 4,
     })
-    await timeline.send(status("busy"), 100)
+    await timeline.sendStatus("busy", 100)
     const groupSelector = `[data-timeline-part-ids="${ids.join(",")}"]`
     const group = page.locator(groupSelector)
     await expect(group).toBeVisible()
@@ -161,7 +160,7 @@ test.describe("timeline tool state stability", () => {
     )
     await timeline.send(partUpdated(toolPart(ids[2]!, tools[2]!, "completed", inputs[2]!)), 250)
     await expect(group.locator('[data-component="tool-status-title"]')).toHaveAttribute("aria-label", "Explored")
-    await timeline.send(status("idle"), 700)
+    await timeline.sendStatus("idle", 700)
     const trace = await stopVisualProbe<keyof typeof regions>(page)
     await reportVisualStability(
       testInfo,

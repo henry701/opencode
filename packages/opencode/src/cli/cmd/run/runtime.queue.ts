@@ -10,10 +10,7 @@
 //
 // Resolves when the footer closes and all in-flight work finishes.
 import * as Locale from "@/util/locale"
-import { MemoryPromptQueue, PromptQueue, type PromptQueueData } from "@/queue/prompt-queue"
-import { runPromptPreview } from "@/queue/preview"
-import { ModelID, ProviderID } from "@/provider/schema"
-import type { SessionID } from "@/session/schema"
+import { runPromptPreview } from "./queue.preview"
 import { isExitCommand, isNewCommand } from "./prompt.shared"
 import type { FooterApi, FooterEvent, QueueControl, QueuedPromptPreview, RunPrompt } from "./types"
 
@@ -32,10 +29,6 @@ export type QueueInput = {
   initialInput?: string
   trace?: Trace
   demo?: boolean
-  sessionID?: SessionID
-  agent?: string
-  model?: { providerID: string; modelID: string; variant?: string }
-  memoryQueue?: MemoryPromptQueue
   enqueueRemote?: (prompt: RunPrompt) => Promise<void>
   pauseQueueDrainRemote?: () => Promise<void>
   resumeQueueDrainRemote?: () => Promise<void>
@@ -49,22 +42,6 @@ export type QueueInput = {
 }
 
 const isQueuedPrompt = (prompt: RunPrompt) => prompt.queued === true || prompt.delivery === "deferred"
-
-function queueDataFromRunPrompt(
-  prompt: RunPrompt,
-  ctx: { agent: string; model: { providerID: string; modelID: string; variant?: string } },
-): PromptQueueData {
-  return {
-    version: 1,
-    agent: ctx.agent,
-    model: {
-      providerID: ProviderID.make(ctx.model.providerID),
-      modelID: ModelID.make(ctx.model.modelID),
-      variant: ctx.model.variant,
-    },
-    parts: [{ type: "text", text: prompt.text }, ...(prompt.parts as PromptQueueData["parts"])],
-  }
-}
 
 type State = {
   queue: RunPrompt[]
@@ -119,15 +96,12 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
   }
 
   const emitQueue = () => {
-    // Remote queue state is driven by session.queue.updated; memoryQueue is unused for display.
+    // Remote queue state is refreshed from durable prompt lifecycle events; memoryQueue is unused for display.
     if (input.enqueueRemote) {
       return
     }
 
-    const queued =
-      input.memoryQueue && input.sessionID
-        ? input.memoryQueue.list(input.sessionID).map(PromptQueue.queueItemPreview)
-        : queueSnapshot(state)
+    const queued = queueSnapshot(state)
     emit(
       {
         type: "queue",
@@ -503,21 +477,7 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
       return
     }
 
-    if (!input.memoryQueue) {
-      state.queue.push(withQueueID(prompt, state))
-      emitQueue()
-      emit(
-        { type: "first", first: false },
-        { first: false },
-      )
-      return
-    }
-
-    if (!input.sessionID || !input.agent || !input.model) return
-    input.memoryQueue.enqueue(
-      input.sessionID,
-      queueDataFromRunPrompt(prompt, { agent: input.agent, model: input.model }),
-    )
+    state.queue.push(withQueueID(prompt, state))
     emitQueue()
     emit(
       { type: "first", first: false },

@@ -28,6 +28,7 @@ import {
   type SessionData,
 } from "./session-data"
 import { replayActiveText, replayLocalRows, replaySession } from "./session-replay"
+import { queueEventSessionID } from "./runtime.queue-remote"
 import {
   bootstrapSubagentCalls,
   bootstrapSubagentData,
@@ -57,6 +58,7 @@ import type {
   RunPrompt,
   RunPromptPart,
   RunProvider,
+  QueuedPromptPreview,
   StreamCommit,
 } from "./types"
 
@@ -76,6 +78,7 @@ type StreamInput = {
   limits: () => Record<string, number>
   providers?: () => RunProvider[]
   footer: FooterApi
+  listQueue?: () => Promise<QueuedPromptPreview[]>
   trace?: Trace
   signal?: AbortSignal
 }
@@ -134,6 +137,9 @@ type TransportService = {
 class Service extends Context.Service<Service, TransportService>()("@opencode/RunStreamTransport") {}
 
 function sid(event: Event): string | undefined {
+  const queueSessionID = queueEventSessionID(event)
+  if (queueSessionID) return queueSessionID
+
   if (event.type === "message.updated") {
     return event.properties.sessionID
   }
@@ -155,8 +161,7 @@ function sid(event: Event): string | undefined {
     event.type === "question.replied" ||
     event.type === "question.rejected" ||
     event.type === "session.error" ||
-    event.type === "session.status" ||
-    event.type === "session.queue.updated"
+    event.type === "session.status"
   ) {
     return event.properties.sessionID
   }
@@ -949,14 +954,19 @@ function createLayer(input: StreamInput) {
 
           syncFooter(next.commits, next.footer?.patch, changed ? currentSubagentState() : undefined)
 
-          if (
-            event.type === "session.queue.updated" && event.properties.sessionID === input.sessionID
-          ) {
-            input.footer.event({
-              type: "queue",
-              queue: event.properties.items.length,
-              queued: event.properties.items,
-            })
+          if (queueEventSessionID(event) === input.sessionID && input.listQueue) {
+            yield* Effect.promise(input.listQueue).pipe(
+              Effect.tap((queued) =>
+                Effect.sync(() =>
+                  input.footer.event({
+                    type: "queue",
+                    queue: queued.length,
+                    queued,
+                  }),
+                ),
+              ),
+              Effect.orElseSucceed(() => undefined),
+            )
           }
 
           touch(event)

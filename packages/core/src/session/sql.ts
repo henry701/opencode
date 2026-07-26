@@ -14,6 +14,7 @@ import { Timestamps } from "../database/schema.sql"
 import type { SystemContext } from "../system-context/index"
 import { AgentV2 } from "../agent"
 import type { Revert } from "@opencode-ai/schema/revert"
+import type { SessionInputPayload } from "@opencode-ai/schema/session-input-payload"
 
 type SessionMessageData = Omit<(typeof SessionMessage.Message)["Encoded"], "type" | "id">
 type V1MessageData = Omit<SessionV1.Info, "id" | "sessionID">
@@ -146,9 +147,12 @@ export const SessionInputTable = sqliteTable(
       .notNull()
       .references(() => SessionTable.id, { onDelete: "cascade" }),
     prompt: text({ mode: "json" }).notNull().$type<Prompt>(),
+    payload: text({ mode: "json" }).$type<SessionInputPayload.Encoded>(),
     delivery: text().$type<SessionInput.Delivery>().notNull(),
     admitted_seq: integer().notNull(),
     promoted_seq: integer(),
+    updated_seq: integer(),
+    discarded_seq: integer(),
     time_created: integer()
       .notNull()
       .$default(() => Date.now()),
@@ -157,6 +161,7 @@ export const SessionInputTable = sqliteTable(
     index("session_input_session_pending_delivery_seq_idx").on(
       table.session_id,
       table.promoted_seq,
+      table.discarded_seq,
       table.delivery,
       table.admitted_seq,
     ),

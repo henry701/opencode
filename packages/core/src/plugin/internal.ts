@@ -20,6 +20,7 @@ import { FSUtil } from "../fs-util"
 import { Global } from "../global"
 import { Integration } from "../integration"
 import { Location } from "../location"
+import { MCP } from "../mcp"
 import { ModelsDev } from "../models-dev"
 import { Npm } from "../npm"
 import { PluginV2 } from "../plugin"
@@ -29,6 +30,8 @@ import { State } from "../state"
 import { FetchHttpClient, HttpClient } from "effect/unstable/http"
 import { AgentPlugin } from "./agent"
 import { CommandPlugin } from "./command"
+import { CommandMCPPlugin } from "./command-mcp"
+import { CommandSkillPlugin } from "./command-skill"
 import { ModelsDevPlugin } from "./models-dev"
 import { ProviderPlugins } from "./provider"
 import { SkillPlugin } from "./skill"
@@ -46,6 +49,7 @@ export type Requirements =
   | HttpClient.HttpClient
   | Integration.Service
   | Location.Service
+  | MCP.Service
   | ModelsDev.Service
   | Npm.Service
   | Reference.Service
@@ -69,6 +73,7 @@ const layer = Layer.effectDiscard(
     const agents = yield* AgentV2.Service
     const config = yield* Config.Service
     const location = yield* Location.Service
+    const mcp = yield* MCP.Service
     const modelsDev = yield* ModelsDev.Service
     const npm = yield* Npm.Service
     const events = yield* EventV2.Service
@@ -91,6 +96,7 @@ const layer = Layer.effectDiscard(
               Effect.provideService(AgentV2.Service, agents),
               Effect.provideService(Config.Service, config),
               Effect.provideService(Location.Service, location),
+              Effect.provideService(MCP.Service, mcp),
               Effect.provideService(ModelsDev.Service, modelsDev),
               Effect.provideService(Npm.Service, npm),
               Effect.provideService(EventV2.Service, events),
@@ -114,13 +120,15 @@ const layer = Layer.effectDiscard(
         yield* add(ModelsDevPlugin)
         yield* add(ConfigAgentPlugin.Plugin)
         yield* add(ConfigCommandPlugin.Plugin)
+        yield* add(CommandMCPPlugin.Plugin)
         yield* add(ConfigSkillPlugin.Plugin)
+        yield* add(CommandSkillPlugin.Plugin)
         for (const item of ProviderPlugins) yield* add(item)
         yield* add(ConfigExternalPlugin.Plugin)
         yield* add(ConfigProviderPlugin.Plugin)
         yield* add(VariantPlugin.Plugin)
       }),
-    ).pipe(Effect.withSpan("PluginInternal.boot"), Effect.forkScoped({ startImmediately: true }))
+    ).pipe(Effect.withSpan("PluginInternal.boot"))
   }),
 )
 
@@ -140,6 +148,7 @@ export const node = makeLocationNode({
     AgentV2.node,
     Config.node,
     Location.node,
+    MCP.node,
     ModelsDev.node,
     Npm.node,
     EventV2.node,

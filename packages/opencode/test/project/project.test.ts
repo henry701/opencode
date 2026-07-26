@@ -2,7 +2,7 @@ import { describe, expect } from "bun:test"
 import { Project } from "@/project/project"
 import { $ } from "bun"
 import path from "path"
-import { tmpdirScoped } from "../fixture/fixture"
+import { TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { GlobalBus } from "../../src/bus/global"
 import { Database } from "@opencode-ai/core/database/database"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
@@ -12,7 +12,7 @@ import { eq } from "drizzle-orm"
 import { Hash } from "@opencode-ai/core/util/hash"
 import { SessionID } from "@/session/schema"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
-import { Cause, Effect, Exit, Layer, Stream } from "effect"
+import { Cause, DateTime, Effect, Exit, Layer, Stream } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
@@ -20,10 +20,13 @@ import { testEffect } from "../lib/effect"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { SessionEvent } from "@opencode-ai/schema/session-event"
+import { SessionMessage } from "@opencode-ai/schema/session-message"
 
 const encoder = new TextEncoder()
 
-const projectTestNode = LayerNode.group([Project.node, Database.node, CrossSpawnSpawner.node])
+const projectTestNode = LayerNode.group([Project.node, Database.node, EventV2Bridge.node, CrossSpawnSpawner.node])
 const it = testEffect(AppNodeBuilder.build(projectTestNode))
 
 function remoteProjectID(remote: string) {
@@ -669,6 +672,27 @@ describe("Project.setInitialized", () => {
       expect(result.project.time.initialized).toBeUndefined()
 
       yield* project.setInitialized(result.project.id)
+
+      const updated = yield* project.get(result.project.id)
+      expect(updated?.time.initialized).toBeDefined()
+    }),
+  )
+
+  it.instance("sets time_initialized when the native init command executes", () =>
+    Effect.gen(function* () {
+      const project = yield* Project.Service
+      const events = yield* EventV2Bridge.Service
+      const instance = yield* TestInstance
+      const result = yield* project.fromDirectory(instance.directory)
+
+      yield* project.init()
+      yield* events.publish(SessionEvent.Command.Executed, {
+        timestamp: DateTime.makeUnsafe(Date.now()),
+        sessionID: SessionID.make("ses_project_init"),
+        messageID: SessionMessage.ID.make("msg_project_init"),
+        name: "init",
+        arguments: "",
+      })
 
       const updated = yield* project.get(result.project.id)
       expect(updated?.time.initialized).toBeDefined()

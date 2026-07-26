@@ -10,6 +10,13 @@ const sessionFreshness = 15_000
 export function createTimelineModel(input: {
   sessionID: Accessor<string | undefined>
   revertMessageID: Accessor<string | undefined>
+  current?: {
+    messages: Accessor<Message[]>
+    ready: Accessor<boolean>
+    more: Accessor<boolean>
+    loading: Accessor<boolean>
+    loadOlder: () => Promise<void>
+  }
 }) {
   const serverSync = useServerSync()
   const sync = useSync()
@@ -17,7 +24,7 @@ export function createTimelineModel(input: {
   let refreshTimer: number | undefined
 
   const [resource] = createResource(
-    () => input.sessionID(),
+    () => (input.current ? undefined : input.sessionID()),
     (id) => {
       clearRefresh()
       if (!id) return
@@ -40,10 +47,12 @@ export function createTimelineModel(input: {
     },
   )
   const messages = createMemo(() => {
+    if (input.current) return input.current.messages()
     const id = input.sessionID()
     return id ? (sync().data.message[id] ?? []) : []
   })
   const ready = createMemo(() => {
+    if (input.current) return input.current.ready()
     const id = input.sessionID()
     return !id || isTimelineReady(sync().data.message[id], serverSync().session.history.loading(id))
   })
@@ -56,10 +65,12 @@ export function createTimelineModel(input: {
     { equals: same },
   )
   const more = createMemo(() => {
+    if (input.current) return input.current.more()
     const id = input.sessionID()
     return id ? sync().session.history.more(id) : false
   })
   const loading = createMemo(() => {
+    if (input.current) return input.current.loading()
     const id = input.sessionID()
     return id ? sync().session.history.loading(id) : false
   })
@@ -68,7 +79,8 @@ export function createTimelineModel(input: {
       sessionID: input.sessionID,
       more,
       loading,
-      loadMore: (sessionID) => sync().session.history.loadMore(sessionID),
+      loadMore: (sessionID) =>
+        input.current ? input.current.loadOlder() : sync().session.history.loadMore(sessionID),
       before: options?.before,
       after: options?.after,
     })

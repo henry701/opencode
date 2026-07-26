@@ -19,7 +19,7 @@ test("redirects a draft to the legacy new-session route", async ({ page }) => {
     },
     provider: { all: [], connected: [], default: {} },
     sessions: [],
-    pageMessages: () => ({ items: [] }),
+    currentPageMessages: () => ({ items: [], throughSeq: 0 }),
   })
   await page.addInitScript(
     ({ directory, draftID, server }) => {

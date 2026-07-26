@@ -5,7 +5,9 @@ import type { Config } from "../../../src/config/config"
 import type { Project } from "../../../src/project/project"
 import type { Worktree } from "../../../src/worktree"
 import type { MessageV2 } from "../../../src/session/message-v2"
-import type { QueueItemID, SessionID } from "../../../src/session/schema"
+import type { SessionID } from "../../../src/session/schema"
+import type { SessionInput } from "@opencode-ai/core/session/input"
+import type { SessionInputPayload } from "@opencode-ai/schema/session-input-payload"
 
 export const OpenApiMethods = ["get", "post", "put", "delete", "patch"] as const
 export const Methods = ["GET", "POST", "PUT", "DELETE", "PATCH"] as const
@@ -57,9 +59,10 @@ export type ScenarioContext = {
   file: (name: string, content: string) => Effect.Effect<void>
   session: (input?: { title?: string; parentID?: SessionID }) => Effect.Effect<SessionInfo>
   sessionGet: (sessionID: SessionID) => Effect.Effect<SessionInfo | undefined>
+  queue: (sessionID: SessionID, payload: SessionInputPayload.Payload) => Effect.Effect<SessionInput.Queued>
+  queueList: (sessionID: SessionID) => Effect.Effect<SessionInput.Queued[]>
   project: () => Effect.Effect<Project.Info>
   message: (sessionID: SessionID, input?: { text?: string }) => Effect.Effect<MessageSeed>
-  queue: (sessionID: SessionID, input?: { text?: string }) => Effect.Effect<QueueSeed>
   messages: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts[]>
   todos: (sessionID: SessionID, todos: TodoInfo[]) => Effect.Effect<void>
   worktree: (input?: { name?: string }) => Effect.Effect<Worktree.Info>
@@ -126,4 +129,3 @@ export type TodoInfo = {
   priority: "high" | "medium" | "low"
 }
 export type MessageSeed = { info: SessionV1.User; part: SessionV1.TextPart }
-export type QueueSeed = { id: QueueItemID; text: string }

@@ -1,4 +1,5 @@
 import fs from "fs/promises"
+import os from "os"
 import path from "path"
 import { describe, expect } from "bun:test"
 import { DateTime, Effect, Equal, Hash, Schema } from "effect"
@@ -16,24 +17,22 @@ import { ProjectV2 } from "@opencode-ai/core/project"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionRunnerModel } from "@opencode-ai/core/session/runner/model"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
-import { toolDefinitions } from "./lib/tool"
-import { FSUtil } from "../src/fs-util"
-import { Credential } from "../src/credential"
+import { executeTool, toolDefinitions } from "./lib/tool"
 import { Database } from "../src/database/database"
 import { EventV2 } from "../src/event"
 import { Global } from "../src/global"
-import { ModelsDev } from "../src/models-dev"
-import { Npm } from "../src/npm"
-import { Project } from "../src/project"
 import { Reference } from "../src/reference"
 import { ToolRegistry } from "../src/tool/registry"
 import { ApplicationTools } from "../src/tool/application-tools"
 
 const it = testEffect(
-  AppNodeBuilder.build(LayerNode.group([ApplicationTools.node, Database.node, EventV2.node, LocationServiceMap.node])),
+  AppNodeBuilder.build(LayerNode.group([ApplicationTools.node, Database.node, EventV2.node, LocationServiceMap.node]), [
+    [Global.node, Global.layerWith({ config: path.join(os.tmpdir(), `opencode-core-test-global-${process.pid}`) })],
+  ]),
 )
 
 describe("LocationServiceMap", () => {
@@ -110,9 +109,11 @@ describe("LocationServiceMap", () => {
             "edit",
             "glob",
             "grep",
+            "plan_exit",
             "question",
             "read",
             "skill",
+            "task",
             "todowrite",
             "webfetch",
             "websearch",
@@ -127,9 +128,11 @@ describe("LocationServiceMap", () => {
             "edit",
             "glob",
             "grep",
+            "plan_exit",
             "question",
             "read",
             "skill",
+            "task",
             "todowrite",
             "webfetch",
             "websearch",
@@ -201,14 +204,23 @@ describe("LocationServiceMap", () => {
           const reviewer = define({
             id: "reviewer",
             effect: (ctx) =>
-              ctx.agent
-                .transform((agent) => {
+              Effect.all([
+                ctx.agent.transform((agent) => {
                   agent.update("reviewer", (item) => {
                     item.description = "Reviews code"
                     item.mode = "subagent"
                   })
-                })
-                .pipe(Effect.asVoid),
+                }),
+                ctx.tool.register({
+                  plugin_echo: {
+                    description: "Echo a plugin value",
+                    input: Schema.Struct({ value: Schema.String }),
+                    output: Schema.Struct({ value: Schema.String }),
+                    execute: (input) => Effect.succeed({ value: input.value.toUpperCase() }),
+                    toModelOutput: ({ output }) => [{ type: "text", text: output.value }],
+                  },
+                }),
+              ]).pipe(Effect.asVoid),
           })
           yield* plugins.add(PluginV2.ID.make(reviewer.id), reviewer.effect)
 
@@ -216,6 +228,16 @@ describe("LocationServiceMap", () => {
             description: "Reviews code",
             mode: "subagent",
           })
+          const tools = yield* ToolRegistry.Service
+          expect((yield* toolDefinitions(tools)).map((tool) => tool.name)).toContain("plugin_echo")
+          expect(
+            yield* executeTool(tools, {
+              sessionID: SessionV2.ID.make("ses_plugin_tool"),
+              agent: AgentV2.ID.make("build"),
+              assistantMessageID: SessionMessage.ID.make("msg_plugin_tool"),
+              call: { type: "tool-call", id: "call-plugin", name: "plugin_echo", input: { value: "native" } },
+            }),
+          ).toEqual({ type: "text", value: "NATIVE" })
         }).pipe(
           Effect.scoped,
           Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),

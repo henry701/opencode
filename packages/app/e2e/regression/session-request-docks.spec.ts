@@ -37,12 +37,13 @@ test("shows a pending question dock", async ({ page }) => {
   await expect(question.getByText("Which implementation should be used?")).toBeVisible()
   await expect(question.getByRole("radio", { name: /Minimal/ })).toBeVisible()
   await expect(question.getByRole("radio", { name: /Extended/ })).toBeVisible()
-  await expect(page.locator('[data-component="session-composer"]')).toHaveCount(0)
+  await expect(page.locator('[data-component="prompt-input"]')).toHaveCount(0)
 
   const rejectRequests: string[] = []
   page.on("request", (request) => {
     if (request.method() !== "POST") return
-    if (new URL(request.url()).pathname === "/question/question-request/reject") rejectRequests.push(request.url())
+    if (new URL(request.url()).pathname === `/api/session/${sessionID}/question/question-request/reject`)
+      rejectRequests.push(request.url())
   })
 
   await question.locator('[data-component="icon-button"][data-icon="chevron-down"]').click()
@@ -64,7 +65,9 @@ test("shows a pending question dock", async ({ page }) => {
 
   await question.getByRole("radio", { name: /Minimal/ }).click()
   const reply = page.waitForRequest(
-    (request) => request.method() === "POST" && new URL(request.url()).pathname === "/question/question-request/reply",
+    (request) =>
+      request.method() === "POST" &&
+      new URL(request.url()).pathname === `/api/session/${sessionID}/question/question-request/reply`,
   )
   await question.getByRole("button", { name: "Submit" }).click()
   expect((await reply).postDataJSON()).toEqual({ answers: [["Minimal"]] })
@@ -92,18 +95,19 @@ test("shows a pending permission dock", async ({ page }) => {
   await expect(permission.getByText("git status")).toBeVisible()
   await expect(permission.getByText("git diff")).toBeVisible()
   await expect(permission.locator('[data-slot="permission-footer-actions"] button')).toHaveCount(3)
-  await expect(page.locator('[data-component="session-composer"]')).toHaveCount(0)
+  await expect(page.locator('[data-component="prompt-input"]')).toHaveCount(0)
 
   const reply = page.waitForRequest((request) => request.method() === "POST")
   await permission.getByRole("button", { name: "Allow once" }).click()
   const request = await reply
-  expect(new URL(request.url()).pathname).toBe(`/session/${sessionID}/permissions/permission-request`)
-  expect(request.postDataJSON()).toEqual({ response: "once" })
+  expect(new URL(request.url()).pathname).toBe(`/api/session/${sessionID}/permission/permission-request/reply`)
+  expect(request.postDataJSON()).toEqual({ reply: "once" })
 })
 
 test("restores the draft caret before typing after a request dock closes", async ({ page }) => {
   const transport = await installSseTransport(page, {
     server: `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`,
+    path: "/global/event",
     retry: 20,
   })
   await mockServer(page, { questions: [] })
@@ -170,6 +174,7 @@ async function mockServer(
   },
 ) {
   await mockOpenCodeServer(page, {
+    protocol: "v2",
     directory,
     project: {
       id: projectID,
@@ -207,7 +212,7 @@ async function mockServer(
         time: { created: 1700000000000, updated: 1700000000000 },
       },
     ],
-    pageMessages: () => ({ items: [] }),
+    currentPageMessages: () => ({ items: [], throughSeq: 0 }),
     permissions: requests.permissions,
     questions: requests.questions,
   })

@@ -22,6 +22,7 @@ import { OpenAIOptions } from "./utils/openai-options"
 import { Lifecycle } from "./utils/lifecycle"
 import { ToolSchemaProjection } from "./utils/tool-schema"
 import { ToolStream } from "./utils/tool-stream"
+import { PreparedContext } from "./utils/prepared-context"
 
 const ADAPTER = "openai-chat"
 const IMAGE_MIMES = new Set<string>(ProviderShared.IMAGE_MIMES)
@@ -483,6 +484,15 @@ export const protocol = Protocol.make({
   body: {
     schema: OpenAIChatBody,
     from: fromRequest,
+    context: (body) =>
+      PreparedContext.make(
+        body.messages.flatMap((message) => (message.role === "system" ? [message.content] : [])),
+        (body.tools ?? []).map((tool) => ({
+          name: tool.function.name,
+          description: tool.function.description,
+          inputSchema: tool.function.parameters,
+        })),
+      ),
   },
   stream: {
     event: Protocol.jsonEvent(OpenAIChatEvent),

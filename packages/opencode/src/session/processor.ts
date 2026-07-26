@@ -74,7 +74,7 @@ interface ProcessorContext extends Input {
   reasoningMap: Record<string, SessionV1.ReasoningPart>
 }
 
-type StreamEvent = LLM.StreamEvent
+type StreamEvent = LLMEvent
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionProcessor") {}
 
@@ -277,12 +277,6 @@ const layer = Layer.effect(
 
       const handleEvent = Effect.fnUntraced(function* (value: StreamEvent) {
         switch (value.type) {
-          case "context-metadata":
-            ctx.assistantMessage.system_prompt = value.systemPrompt
-            ctx.assistantMessage.tool_defs = value.toolDefs
-            yield* session.updateMessage(ctx.assistantMessage)
-            return
-
           case "reasoning-start":
             if (value.id in ctx.reasoningMap) return
             ctx.reasoningMap[value.id] = {
@@ -643,7 +637,14 @@ const layer = Layer.effect(
             ctx.currentText = undefined
             ctx.reasoningMap = {}
             yield* status.set(ctx.sessionID, { type: "busy" })
-            const stream = llm.stream(streamInput)
+            const stream = llm.stream(streamInput, {
+              onPrepared: (context) =>
+                Effect.gen(function* () {
+                  ctx.assistantMessage.system_prompt = context.systemPrompt
+                  ctx.assistantMessage.tool_defs = context.toolDefs
+                  yield* session.updateMessage(ctx.assistantMessage)
+                }),
+            })
 
             yield* stream.pipe(
               Stream.tap((event) => handleEvent(event)),

@@ -28,15 +28,15 @@ import { createSyntaxStyleMemo, generateSubtleSyntax, selectedForeground, useThe
 import { BoxRenderable, ScrollBoxRenderable, addDefaultParsers, TextAttributes, RGBA } from "@opentui/core"
 import { Prompt, type PromptRef } from "../../component/prompt"
 import type {
-  AssistantMessage,
-  Part,
   Provider,
-  ToolPart,
-  UserMessage,
-  TextPart,
-  ReasoningPart,
+  SessionMessageAssistant as CurrentAssistant,
+  SessionMessageAssistantReasoning as CurrentReasoning,
+  SessionMessageAssistantText as CurrentText,
+  SessionMessageAssistantTool as CurrentTool,
+  SessionMessageUser as CurrentUser,
   SessionStatus,
 } from "@opencode-ai/sdk/v2"
+import type { SessionsGetOutput as CurrentSession } from "@opencode-ai/client"
 import { useLocal } from "../../context/local"
 import { Locale } from "../../util/locale"
 import { webSearchProviderLabel } from "../../util/tool-display"
@@ -68,7 +68,7 @@ import { PermissionPrompt } from "./permission"
 import { QuestionPrompt } from "./question"
 import { DialogExportOptions } from "../../ui/dialog-export-options"
 import * as Model from "../../util/model"
-import { formatTranscript } from "../../util/transcript"
+import { formatCurrentTranscript } from "../../util/transcript"
 import { sessionEpilogue } from "../../util/presentation"
 import { setPreLayoutSiblingMargin } from "../../util/layout"
 import { useTuiConfig } from "../../config"
@@ -82,6 +82,8 @@ import { getRevertDiffFiles } from "../../util/revert-diff"
 import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useOpencodeKeymap } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
 import { LocationProvider } from "../../context/location"
+import { useData } from "../../context/data"
+import { currentTimelineMessages } from "./timeline-view"
 
 addDefaultParsers(parsers.parsers)
 
@@ -186,6 +188,7 @@ export function Session() {
   const route = useRouteData("session")
   const { navigate } = useRoute()
   const sync = useSync()
+  const data = useData()
   const event = useEvent()
   const project = useProject()
   const paths = useTuiPaths()
@@ -193,33 +196,39 @@ export function Session() {
   const kv = useKV()
   const { theme } = useTheme()
   const promptRef = usePromptRef()
-  const session = createMemo(() => sync.session.get(route.sessionID))
+  const [loadedSession, setLoadedSession] = createSignal<CurrentSession>()
+  const currentSession = createMemo(() => data.session.get(route.sessionID) ?? loadedSession())
+  const session = currentSession
   const location = createMemo(() => {
     const current = session()
-    return current ? { directory: current.directory, workspaceID: current.workspaceID } : undefined
+    return current?.location
   })
 
   createEffect(() => {
     const title = Locale.truncate(session()?.title ?? "", 50)
     setEpilogue(sessionEpilogue({ title, sessionID: session()?.id }))
   })
-  onCleanup(() => setEpilogue())
   const children = createMemo(() => {
     const parentID = session()?.parentID ?? session()?.id
     return sync.data.session
       .filter((x) => x.parentID === parentID || x.id === parentID)
       .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   })
-  const messages = createMemo(() => sync.data.message[route.sessionID] ?? [])
+  const messages = createMemo(() => currentTimelineMessages(data.session.message.list(route.sessionID) ?? []))
+  const messageParts = (messageID: string) => {
+    const message = messages().find((candidate) => candidate.id === messageID)
+    if (message?.type === "assistant") return message.content
+    return message?.payload?.parts ?? []
+  }
   const foregroundTasks = createMemo(() =>
     sync.data.capabilities.experimentalBackgroundSubagents
       ? messages().flatMap((message) =>
-          (sync.data.part[message.id] ?? []).filter(
-            (part): part is ToolPart =>
+          messageParts(message.id).filter(
+            (part): part is CurrentTool =>
               part.type === "tool" &&
-              part.tool === "task" &&
+              part.name === "task" &&
               part.state.status === "running" &&
-              part.state.metadata?.background !== true,
+              part.state.structured?.background !== true,
           ),
         )
       : [],
@@ -236,13 +245,13 @@ export function Session() {
   const disabled = createMemo(() => permissions().length > 0 || questions().length > 0)
 
   const pending = createMemo(() => {
-    const completed = messages().findLast((x) => x.role === "assistant" && x.time.completed)?.id
-    return messages().findLast((x) => x.role === "assistant" && !x.time.completed && (!completed || x.id > completed))
+    const completed = messages().findLast((x) => x.type === "assistant" && x.time.completed)?.id
+    return messages().findLast((x) => x.type === "assistant" && !x.time.completed && (!completed || x.id > completed))
       ?.id
   })
 
   const lastAssistant = createMemo(() => {
-    return messages().findLast((x) => x.role === "assistant")
+    return messages().findLast((x) => x.type === "assistant")
   })
 
   const dimensions = useTerminalDimensions()
@@ -280,8 +289,8 @@ export function Session() {
     const sessionID = route.sessionID
     void (async () => {
       const previousWorkspace = untrack(() => project.workspace.current())
-      const result = await sdk.client.session.get({ sessionID }, { throwOnError: true })
-      if (!result.data) {
+      const result = await sdk.next.sessions.get({ sessionID }).catch(() => undefined)
+      if (!result) {
         toast.show({
           message: `Session not found: ${sessionID}`,
           variant: "error",
@@ -290,9 +299,11 @@ export function Session() {
         navigate({ type: "home" })
         return
       }
+      setLoadedSession(result)
+      setEpilogue(sessionEpilogue({ title: Locale.truncate(result.title, 50), sessionID: result.id }))
 
-      if (result.data.workspaceID !== previousWorkspace) {
-        project.workspace.set(result.data.workspaceID)
+      if (result.location.workspaceID !== previousWorkspace) {
+        project.workspace.set(result.location.workspaceID)
 
         // Sync all the data for this workspace. Note that this
         // workspace may not exist anymore which is why this is not
@@ -302,8 +313,12 @@ export function Session() {
           await sync.bootstrap({ fatal: false })
         } catch {}
       }
-      editor.reconnect(result.data.directory)
-      await sync.session.sync(sessionID)
+      editor.reconnect(result.location.directory)
+      await Promise.all([
+        data.session.refresh(sessionID),
+        data.session.message.refresh(sessionID),
+        data.session.queue.refresh(sessionID),
+      ])
       if (route.sessionID === sessionID && scroll) scroll.scrollBy(100_000)
     })().catch((error) => {
       if (route.sessionID !== sessionID) return
@@ -381,10 +396,16 @@ export function Session() {
         if (!message) return false
 
         // Check if message has valid non-synthetic, non-ignored text parts
-        const parts = sync.data.part[message.id]
+        const parts = messageParts(message.id)
         if (!parts || !Array.isArray(parts)) return false
 
-        return parts.some((part) => part && part.type === "text" && !part.synthetic && !part.ignored)
+        return parts.some(
+          (part) =>
+            part &&
+            part.type === "text" &&
+            (!("synthetic" in part) || !part.synthetic) &&
+            (!("ignored" in part) || !part.ignored),
+        )
       })
       .sort((a, b) => a.y - b.y)
 
@@ -457,7 +478,7 @@ export function Session() {
 
   const sessionCommandList = createMemo(() => [
     {
-      title: session()?.share?.url ? "Copy share link" : "Share session",
+      title: currentSession()?.share?.url ? "Copy share link" : "Share session",
       value: "session.share",
       suggested: route.type === "session",
       category: "Session",
@@ -471,7 +492,7 @@ export function Session() {
             .write?.(url)
             .then(() => toast.show({ message: "Share URL copied to clipboard!", variant: "success" }))
             .catch(() => toast.show({ message: "Failed to copy URL to clipboard", variant: "error" }))
-        const url = session()?.share?.url
+        const url = currentSession()?.share?.url
         if (url) {
           await copy(url)
           dialog.clear()
@@ -482,11 +503,11 @@ export function Session() {
           if (ok !== true) return
           kv.set("share_consent", true)
         }
-        await sdk.client.session
+        await sdk.next.sessions
           .share({
             sessionID: route.sessionID,
           })
-          .then((res) => copy(res.data!.share!.url))
+          .then((result) => copy(result.share!.url))
           .catch((error) => {
             toast.show({
               message: error instanceof Error ? error.message : "Failed to share session",
@@ -560,20 +581,7 @@ export function Session() {
         aliases: ["summarize"],
       },
       run: () => {
-        const selectedModel = local.model.current()
-        if (!selectedModel) {
-          toast.show({
-            variant: "warning",
-            message: "Connect a provider to summarize this session",
-            duration: 3000,
-          })
-          return
-        }
-        void sdk.client.session.summarize({
-          sessionID: route.sessionID,
-          modelID: selectedModel.modelID,
-          providerID: selectedModel.providerID,
-        })
+        void sdk.next.sessions.compact({ sessionID: route.sessionID })
         dialog.clear()
       },
     },
@@ -581,12 +589,12 @@ export function Session() {
       title: "Unshare session",
       value: "session.unshare",
       category: "Session",
-      enabled: !!session()?.share?.url,
+      enabled: !!currentSession()?.share?.url,
       slash: {
         name: "unshare",
       },
       run: async () => {
-        await sdk.client.session
+        await sdk.next.sessions
           .unshare({
             sessionID: route.sessionID,
           })
@@ -609,24 +617,25 @@ export function Session() {
       },
       run: async () => {
         const status = sync.data.session_status?.[route.sessionID]
-        if (status?.type !== "idle") await sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
-        const revert = session()?.revert?.messageID
-        const message = messages().findLast((x) => (!revert || x.id < revert) && x.role === "user")
+        if (status?.type !== "idle") await sdk.next.sessions.interrupt({ sessionID: route.sessionID }).catch(() => {})
+        const revert = currentSession()?.revert?.messageID
+        const message = messages().findLast((x) => (!revert || x.id < revert) && x.type === "user")
         if (!message) return
-        void sdk.client.session
-          .revert({
+        void sdk.next.sessions
+          .stage({
             sessionID: route.sessionID,
             messageID: message.id,
+            files: true,
           })
           .then(() => {
             toBottom()
           })
-        const parts = sync.data.part[message.id]
+        const parts = messageParts(message.id)
         prompt?.set(
           parts.reduce(
             (agg, part) => {
               if (part.type === "text") {
-                if (!part.synthetic) agg.input += part.text
+                if (!("synthetic" in part) || !part.synthetic) agg.input += part.text
               }
               if (part.type === "file") agg.parts.push(part)
               return agg
@@ -641,25 +650,26 @@ export function Session() {
       title: "Redo",
       value: "session.redo",
       category: "Session",
-      enabled: !!session()?.revert?.messageID,
+      enabled: !!currentSession()?.revert?.messageID,
       slash: {
         name: "redo",
       },
       run: () => {
         dialog.clear()
-        const messageID = session()?.revert?.messageID
+        const messageID = currentSession()?.revert?.messageID
         if (!messageID) return
-        const message = messages().find((x) => x.role === "user" && x.id > messageID)
+        const message = messages().find((x) => x.type === "user" && x.id > messageID)
         if (!message) {
-          void sdk.client.session.unrevert({
+          void sdk.next.sessions.clear({
             sessionID: route.sessionID,
           })
           prompt?.set({ input: "", parts: [] })
           return
         }
-        void sdk.client.session.revert({
+        void sdk.next.sessions.stage({
           sessionID: route.sessionID,
           messageID: message.id,
+          files: true,
         })
       },
     },
@@ -828,19 +838,23 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        const messages = sync.data.message[route.sessionID]
+        const messages = data.session.message.list(route.sessionID)
         if (!messages || !messages.length) return
 
         // Find the most recent user message with non-ignored, non-synthetic text parts
         for (let i = messages.length - 1; i >= 0; i--) {
           const message = messages[i]
-          if (!message || message.role !== "user") continue
+          if (!message || message.type !== "user") continue
 
-          const parts = sync.data.part[message.id]
+          const parts = messageParts(message.id)
           if (!parts || !Array.isArray(parts)) continue
 
           const hasValidTextPart = parts.some(
-            (part) => part && part.type === "text" && !part.synthetic && !part.ignored,
+            (part) =>
+              part &&
+              part.type === "text" &&
+              (!("synthetic" in part) || !part.synthetic) &&
+              (!("ignored" in part) || !part.ignored),
           )
 
           if (hasValidTextPart) {
@@ -874,7 +888,7 @@ export function Session() {
       run: () => {
         const revertID = session()?.revert?.messageID
         const lastAssistantMessage = messages().findLast(
-          (msg) => msg.role === "assistant" && (!revertID || msg.id < revertID),
+          (msg) => msg.type === "assistant" && (!revertID || msg.id < revertID),
         )
         if (!lastAssistantMessage) {
           toast.show({ message: "No assistant messages found", variant: "error" })
@@ -882,7 +896,7 @@ export function Session() {
           return
         }
 
-        const parts = sync.data.part[lastAssistantMessage.id] ?? []
+        const parts = messageParts(lastAssistantMessage.id)
         const textParts = parts.filter((part) => part.type === "text")
         if (textParts.length === 0) {
           toast.show({ message: "No text parts found in last assistant message", variant: "error" })
@@ -922,16 +936,12 @@ export function Session() {
           const sessionData = session()
           if (!sessionData) return
           const sessionMessages = messages()
-          const transcript = formatTranscript(
-            sessionData,
-            sessionMessages.map((msg) => ({ info: msg, parts: sync.data.part[msg.id] ?? [] })),
-            {
-              thinking: showThinking(),
-              toolDetails: showDetails(),
-              assistantMetadata: showAssistantMetadata(),
-              providers: sync.data.provider,
-            },
-          )
+          const transcript = formatCurrentTranscript(sessionData, sessionMessages, {
+            thinking: showThinking(),
+            toolDetails: showDetails(),
+            assistantMetadata: showAssistantMetadata(),
+            providers: sync.data.provider,
+          })
           await clipboard.write?.(transcript)
           toast.show({ message: "Session transcript copied to clipboard!", variant: "success" })
         } catch {
@@ -966,16 +976,12 @@ export function Session() {
 
           if (options === null) return
 
-          const transcript = formatTranscript(
-            sessionData,
-            sessionMessages.map((msg) => ({ info: msg, parts: sync.data.part[msg.id] ?? [] })),
-            {
-              thinking: options.thinking,
-              toolDetails: options.toolDetails,
-              assistantMetadata: options.assistantMetadata,
-              providers: sync.data.provider,
-            },
-          )
+          const transcript = formatCurrentTranscript(sessionData, sessionMessages, {
+            thinking: options.thinking,
+            toolDetails: options.toolDetails,
+            assistantMetadata: options.assistantMetadata,
+            providers: sync.data.provider,
+          })
 
           if (options.openWithoutSaving) {
             // Just open in editor without saving
@@ -1116,7 +1122,7 @@ export function Session() {
     bindings: tuiConfig.keybinds.get("session.background"),
   }))
 
-  const revertInfo = createMemo(() => session()?.revert)
+  const revertInfo = createMemo(() => currentSession()?.revert)
   const revertMessageID = createMemo(() => revertInfo()?.messageID)
 
   const revertDiffFiles = createMemo(() => getRevertDiffFiles(revertInfo()?.diff ?? ""))
@@ -1124,7 +1130,7 @@ export function Session() {
   const revertRevertedMessages = createMemo(() => {
     const messageID = revertMessageID()
     if (!messageID) return []
-    return messages().filter((x) => x.id >= messageID && x.role === "user")
+    return messages().filter((x) => x.id >= messageID && x.type === "user")
   })
 
   const revert = createMemo(() => {
@@ -1250,7 +1256,7 @@ export function Session() {
                       <Match when={revert()?.messageID && message.id >= revert()!.messageID}>
                         <></>
                       </Match>
-                      <Match when={message.role === "user"}>
+                      <Match when={message.type === "user"}>
                         <UserMessage
                           index={index()}
                           onMouseUp={() => {
@@ -1263,16 +1269,14 @@ export function Session() {
                               />
                             ))
                           }}
-                          message={message as UserMessage}
-                          parts={sync.data.part[message.id] ?? []}
+                          message={message as CurrentUser}
                           pending={pending()}
                         />
                       </Match>
-                      <Match when={message.role === "assistant"}>
+                      <Match when={message.type === "assistant"}>
                         <AssistantMessage
                           last={lastAssistant()?.id === message.id}
-                          message={message as AssistantMessage}
-                          parts={sync.data.part[message.id] ?? []}
+                          message={message as CurrentAssistant}
                         />
                       </Match>
                     </Switch>
@@ -1347,17 +1351,11 @@ export function Session() {
   )
 }
 
-function UserMessage(props: {
-  message: UserMessage
-  parts: Part[]
-  onMouseUp: () => void
-  index: number
-  pending?: string
-}) {
+function UserMessage(props: { message: CurrentUser; onMouseUp: () => void; index: number; pending?: string }) {
   const ctx = use()
   const local = useLocal()
   const text = createMemo(() => {
-    const texts = props.parts
+    const texts = (props.message.payload?.parts ?? [])
       .map((x) => {
         if (x.type === "text" && !x.synthetic) {
           return x.text
@@ -1365,21 +1363,19 @@ function UserMessage(props: {
         return null
       })
       .filter(Boolean)
-    return texts.join("\n\n")
+    return texts.join("\n\n") || props.message.text
   })
-  const files = createMemo(() => props.parts.flatMap((x) => (x.type === "file" ? [x] : [])))
+  const files = createMemo(
+    () =>
+      props.message.payload?.parts.flatMap((part) => (part.type === "file" ? [part] : [])) ?? props.message.files ?? [],
+  )
   const { theme } = useTheme()
   const [hover, setHover] = createSignal(false)
   const afterAssistant = createMemo(() => props.pending && props.message.id > props.pending)
-  const delivery = createMemo(
-    () => (props.message as typeof props.message & { delivery?: "immediate" | "deferred" }).delivery ?? "immediate",
-  )
-  const steer = createMemo(() => afterAssistant() && delivery() === "immediate")
-  const color = createMemo(() => local.agent.color(props.message.agent))
+  const steer = createMemo(() => afterAssistant())
+  const color = createMemo(() => local.agent.color(props.message.payload?.agent ?? "build"))
   const badgeFg = createMemo(() => selectedForeground(theme, color()))
   const metadataVisible = createMemo(() => afterAssistant() || ctx.showTimestamps())
-
-  const compaction = createMemo(() => props.parts.find((x) => x.type === "compaction"))
 
   return (
     <>
@@ -1417,7 +1413,9 @@ function UserMessage(props: {
                         <span style={{ bg: theme.secondary, fg: theme.background }}>
                           {directory ? " Directory " : " File "}
                         </span>
-                        <span style={{ bg: theme.backgroundElement, fg: theme.textMuted }}> {file.filename} </span>
+                        <span style={{ bg: theme.backgroundElement, fg: theme.textMuted }}>
+                          {"filename" in file ? file.filename : "name" in file ? file.name : "attachment"}
+                        </span>
                       </text>
                     )
                   }}
@@ -1443,26 +1441,18 @@ function UserMessage(props: {
           </box>
         </box>
       </Show>
-      <Show when={compaction()}>
-        <box
-          marginTop={1}
-          border={["top"]}
-          title=" Compaction "
-          titleAlignment="center"
-          borderColor={theme.borderActive}
-        />
-      </Show>
     </>
   )
 }
 
-function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; last: boolean }) {
+function AssistantMessage(props: { message: CurrentAssistant; last: boolean }) {
   const ctx = use()
   const local = useLocal()
   const { theme } = useTheme()
+  const data = useData()
   const sync = useSync()
-  const messages = createMemo(() => sync.data.message[props.message.sessionID] ?? [])
-  const model = createMemo(() => Model.name(ctx.providers(), props.message.providerID, props.message.modelID))
+  const messages = createMemo(() => data.session.message.list(ctx.sessionID) ?? [])
+  const model = createMemo(() => Model.name(ctx.providers(), props.message.model.providerID, props.message.model.id))
 
   const final = createMemo(() => {
     return props.message.finish && !["tool-calls", "unknown"].includes(props.message.finish)
@@ -1471,7 +1461,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
   const duration = createMemo(() => {
     if (!final()) return 0
     if (!props.message.time.completed) return 0
-    const user = messages().find((x) => x.role === "user" && x.id === props.message.parentID)
+    const user = messages().findLast((x) => x.type === "user" && x.id < props.message.id)
     if (!user || !user.time) return 0
     return props.message.time.completed - user.time.created
   })
@@ -1481,13 +1471,13 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
 
   return (
     <>
-      <For each={props.parts}>
+      <For each={props.message.content}>
         {(part, index) => {
           const component = createMemo(() => PART_MAPPING[part.type as keyof typeof PART_MAPPING])
           return (
             <Show when={component()}>
               <Dynamic
-                last={index() === props.parts.length - 1}
+                last={index() === props.message.content.length - 1}
                 component={component()}
                 part={part as any}
                 message={props.message}
@@ -1496,7 +1486,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
           )
         }}
       </For>
-      <Show when={props.parts.some((x) => x.type === "tool" && x.tool === "task")}>
+      <Show when={props.message.content.some((x) => x.type === "tool" && x.name === "task")}>
         <box paddingTop={1} paddingLeft={3}>
           <text fg={theme.text}>
             {childShortcut()}
@@ -1504,12 +1494,12 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
             <Show
               when={
                 sync.data.capabilities.experimentalBackgroundSubagents &&
-                props.parts.some(
+                props.message.content.some(
                   (x) =>
                     x.type === "tool" &&
-                    x.tool === "task" &&
+                    x.name === "task" &&
                     x.state.status === "running" &&
-                    x.state.metadata?.background !== true,
+                    x.state.structured?.background !== true,
                 )
               }
             >
@@ -1520,7 +1510,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
           </text>
         </box>
       </Show>
-      <Show when={props.message.error && props.message.error.name !== "MessageAbortedError"}>
+      <Show when={props.message.error}>
         <box
           ref={(el: BoxRenderable) => alwaysSeparate.add(el)}
           border={["left"]}
@@ -1532,30 +1522,24 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
           customBorderChars={SplitBorder.customBorderChars}
           borderColor={theme.error}
         >
-          <text fg={theme.textMuted}>{errorMessage(props.message.error)}</text>
+          <text fg={theme.textMuted}>{props.message.error?.message}</text>
         </box>
       </Show>
       <Switch>
-        <Match when={props.last || final() || props.message.error?.name === "MessageAbortedError"}>
+        <Match when={props.last || final() || props.message.error}>
           <box ref={(el: BoxRenderable) => alwaysSeparate.add(el)} paddingLeft={3}>
             <text marginTop={1}>
               <span
                 style={{
-                  fg:
-                    props.message.error?.name === "MessageAbortedError"
-                      ? theme.textMuted
-                      : local.agent.color(props.message.agent),
+                  fg: props.message.error ? theme.textMuted : local.agent.color(props.message.agent),
                 }}
               >
                 ▣{" "}
               </span>{" "}
-              <span style={{ fg: theme.text }}>{Locale.titlecase(props.message.mode)}</span>
+              <span style={{ fg: theme.text }}>{Locale.titlecase(props.message.agent)}</span>
               <span style={{ fg: theme.textMuted }}> · {model()}</span>
               <Show when={duration()}>
                 <span style={{ fg: theme.textMuted }}> · {Locale.duration(duration())}</span>
-              </Show>
-              <Show when={props.message.error?.name === "MessageAbortedError"}>
-                <span style={{ fg: theme.textMuted }}> · interrupted</span>
               </Show>
             </text>
           </box>
@@ -1571,9 +1555,93 @@ const PART_MAPPING = {
   reasoning: ReasoningPart,
 }
 
+type ToolView = {
+  id: string
+  callID: string
+  tool: string
+  state:
+    | { status: "pending"; input: Record<string, unknown>; metadata?: Record<string, unknown> }
+    | { status: "running"; input: Record<string, unknown>; metadata?: Record<string, unknown>; time: { start: number } }
+    | {
+        status: "completed"
+        input: Record<string, unknown>
+        metadata?: Record<string, unknown>
+        output: string
+        time: { start: number; end: number; compacted?: number }
+      }
+    | {
+        status: "error"
+        input: Record<string, unknown>
+        metadata?: Record<string, unknown>
+        error: string
+        time: { start: number; end: number }
+      }
+}
+
+function presentTool(part: CurrentTool): ToolView {
+  const input = part.state.status === "pending" ? parseToolInput(part.state.input) : part.state.input
+  const metadata = part.state.status === "pending" ? undefined : part.state.structured
+  if (part.state.status === "pending")
+    return { id: part.id, callID: part.id, tool: part.name, state: { status: "pending", input } }
+  if (part.state.status === "running")
+    return {
+      id: part.id,
+      callID: part.id,
+      tool: part.name,
+      state: {
+        status: "running",
+        input,
+        metadata,
+        time: { start: Number(part.time.ran ?? part.time.created) },
+      },
+    }
+  if (part.state.status === "error")
+    return {
+      id: part.id,
+      callID: part.id,
+      tool: part.name,
+      state: {
+        status: "error",
+        input,
+        metadata,
+        error: part.state.error.message,
+        time: {
+          start: Number(part.time.ran ?? part.time.created),
+          end: Number(part.time.completed ?? part.time.ran ?? part.time.created),
+        },
+      },
+    }
+  const text = part.state.content.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n")
+  return {
+    id: part.id,
+    callID: part.id,
+    tool: part.name,
+    state: {
+      status: "completed",
+      input,
+      metadata,
+      output:
+        text || (typeof part.state.result === "string" ? part.state.result : JSON.stringify(part.state.result ?? "")),
+      time: {
+        start: Number(part.time.ran ?? part.time.created),
+        end: Number(part.time.completed ?? part.time.ran ?? part.time.created),
+        compacted: part.time.pruned === undefined ? undefined : Number(part.time.pruned),
+      },
+    },
+  }
+}
+
+function parseToolInput(input: string) {
+  try {
+    const parsed = JSON.parse(input)
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>
+  } catch {}
+  return {}
+}
+
 const INLINE_TOOL_ICON_WIDTH = 2
 
-function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: AssistantMessage }) {
+function ReasoningPart(props: { last: boolean; part: CurrentReasoning; message: CurrentAssistant }) {
   const { theme } = useTheme()
   const ctx = use()
   // Collapsed by default in hide mode: a single line throughout, so the
@@ -1586,11 +1654,11 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
   })
   // Reasoning is finalized when the server sets `time.end` (see processor.ts).
   // Flips independently of the parent message completing.
-  const isDone = createMemo(() => props.part.time.end !== undefined)
+  const isDone = createMemo(() => props.part.time?.completed !== undefined)
   const inMinimal = createMemo(() => ctx.thinkingMode() === "hide")
   const duration = createMemo(() => {
-    const end = props.part.time.end
-    return end === undefined ? 0 : Math.max(0, end - props.part.time.start)
+    const end = props.part.time?.completed
+    return end === undefined ? 0 : Math.max(0, Number(end) - Number(props.part.time?.created ?? end))
   })
   const summary = createMemo(() => reasoningSummary(content()))
   const syntax = createSyntaxStyleMemo(() => generateSubtleSyntax(theme))
@@ -1680,7 +1748,7 @@ function ReasoningHeader(props: {
   )
 }
 
-function TextPart(props: { last: boolean; part: TextPart; message: AssistantMessage }) {
+function TextPart(props: { last: boolean; part: CurrentText; message: CurrentAssistant }) {
   const ctx = use()
   const { theme, syntax } = useTheme()
   return (
@@ -1703,32 +1771,34 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
 
 // Pending messages moved to individual tool pending functions
 
-function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMessage }) {
+function ToolPart(props: { last: boolean; part: CurrentTool; message: CurrentAssistant }) {
   const ctx = use()
-  const display = createMemo(() => toolDisplay(props.part.tool))
+  const part = createMemo((): ToolView => presentTool(props.part))
+  const display = createMemo(() => toolDisplay(part().tool))
 
   // Hide tool if showDetails is false and tool completed successfully
   const shouldHide = createMemo(() => {
     if (ctx.showDetails()) return false
-    if (props.part.state.status !== "completed") return false
+    if (part().state.status !== "completed") return false
     return true
   })
 
   const toolprops = {
     get metadata() {
-      return props.part.state.status === "pending" ? {} : (props.part.state.metadata ?? {})
+      return part().state.status === "pending" ? {} : (part().state.metadata ?? {})
     },
     get input() {
-      return props.part.state.input ?? {}
+      return part().state.input ?? {}
     },
     get output() {
-      return props.part.state.status === "completed" ? props.part.state.output : undefined
+      const state = part().state
+      return state.status === "completed" ? state.output : undefined
     },
     get tool() {
-      return props.part.tool
+      return part().tool
     },
     get part() {
-      return props.part
+      return part()
     },
   }
 
@@ -1790,7 +1860,7 @@ type ToolProps = {
   metadata: Record<string, unknown>
   tool: string
   output?: string
-  part: ToolPart
+  part: ToolView
 }
 function GenericTool(props: ToolProps) {
   const { theme } = useTheme()
@@ -1840,7 +1910,7 @@ function InlineTool(props: {
   spinner?: boolean
   separate?: boolean
   children: JSX.Element
-  part: ToolPart
+  part: ToolView
   onClick?: () => void
 }) {
   const { theme } = useTheme()
@@ -1992,7 +2062,7 @@ function BlockTool(props: {
   title?: string
   children: JSX.Element
   onClick?: () => void
-  part?: ToolPart
+  part?: ToolView
   spinner?: boolean
 }) {
   const { theme } = useTheme()
@@ -2218,26 +2288,32 @@ function Task(props: ToolProps) {
   const { theme } = useTheme()
   const { navigate } = useRoute()
   const sync = useSync()
+  const data = useData()
   const dialog = useDialog()
 
   onMount(() => {
     const sessionID = stringValue(props.metadata.sessionId)
-    if (sessionID && !sync.data.message[sessionID]?.length) void sync.session.sync(sessionID)
+    if (sessionID && !data.session.message.list(sessionID)?.length) void data.session.message.refresh(sessionID)
   })
 
   const sessionID = createMemo(() => stringValue(props.metadata.sessionId))
-  const messages = createMemo(() => sync.data.message[sessionID() ?? ""] ?? [])
+  const messages = createMemo(() => data.session.message.list(sessionID() ?? "") ?? [])
 
   const tools = createMemo(() => {
-    return messages().flatMap((msg) =>
-      (sync.data.part[msg.id] ?? [])
-        .filter((part): part is ToolPart => part.type === "tool")
-        .map((part) => ({ tool: part.tool, state: part.state })),
+    return messages().flatMap((message) =>
+      message.type === "assistant"
+        ? message.content.flatMap((part) =>
+            part.type === "tool" ? [{ tool: part.name, state: presentTool(part).state }] : [],
+          )
+        : [],
     )
   })
 
   const current = createMemo(() =>
-    tools().findLast((x) => (x.state.status === "running" || x.state.status === "completed") && x.state.title),
+    tools().findLast(
+      (x) =>
+        (x.state.status === "running" || x.state.status === "completed") && typeof x.state.metadata?.title === "string",
+    ),
   )
 
   const status = createMemo(() => sync.data.session_status[sessionID() ?? ""])
@@ -2255,8 +2331,8 @@ function Task(props: ToolProps) {
   })
 
   const duration = createMemo(() => {
-    const first = messages().find((x) => x.role === "user")?.time.created
-    const assistant = messages().findLast((x) => x.role === "assistant")?.time.completed
+    const first = messages().find((x) => x.type === "user")?.time.created
+    const assistant = messages().findLast((x) => x.type === "assistant")?.time.completed
     if (!first || !assistant) return 0
     return assistant - first
   })
@@ -2278,7 +2354,8 @@ function Task(props: ToolProps) {
     } else if (isRunning() && tools().length > 0) {
       if (current()) {
         const state = current()!.state
-        const title = state.status === "running" || state.status === "completed" ? state.title : undefined
+        const title =
+          state.status === "running" || state.status === "completed" ? stringValue(state.metadata?.title) : undefined
         content.push(`↳ ${Locale.titlecase(current()!.tool)} ${title}`)
       } else content.push(`↳ ${formatSubagentToolcalls(tools().length)}`)
     }

@@ -90,6 +90,7 @@ export const dict = {
   "dialog.provider.empty": "공급자 없음",
   "dialog.provider.group.popular": "인기",
   "dialog.provider.group.other": "기타",
+  "dialog.provider.custom.label": "OpenAI 호환 사용자 지정 공급자",
   "dialog.provider.tag.recommended": "추천",
   "dialog.provider.opencode.note": "Claude, GPT, Gemini 등을 포함한 엄선된 모델",
   "dialog.provider.opencode.tagline": "신뢰할 수 있는 최적화 모델",
@@ -108,6 +109,7 @@ export const dict = {
   "dialog.model.manage.provider.toggle": "모든 {{provider}} 모델 토글",
   "dialog.model.unpaid.freeModels.title": "OpenCode에서 제공하는 무료 모델",
   "dialog.model.unpaid.addMore.title": "인기 공급자의 모델 추가",
+  "dialog.model.unpaid.viewMoreProviders": "70개 이상의 공급자 더 보기",
   "dialog.provider.viewAll": "더 많은 공급자 보기",
   "provider.connect.title": "{{provider}} 연결",
   "provider.connect.title.anthropicProMax": "Claude Pro/Max로 로그인",
@@ -976,6 +978,7 @@ export const dict = {
   "session.new.workspace.triggerLocal": "로컬",
   "session.new.workspace.local": "로컬 저장소",
   "session.new.workspace.existing": "작업 공간…",
+  "session.new.git.none": "Git 없음",
 
   "sidebar.empty.title": "열린 프로젝트 없음",
   "sidebar.empty.description": "프로젝트를 열어 시작하세요",

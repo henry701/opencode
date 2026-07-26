@@ -1,20 +1,22 @@
 import { createMemo } from "solid-js"
-import { useSync } from "../../context/sync"
+import { useData } from "../../context/data"
 import { DialogSelect } from "../../ui/dialog-select"
 import { useSDK } from "../../context/sdk"
 import { useRoute } from "../../context/route"
 import { useClipboard } from "../../context/clipboard"
 import type { PromptInfo } from "../../component/prompt/history"
-import { stripPromptPartIDs as strip } from "../../prompt/part"
+import { currentPrompt } from "./current-prompt"
 
 export function DialogMessage(props: {
   messageID: string
   sessionID: string
   setPrompt?: (prompt: PromptInfo) => void
 }) {
-  const sync = useSync()
+  const data = useData()
   const sdk = useSDK()
-  const message = createMemo(() => sync.data.message[props.sessionID]?.find((x) => x.id === props.messageID))
+  const message = createMemo(() =>
+    data.session.message.list(props.sessionID)?.find((message) => message.id === props.messageID),
+  )
   const route = useRoute()
   const clipboard = useClipboard()
 
@@ -30,25 +32,13 @@ export function DialogMessage(props: {
             const msg = message()
             if (!msg) return
 
-            void sdk.client.session.revert({
+            void sdk.next.sessions.stage({
               sessionID: props.sessionID,
               messageID: msg.id,
+              files: true,
             })
 
-            if (props.setPrompt) {
-              const parts = sync.data.part[msg.id]
-              const promptInfo = parts.reduce(
-                (agg, part) => {
-                  if (part.type === "text") {
-                    if (!part.synthetic) agg.input += part.text
-                  }
-                  if (part.type === "file") agg.parts.push(strip(part))
-                  return agg
-                },
-                { input: "", parts: [] as PromptInfo["parts"] },
-              )
-              props.setPrompt(promptInfo)
-            }
+            if (props.setPrompt && msg.type === "user") props.setPrompt(currentPrompt(msg))
 
             dialog.clear()
           },
@@ -61,13 +51,12 @@ export function DialogMessage(props: {
             const msg = message()
             if (!msg) return
 
-            const parts = sync.data.part[msg.id]
-            const text = parts.reduce((agg, part) => {
-              if (part.type === "text" && !part.synthetic) {
-                agg += part.text
-              }
-              return agg
-            }, "")
+            const text =
+              msg.type === "user"
+                ? currentPrompt(msg).input
+                : msg.type === "assistant"
+                  ? msg.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n")
+                  : ""
 
             await clipboard.write?.(text)
             dialog.clear()
@@ -78,25 +67,14 @@ export function DialogMessage(props: {
           value: "session.fork",
           description: "create a new session",
           onSelect: async (dialog) => {
-            const result = await sdk.client.session.fork({
+            const result = await sdk.next.sessions.fork({
               sessionID: props.sessionID,
               messageID: props.messageID,
             })
             const msg = message()
-            const prompt = msg
-              ? sync.data.part[msg.id].reduce(
-                  (agg, part) => {
-                    if (part.type === "text") {
-                      if (!part.synthetic) agg.input += part.text
-                    }
-                    if (part.type === "file") agg.parts.push(part)
-                    return agg
-                  },
-                  { input: "", parts: [] as PromptInfo["parts"] },
-                )
-              : undefined
+            const prompt = msg?.type === "user" ? currentPrompt(msg) : undefined
             route.navigate({
-              sessionID: result.data!.id,
+              sessionID: result.id,
               type: "session",
               prompt,
             })

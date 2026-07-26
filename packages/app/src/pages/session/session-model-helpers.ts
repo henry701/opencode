@@ -1,9 +1,17 @@
-import type { UserMessage } from "@opencode-ai/sdk/v2"
+type SessionModel = {
+  sessionID: string
+  agent: string
+  model: {
+    providerID: string
+    modelID: string
+    variant?: string
+  }
+}
 
 type Local = {
   session: {
     reset(): void
-    restore(msg: UserMessage): void
+    restore(msg: SessionModel): void
   }
 }
 
@@ -29,7 +37,7 @@ export const resetSessionModel = (local: Local) => {
   local.session.reset()
 }
 
-export const syncSessionModel = (local: Local, msg: UserMessage) => {
+export const syncSessionModel = (local: Local, msg: SessionModel) => {
   local.session.restore(msg)
 }
 

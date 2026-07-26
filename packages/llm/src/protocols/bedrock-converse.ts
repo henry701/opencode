@@ -25,6 +25,7 @@ import { BedrockMedia } from "./utils/bedrock-media"
 import { Lifecycle } from "./utils/lifecycle"
 import { ToolSchemaProjection } from "./utils/tool-schema"
 import { ToolStream } from "./utils/tool-stream"
+import { PreparedContext } from "./utils/prepared-context"
 
 const ADAPTER = "bedrock-converse"
 
@@ -640,6 +641,21 @@ export const protocol = Protocol.make({
   body: {
     schema: BedrockConverseBody,
     from: fromRequest,
+    context: (body) =>
+      PreparedContext.make(
+        (body.system ?? []).flatMap((part) => ("text" in part ? [part.text] : [])),
+        (body.toolConfig?.tools ?? []).flatMap((tool) =>
+          "toolSpec" in tool
+            ? [
+                {
+                  name: tool.toolSpec.name,
+                  description: tool.toolSpec.description,
+                  inputSchema: tool.toolSpec.inputSchema.json,
+                },
+              ]
+            : [],
+        ),
+      ),
   },
   stream: {
     event: BedrockEvent,

@@ -24,7 +24,7 @@ test("matches the rounded panel corners to the dark new-session background", asy
     },
     provider: { all: [], connected: [], default: {} },
     sessions: [],
-    pageMessages: () => ({ items: [] }),
+    currentPageMessages: () => ({ items: [], throughSeq: 0 }),
   })
   await page.addInitScript(
     ({ directory, draftID, server }) => {

@@ -38,6 +38,16 @@ export const MessageHandler = HttpApiBuilder.group(Api, "server.message", (handl
           catch: () => new InvalidCursorError({ message: "Invalid cursor" }),
         })
         const order = decoded?.order ?? ctx.query.order ?? "desc"
+        const throughSeq = yield* session.latestSequence(ctx.params.sessionID).pipe(
+          Effect.catchTag("Session.NotFoundError", (error) =>
+            Effect.fail(
+              new SessionNotFoundError({
+                sessionID: error.sessionID,
+                message: `Session not found: ${error.sessionID}`,
+              }),
+            ),
+          ),
+        )
         const messages = yield* session
           .messages({
             sessionID: ctx.params.sessionID,
@@ -70,6 +80,7 @@ export const MessageHandler = HttpApiBuilder.group(Api, "server.message", (handl
         const last = messages.at(-1)
         return {
           data: messages,
+          throughSeq,
           cursor: {
             previous: first ? cursor.encode(first, order, "previous") : undefined,
             next: last ? cursor.encode(last, order, "next") : undefined,

@@ -88,7 +88,7 @@ test("keeps scrolled timeline messages visible after switching models", async ({
     project: project(),
     provider,
     sessions: [session()],
-    pageMessages: () => ({ items: messages }),
+    currentPageMessages: () => ({ items: messages.toReversed(), throughSeq: 0 }),
   })
 
   await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
@@ -108,7 +108,7 @@ test("keeps scrolled timeline messages visible after switching models", async ({
   expect(before.blankCount).toBe(0)
   expect(before.textSample.length).toBeGreaterThan(0)
 
-  const composer = page.locator('[data-component="session-composer"]')
+  const composer = page.locator('[data-component="session-prompt-dock"]')
   await composer.locator('[data-action="prompt-model"]').click()
   await page.getByRole("button", { name: /DeepSeek V4 Flash Free/ }).click()
   await expect(composer.locator('[data-action="prompt-model"]')).toContainText("DeepSeek V4 Flash Free")
@@ -133,7 +133,7 @@ test("keeps scrolled timeline when model switch does not resize composer", async
           const filtered = entries.filter((entry) => {
             const target = entry.target
             if (!(target instanceof Element)) return true
-            return !target.closest('[data-component="session-composer"]')
+            return !target.closest('[data-component="session-prompt-dock"]')
           })
           if (filtered.length === 0) return
           callback(filtered, observer)
@@ -147,7 +147,7 @@ test("keeps scrolled timeline when model switch does not resize composer", async
     project: project(),
     provider,
     sessions: [session()],
-    pageMessages: () => ({ items: messages }),
+    currentPageMessages: () => ({ items: messages.toReversed(), throughSeq: 0 }),
   })
 
   await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
@@ -165,7 +165,7 @@ test("keeps scrolled timeline when model switch does not resize composer", async
   expect(before.visible.length).toBeGreaterThan(2)
   expect(before.blankCount).toBe(0)
 
-  const composer = page.locator('[data-component="session-composer"]')
+  const composer = page.locator('[data-component="session-prompt-dock"]')
   await composer.locator('[data-action="prompt-model"]').click()
   await page.getByRole("button", { name: /DeepSeek V4 Flash Free/ }).click()
   await expect(composer.locator('[data-action="prompt-model"]')).toContainText("DeepSeek V4 Flash Free")
@@ -188,7 +188,7 @@ test("keeps scrolled timeline when switching between variant and non-variant mod
     project: project(),
     provider,
     sessions: [session()],
-    pageMessages: () => ({ items: messages }),
+    currentPageMessages: () => ({ items: messages.toReversed(), throughSeq: 0 }),
   })
 
   await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
@@ -207,7 +207,7 @@ test("keeps scrolled timeline when switching between variant and non-variant mod
   expect(before.visible.length).toBeGreaterThan(2)
   expect(before.blankCount).toBe(0)
 
-  const composer = page.locator('[data-component="session-composer"]')
+  const composer = page.locator('[data-component="session-prompt-dock"]')
   const modelDialog = () => page.getByRole("dialog", { name: /Select model/i })
 
   await composer.locator('[data-action="prompt-model"]').click()

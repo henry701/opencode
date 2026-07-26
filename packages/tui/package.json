@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@opencode-ai/tui",
-  "version": "1.18.3",
+  "version": "1.18.4",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -32,6 +32,8 @@
     "./config/keybind": "./src/config/keybind.ts",
     "./keymap": "./src/keymap.tsx",
     "./prompt/display": "./src/prompt/display.ts",
+    "./queue/queue-dock": "./src/queue/queue-dock.tsx",
+    "./queue/preview": "./src/queue/preview.ts",
     "./plugin/runtime": "./src/plugin/runtime.tsx",
     "./plugin/slots": "./src/plugin/slots.tsx",
     "./plugin/command-shim": "./src/plugin/command-shim.ts",
@@ -48,6 +50,7 @@
     "./component/register-spinner": "./src/component/register-spinner.ts"
   },
   "dependencies": {
+    "@opencode-ai/client": "workspace:*",
     "@opencode-ai/core": "workspace:*",
     "@opencode-ai/plugin": "workspace:*",
     "@opencode-ai/sdk": "workspace:*",

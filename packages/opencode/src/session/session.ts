@@ -326,7 +326,6 @@ export const Event = {
   Deleted: SessionV1.Event.Deleted,
   Diff: SessionV1.Event.Diff,
   Error: SessionV1.Event.Error,
-  QueueUpdated: SessionV1.Event.QueueUpdated,
 }
 
 export function plan(input: { slug: string; time: { created: number } }, instance: InstanceContext) {

@@ -4,6 +4,7 @@ import {
   LLMError,
   LLMEvent,
   Model,
+  PreparedRequest,
   TransportReason,
   InvalidRequestReason,
   type LLMClientShape,
@@ -41,6 +42,7 @@ import { AgentV2 } from "@opencode-ai/core/agent"
 import { Config } from "@opencode-ai/core/config"
 import { ConfigCompaction } from "@opencode-ai/core/config/compaction"
 import { Tool } from "@opencode-ai/core/tool/tool"
+import { TaskTool } from "@opencode-ai/core/tool/task"
 import {
   SessionContextEpochTable,
   SessionInputTable,
@@ -48,6 +50,7 @@ import {
   SessionTable,
 } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
+import { SessionInputPayload } from "@opencode-ai/schema/session-input-payload"
 import { SystemContext } from "@opencode-ai/core/system-context"
 import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry"
 import { SkillGuidance } from "@opencode-ai/core/skill/guidance"
@@ -75,7 +78,7 @@ const client = Layer.succeed(
   LLMClient.Service,
   LLMClient.Service.of({
     prepare: () => Effect.die("unused"),
-    stream: ((request: LLMRequest) => {
+    stream: ((request: LLMRequest, options?: Parameters<LLMClientShape["stream"]>[1]) => {
       requests.push(request)
       if (responseStream) {
         const stream = responseStream
@@ -85,12 +88,41 @@ const client = Layer.succeed(
       const events = streamFailure
         ? Stream.fail(streamFailure)
         : Stream.fromIterable(responses === undefined ? response : (responses.shift() ?? []))
-      if (!streamGate) return events
+      const stream = streamGate
+        ? Stream.unwrap(
+            (streamStarted ? Deferred.succeed(streamStarted, undefined) : Effect.void).pipe(
+              Effect.andThen(Deferred.await(streamGate)),
+              Effect.as(events),
+            ),
+          )
+        : events
+      if (!options?.onPrepared) return stream
       return Stream.unwrap(
-        (streamStarted ? Deferred.succeed(streamStarted, undefined) : Effect.void).pipe(
-          Effect.andThen(Deferred.await(streamGate)),
-          Effect.as(events),
-        ),
+        options
+          .onPrepared(
+            new PreparedRequest({
+              id: request.id ?? "request",
+              route: request.model.route.id,
+              protocol: request.model.route.protocol,
+              model: request.model,
+              body: {},
+              metadata: {
+                systemPrompt: request.system.map((part) => part.text).join("\n"),
+                toolDefinitions:
+                  request.tools.length === 0
+                    ? undefined
+                    : JSON.stringify(
+                        Object.fromEntries(
+                          request.tools.map((tool) => [
+                            tool.name,
+                            { description: tool.description, inputSchema: tool.inputSchema },
+                          ]),
+                        ),
+                      ),
+              },
+            }),
+          )
+          .pipe(Effect.as(stream)),
       )
     }) as unknown as LLMClientShape["stream"],
     generate: () => Effect.die("unused"),
@@ -113,7 +145,7 @@ const executions: string[] = []
 const permission = Layer.succeed(
   PermissionV2.Service,
   PermissionV2.Service.of({
-    assert: () => Effect.die("unused"),
+    assert: () => Effect.void,
     ask: () => Effect.die("unused"),
     reply: () => Effect.die("unused"),
     get: () => Effect.die("unused"),
@@ -236,18 +268,36 @@ const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [PermissionV2.node, permission],
   [Config.node, config],
 ])
+const queueDrainsPaused = new Set<SessionV2.ID>()
 const execution = Layer.effect(
   SessionExecution.Service,
   Effect.gen(function* () {
     const sessionRunner = yield* SessionRunner.Service
+    let resume: SessionExecution.Interface["resume"]
+    let interrupt: SessionExecution.Interface["interrupt"]
     const coordinator = yield* SessionRunCoordinator.make<SessionV2.ID, SessionRunner.RunError>({
-      drain: (sessionID, force) => sessionRunner.run({ sessionID, force }),
+      drain: (sessionID, force) =>
+        sessionRunner.run({
+          sessionID,
+          force,
+          execution: {
+            resume,
+            interrupt,
+            queueDrainPaused: (targetID) => Effect.sync(() => queueDrainsPaused.has(targetID)),
+          },
+        }),
     })
+    resume = coordinator.run
+    interrupt = coordinator.interrupt
     return SessionExecution.Service.of({
       active: coordinator.active,
-      resume: coordinator.run,
+      resume,
       wake: coordinator.wake,
-      interrupt: coordinator.interrupt,
+      interrupt,
+      pauseQueueDrain: (sessionID) => Effect.sync(() => queueDrainsPaused.add(sessionID)),
+      resumeQueueDrain: (sessionID) =>
+        Effect.sync(() => queueDrainsPaused.delete(sessionID)).pipe(Effect.andThen(coordinator.wake(sessionID))),
+      queueDrainPaused: (sessionID) => Effect.sync(() => queueDrainsPaused.has(sessionID)),
     })
   }),
 ).pipe(Layer.provide(runnerLayer))
@@ -263,6 +313,7 @@ const it = testEffect(
       AgentV2.node,
       ToolRegistry.node,
       ToolRegistry.toolsNode,
+      TaskTool.node,
       echoNode,
       SessionRunnerModel.node,
       SystemContextRegistry.node,
@@ -329,6 +380,7 @@ const setup = Effect.gen(function* () {
   toolExecutionsReady = 5
   activeToolExecutions = 0
   maxActiveToolExecutions = 0
+  queueDrainsPaused.clear()
   yield* db
     .insert(ProjectTable)
     .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
@@ -536,7 +588,9 @@ const verifyPartialFlushOnInterruption = (kind: FragmentKind) =>
     )
 
     const runner = yield* SessionRunner.Service
-    const fiber = yield* runner.run({ sessionID, force: true }).pipe(Effect.forkChild)
+    const fiber = yield* runner
+      .run({ sessionID, force: true, execution: yield* SessionExecution.Service })
+      .pipe(Effect.forkChild)
     yield* Deferred.await(streamed)
     yield* Fiber.interrupt(fiber)
     expect(yield* session.context(sessionID)).toMatchObject([
@@ -544,7 +598,7 @@ const verifyPartialFlushOnInterruption = (kind: FragmentKind) =>
       {
         type: "assistant",
         finish: "error",
-        error: { type: "unknown", message: "Provider turn interrupted" },
+        error: { type: "interrupted", message: "Provider turn interrupted" },
         content: [
           kind === "tool input"
             ? { type: "tool", id: fragmentID(kind, "interrupted"), state: { status: "error" } }
@@ -587,14 +641,15 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests[0]?.tools.map((tool) => tool.name)).toContain("application_context")
-      expect(contexts).toEqual([
+      expect(contexts).toMatchObject([
         {
           sessionID,
           agent: AgentV2.ID.make("build"),
-          assistantMessageID: expect.stringMatching(/^msg_/),
           toolCallID: "call-application",
         },
       ])
+      expect(contexts[0]?.assistantMessageID).toMatch(/^msg_/)
+      expect(contexts[0]?.task).toBeFunction()
       expect(yield* session.context(sessionID)).toMatchObject([
         { type: "user", text: "Use application context" },
         {
@@ -646,7 +701,7 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests).toHaveLength(1)
       expect(requests[0]?.model).toBe(model)
-      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["echo", "defect"])
+      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["task", "echo", "defect"])
       expect(requests[0]?.messages.map((message) => ({ role: message.role, content: message.content }))).toEqual([
         { role: "user", content: [{ type: "text", text: "First" }] },
         { role: "user", content: [{ type: "text", text: "Second" }] },
@@ -762,8 +817,10 @@ describe("SessionRunnerLLM", () => {
         ["Initial context"],
         ["Initial context"],
       ])
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "user", "system"])
-      expect(requests[1]?.messages.at(-1)?.content).toEqual([{ type: "text", text: "Changed context" }])
+      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "system", "user"])
+      expect(requests[1]?.messages.find((message) => message.role === "system")?.content).toEqual([
+        { type: "text", text: "Changed context" },
+      ])
       expect(yield* session.messages({ sessionID })).toHaveLength(3)
       const { db } = yield* Database.Service
       expect(
@@ -958,8 +1015,8 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Second" }), resume: false })
       yield* session.resume(sessionID)
 
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "user", "system"])
-      expect(requests[1]?.messages.at(-1)?.content).toEqual([
+      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "system", "user"])
+      expect(requests[1]?.messages.find((message) => message.role === "system")?.content).toEqual([
         { type: "text", text: "System context source removed: test/context" },
       ])
       expect(yield* session.messages({ sessionID })).toHaveLength(3)
@@ -994,15 +1051,15 @@ describe("SessionRunnerLLM", () => {
         ["Initial context"],
         ["Initial context"],
       ])
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "user", "system"])
+      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "system", "user"])
       expect(requests[2]?.messages.filter((message) => message.role === "system")).toHaveLength(2)
       expect((yield* session.context(sessionID)).map((message) => message.type)).toEqual([
         "user",
-        "user",
         "system",
+        "user",
         "model-switched",
-        "user",
         "system",
+        "user",
       ])
       yield* replaySessionProjection(sessionID)
       expect(yield* session.messages({ sessionID })).toHaveLength(6)
@@ -1365,7 +1422,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
-      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["echo", "defect"])
+      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["task", "echo", "defect"])
       expect(yield* session.context(sessionID)).toMatchObject([
         { type: "user", text: "Use tools" },
         {
@@ -1505,6 +1562,391 @@ describe("SessionRunnerLLM", () => {
         ["Initial context"],
       ])
       expect(systemTexts(requests[1]!)).toContain("Replacement context")
+    }),
+  )
+
+  it.effect("commits a staged revert before promoting and preserves the queued input", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const boundary = SessionMessage.ID.create()
+      yield* session.prompt({
+        id: boundary,
+        sessionID,
+        prompt: Prompt.make({ text: "boundary" }),
+        resume: false,
+      })
+      response = []
+      yield* session.resume(sessionID)
+      yield* events.publish(SessionEvent.RevertEvent.Staged, {
+        sessionID,
+        timestamp: DateTime.makeUnsafe(1),
+        revert: { messageID: boundary, files: [] },
+      })
+      const queued = yield* session.queue.enqueue({
+        sessionID,
+        payload: SessionInputPayload.Payload.make({
+          version: 1,
+          agent: "build",
+          model: {
+            providerID: SessionInputPayload.ProviderID.make("fake"),
+            modelID: SessionInputPayload.ModelID.make("fake-model"),
+          },
+          parts: [SessionInputPayload.TextPart.make({ type: "text", text: "after revert" })],
+        }),
+      })
+      response = fragmentFixture("text", "text-after-revert", ["done"]).completeEvents
+
+      yield* session.resume(sessionID)
+
+      expect(yield* session.queue.list(sessionID)).toEqual([])
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { id: boundary, type: "user", text: "boundary" },
+        { id: queued.id, type: "user", text: "after revert" },
+        { type: "assistant", content: [{ type: "text", text: "done" }] },
+      ])
+      const history = yield* session.history({ sessionID, limit: 100 })
+      const committed = history.events.findIndex((event) => event.type === "session.next.revert.committed")
+      const promoted = history.events.findIndex(
+        (event) =>
+          event.type === "session.next.prompted" && "messageID" in event.data && event.data.messageID === queued.id,
+      )
+      expect(committed).toBeGreaterThan(-1)
+      expect(promoted).toBeGreaterThan(committed)
+      expect((yield* session.get(sessionID)).revert).toBeUndefined()
+    }),
+  )
+
+  it.effect("commits a staged revert before promoting and preserves the steering input", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const boundary = SessionMessage.ID.create()
+      yield* session.prompt({
+        id: boundary,
+        sessionID,
+        prompt: Prompt.make({ text: "boundary" }),
+        resume: false,
+      })
+      response = []
+      yield* session.resume(sessionID)
+      yield* events.publish(SessionEvent.RevertEvent.Staged, {
+        sessionID,
+        timestamp: DateTime.makeUnsafe(1),
+        revert: { messageID: boundary, files: [] },
+      })
+      const steer = yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "steer after revert" }),
+        resume: false,
+      })
+      response = fragmentFixture("text", "text-after-steer-revert", ["done"]).completeEvents
+
+      yield* session.resume(sessionID)
+
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { id: boundary, type: "user", text: "boundary" },
+        { id: steer.id, type: "user", text: "steer after revert" },
+        { type: "assistant", content: [{ type: "text", text: "done" }] },
+      ])
+      const history = yield* session.history({ sessionID, limit: 100 })
+      const committed = history.events.findIndex((event) => event.type === "session.next.revert.committed")
+      const promoted = history.events.findIndex(
+        (event) =>
+          event.type === "session.next.prompted" && "messageID" in event.data && event.data.messageID === steer.id,
+      )
+      expect(committed).toBeGreaterThan(-1)
+      expect(promoted).toBeGreaterThan(committed)
+    }),
+  )
+
+  it.effect("projects a payload-controlled queued tool continuation into the consumer timeline and history", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const agents = yield* AgentV2.Service
+      yield* agents.transform((editor) =>
+        editor.update(AgentV2.ID.make("reviewer"), (agent) => {
+          agent.mode = "primary"
+          agent.system = "Reviewer instructions"
+          agent.permissions = [{ action: "echo", resource: "*", effect: "deny" }]
+        }),
+      )
+      const session = yield* SessionV2.Service
+      const payload = SessionInputPayload.Payload.make({
+        version: 1,
+        agent: "reviewer",
+        model: {
+          providerID: SessionInputPayload.ProviderID.make("fake"),
+          modelID: SessionInputPayload.ModelID.make("replacement"),
+          variant: SessionInputPayload.VariantID.make("thinking"),
+        },
+        tools: { echo: true, defect: false },
+        system: "Queue-specific instructions",
+        format: {
+          type: "json_schema",
+          schema: { type: "object", properties: { answer: { type: "string" } } },
+          retryCount: 3,
+        },
+        permissions: [{ permission: "echo", pattern: "*", action: "allow" }],
+        parts: [
+          { type: "text", text: "Review this" },
+          {
+            type: "subtask",
+            prompt: "Check the parser",
+            description: "Parser review",
+            agent: "reviewer",
+            model: {
+              providerID: SessionInputPayload.ProviderID.make("fake"),
+              modelID: SessionInputPayload.ModelID.make("replacement"),
+              variant: SessionInputPayload.VariantID.make("child-thinking"),
+            },
+          },
+        ],
+      })
+      yield* session.queue.enqueue({ sessionID, payload })
+      requests.length = 0
+      authorizations.length = 0
+      executions.length = 0
+      responses = [
+        fragmentFixture("text", "text-child-result", ["Parser checked"]).completeEvents,
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolCall({ id: "call-queue-echo", name: "echo", input: { text: "checked" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        fragmentFixture("text", "text-queue-payload", ['{"answer":"done"}']).completeEvents,
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(3)
+      expect(requests.map((request) => request.model)).toEqual([replacementModel, replacementModel, replacementModel])
+      expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
+        ["Reviewer instructions", "Initial context"],
+        ["Reviewer instructions", "Queue-specific instructions", "Initial context"],
+        ["Reviewer instructions", "Queue-specific instructions", "Initial context"],
+      ])
+      expect(requests.map((request) => request.tools.map((tool) => tool.name))).toEqual([
+        ["task", "defect"],
+        ["task", "echo"],
+        ["task", "echo"],
+      ])
+      expect(requests.map((request) => request.responseFormat)).toEqual([
+        undefined,
+        { type: "json", schema: { type: "object", properties: { answer: { type: "string" } } } },
+        { type: "json", schema: { type: "object", properties: { answer: { type: "string" } } } },
+      ])
+      const systemPrompt = ["Reviewer instructions", "Queue-specific instructions", "Initial context"].join("\n")
+      const toolDefinitions = JSON.stringify(
+        Object.fromEntries(
+          requests[1]!.tools.map((tool) => [
+            tool.name,
+            {
+              description: tool.description,
+              inputSchema: tool.inputSchema,
+            },
+          ]),
+        ),
+      )
+      expect(userTexts(requests[0]!)).toEqual(["Check the parser"])
+      expect(userTexts(requests[1]!)).toEqual(["Review this\nCheck the parser"])
+      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool"])
+      expect(requests[2]?.messages.map((message) => message.role)).toEqual([
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "tool",
+      ])
+      expect(authorizations).toMatchObject([{ sessionID, agent: "reviewer", toolCallID: "call-queue-echo" }])
+      expect(executions).toEqual(["checked"])
+      const context = yield* session.context(sessionID)
+      expect(context).toMatchObject([
+        { type: "user", payload },
+        {
+          type: "assistant",
+          agent: "reviewer",
+          model: { id: "replacement", variant: "thinking" },
+          finish: "tool-calls",
+          content: [
+            {
+              type: "tool",
+              id: expect.stringContaining("subtask_"),
+              state: { status: "completed", result: "Parser checked" },
+            },
+          ],
+        },
+        {
+          type: "assistant",
+          agent: "reviewer",
+          model: { id: "replacement", variant: "thinking" },
+          systemPrompt,
+          toolDefinitions,
+          finish: "tool-calls",
+          content: [
+            {
+              type: "tool",
+              id: "call-queue-echo",
+              state: { status: "completed", structured: { text: "checked" } },
+            },
+          ],
+        },
+        {
+          type: "assistant",
+          agent: "reviewer",
+          model: { id: "replacement", variant: "thinking" },
+          systemPrompt,
+          toolDefinitions,
+          finish: "stop",
+          content: [{ type: "text", text: '{"answer":"done"}' }],
+        },
+      ])
+      const child = (yield* session.list()).find((item) => item.parentID === sessionID)
+      expect(child).toMatchObject({ agent: "reviewer", model: { id: "replacement", variant: "child-thinking" } })
+      expect(child && (yield* session.context(child.id))).toMatchObject([
+        { type: "user", text: "Check the parser" },
+        { type: "assistant", content: [{ type: "text", text: "Parser checked" }] },
+      ])
+      const history = yield* session.history({ sessionID, limit: 100 })
+      const eventTypes = history.events.map((event) => event.type)
+      expect(eventTypes.indexOf("session.next.prompt.admitted")).toBeLessThan(
+        eventTypes.indexOf("session.next.prompted"),
+      )
+      expect(eventTypes.indexOf("session.next.prompted")).toBeLessThan(eventTypes.indexOf("session.next.tool.called"))
+      expect(eventTypes.indexOf("session.next.tool.called")).toBeLessThan(
+        eventTypes.indexOf("session.next.tool.success"),
+      )
+      expect(eventTypes.indexOf("session.next.tool.success")).toBeLessThan(
+        eventTypes.lastIndexOf("session.next.step.ended"),
+      )
+    }),
+  )
+
+  it.effect("coordinates child execution and interrupts it with its parent", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const execution = yield* SessionExecution.Service
+      yield* session.queue.enqueue({
+        sessionID,
+        payload: SessionInputPayload.Payload.make({
+          version: 1,
+          agent: "build",
+          model: {
+            providerID: SessionInputPayload.ProviderID.make("fake"),
+            modelID: SessionInputPayload.ModelID.make("fake-model"),
+          },
+          parts: [
+            {
+              type: "subtask",
+              prompt: "Wait for interruption",
+              description: "Interruptible child",
+              agent: "build",
+            },
+          ],
+        }),
+      })
+      requests.length = 0
+      response = fragmentFixture("text", "text-interrupted-child", ["should not finish"]).completeEvents
+      streamGate = yield* Deferred.make<void>()
+      streamStarted = yield* Deferred.make<void>()
+
+      const parent = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(streamStarted)
+      const child = (yield* session.list()).find((item) => item.parentID === sessionID)
+      expect(child).toBeDefined()
+      expect(yield* execution.active).toEqual(new Set([sessionID, child!.id]))
+
+      yield* execution.wake(child!.id)
+      yield* execution.interrupt(sessionID)
+      yield* Fiber.await(parent)
+      while ((yield* execution.active).size > 0) yield* Effect.yieldNow
+
+      expect(yield* execution.active).toEqual(new Set())
+      expect(requests).toHaveLength(1)
+      streamGate = undefined
+      streamStarted = undefined
+    }),
+  )
+
+  it.effect("rejects a task ID whose child is outside the parent Location", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const session = yield* SessionV2.Service
+      const agents = yield* AgentV2.Service
+      yield* agents.transform((editor) =>
+        editor.update(AgentV2.ID.make("reviewer"), (agent) => {
+          agent.mode = "subagent"
+          agent.model = {
+            providerID: ProviderV2.ID.make("fake"),
+            id: ModelV2.ID.make("fake-model"),
+          }
+        }),
+      )
+      const foreign = SessionV2.ID.make("ses_foreign_child")
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: foreign,
+          project_id: Project.ID.global,
+          parent_id: sessionID,
+          slug: foreign,
+          directory: "/other-project",
+          title: "foreign child",
+          version: "test",
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Resume the task" }), resume: false })
+      requests.length = 0
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolCall({
+            id: "call-foreign-task",
+            name: "task",
+            input: {
+              description: "Resume foreign child",
+              prompt: "Continue",
+              subagent_type: "reviewer",
+              task_id: foreign,
+            },
+          }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [],
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      const context = yield* session.context(sessionID)
+      expect(context).toMatchObject([
+        { type: "user", text: "Resume the task" },
+        {
+          type: "assistant",
+          content: [
+            {
+              type: "tool",
+              id: "call-foreign-task",
+              state: { status: "error" },
+            },
+          ],
+        },
+      ])
+      const error = context
+        .filter((message): message is SessionMessage.Assistant => message.type === "assistant")
+        .flatMap((message) => message.content)
+        .find(
+          (part): part is Extract<SessionMessage.Assistant["content"][number], { type: "tool" }> =>
+            part.type === "tool" && part.id === "call-foreign-task",
+        )
+      expect(error?.state.status === "error" && error.state.error.message).toContain("does not belong")
     }),
   )
 
@@ -2374,6 +2816,39 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("holds queued input until queue draining resumes", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const execution = yield* SessionExecution.Service
+      response = [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
+      ]
+      requests.length = 0
+      yield* session.queue.pauseDrain(sessionID)
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Wait for drain resume" }),
+        delivery: "queue",
+      })
+      yield* Effect.yieldNow
+
+      expect(yield* execution.queueDrainPaused(sessionID)).toBe(true)
+      expect(requests).toHaveLength(0)
+      expect(yield* SessionInput.hasPending((yield* Database.Service).db, sessionID, "queue")).toBe(true)
+
+      yield* session.queue.resumeDrain(sessionID)
+      while (yield* SessionInput.hasPending((yield* Database.Service).db, sessionID, "queue")) yield* Effect.yieldNow
+
+      expect(yield* execution.queueDrainPaused(sessionID)).toBe(false)
+      expect(requests).toHaveLength(1)
+      expect(userTexts(requests[0]!)).toEqual(["Wait for drain resume"])
+      expect(yield* SessionInput.hasPending((yield* Database.Service).db, sessionID, "queue")).toBe(false)
+    }),
+  )
+
   it.effect("retries inbox input after prompt projection rolls back", () =>
     Effect.gen(function* () {
       yield* setup
@@ -2929,7 +3404,9 @@ describe("SessionRunnerLLM", () => {
       ]
 
       const runner = yield* SessionRunner.Service
-      const run = yield* runner.run({ sessionID, force: true }).pipe(Effect.forkChild)
+      const run = yield* runner
+        .run({ sessionID, force: true, execution: yield* SessionExecution.Service })
+        .pipe(Effect.forkChild)
       while (executions.length === 0) yield* Effect.yieldNow
       yield* Fiber.interrupt(run)
       toolExecutionGate = undefined

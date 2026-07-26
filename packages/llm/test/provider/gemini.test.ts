@@ -33,6 +33,7 @@ describe("Gemini route", () => {
         systemInstruction: { parts: [{ text: "You are concise." }] },
         generationConfig: { maxOutputTokens: 20, temperature: 0 },
       })
+      expect(prepared.metadata?.systemPrompt).toBe("You are concise.")
     }),
   )
 

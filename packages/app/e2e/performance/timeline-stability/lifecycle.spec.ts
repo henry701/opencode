@@ -16,7 +16,6 @@ import {
   reasoningPart,
   setupTimeline,
   shell,
-  status,
   textPart,
   userMessage,
   waitForVisualSettle,
@@ -38,7 +37,7 @@ test.describe("timeline visual lifecycle stability", () => {
       eventRetry: 24,
       seedHistory: true,
     })
-    await timeline.send(status("busy"), 150)
+    await timeline.sendStatus("busy", 150)
     for (const id of ids) await timeline.waitForPart(id)
     const scroller = page.locator(".scroll-view__viewport", {
       has: page.locator('[data-timeline-row="AssistantPart"]'),
@@ -60,9 +59,9 @@ test.describe("timeline visual lifecycle stability", () => {
       { event: partUpdated(shell(ids[1]!, "completed", lines(2))), delay: 260 },
       { event: partUpdated(shell(ids[2]!, "running", lines(50))), delay: 100 },
       { event: partUpdated(shell(ids[2]!, "completed", lines(50))), delay: 450 },
-      { event: messageUpdated(completedAssistantInfo(assistant.info)), delay: 100 },
-      { event: status("idle"), delay: 700 },
+      { event: messageUpdated(completedAssistantInfo(assistant)), delay: 100 },
     ])
+    await timeline.sendStatus("idle", 700)
     const trace = await stopVisualProbe<keyof typeof regions>(page)
     await reportVisualStability(
       testInfo,
@@ -104,7 +103,7 @@ test.describe("timeline visual lifecycle stability", () => {
       settings: { showReasoningSummaries: true },
       cpuRate: 4,
     })
-    await timeline.send(status("busy"), 120)
+    await timeline.sendStatus("busy", 120)
     await expect(page.locator('[data-timeline-row="Thinking"]')).toBeVisible()
 
     const regions = defineVisualRegions({
@@ -125,8 +124,8 @@ test.describe("timeline visual lifecycle stability", () => {
     await timeline.send(partDelta(textID, " **stable"), 90)
     await timeline.send(partDelta(textID, " output** with `code` and [a link"), 130)
     await timeline.send(partDelta(textID, "](https://example.com)."), 220)
-    await timeline.send(messageUpdated(completedAssistantInfo(assistant.info)), 120)
-    await timeline.send(status("idle"), 500)
+    await timeline.send(messageUpdated(completedAssistantInfo(assistant)), 120)
+    await timeline.sendStatus("idle", 500)
     const trace = await stopVisualProbe<keyof typeof regions>(page)
     await reportVisualStability(
       testInfo,

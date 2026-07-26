@@ -109,29 +109,24 @@ async function openReview(page: Page) {
       }
       return []
     },
-    pageMessages: () => ({
+    currentPageMessages: () => ({
       items: [
         {
-          info: {
-            id: "msg_review_image_flash_regression",
-            sessionID,
-            role: "user",
-            time: { created: 1700000000000 },
-            summary: { diffs: [] },
+          id: "msg_review_image_flash_regression",
+          type: "user",
+          text: "Review this change.",
+          files: [],
+          agents: [],
+          time: { created: 1700000000000 },
+          payload: {
+            version: 1,
             agent: "build",
             model: { providerID: "opencode", modelID: "test" },
+            parts: [{ id: "prt_review_image_flash_regression", type: "text", text: "Review this change." }],
           },
-          parts: [
-            {
-              id: "prt_review_image_flash_regression",
-              sessionID,
-              messageID: "msg_review_image_flash_regression",
-              type: "text",
-              text: "Review this change.",
-            },
-          ],
         },
       ],
+      throughSeq: 0,
     }),
   })
 

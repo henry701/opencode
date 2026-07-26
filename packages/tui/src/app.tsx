@@ -508,9 +508,9 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     if (match) {
       continued = true
       if (args.fork) {
-        void sdk.client.session.fork({ sessionID: match }).then((result) => {
-          if (result.data?.id) {
-            route.navigate({ type: "session", sessionID: result.data.id })
+        void sdk.next.sessions.fork({ sessionID: match }).then((result) => {
+          if (result.id) {
+            route.navigate({ type: "session", sessionID: result.id })
           } else {
             toast.show({ message: "Failed to fork session", variant: "error" })
           }
@@ -528,9 +528,9 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   createEffect(() => {
     if (forked || sync.status !== "complete" || !args.sessionID || !args.fork) return
     forked = true
-    void sdk.client.session.fork({ sessionID: args.sessionID }).then((result) => {
-      if (result.data?.id) {
-        route.navigate({ type: "session", sessionID: result.data.id })
+    void sdk.next.sessions.fork({ sessionID: args.sessionID }).then((result) => {
+      if (result.id) {
+        route.navigate({ type: "session", sessionID: result.id })
       } else {
         toast.show({ message: "Failed to fork session", variant: "error" })
       }

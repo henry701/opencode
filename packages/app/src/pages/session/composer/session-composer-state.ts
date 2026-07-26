@@ -23,9 +23,11 @@ export const todoState = (input: {
 
 export const todoDockAtBoundary = (state: ReturnType<typeof todoState>) => state === "open"
 
-const idle = { type: "idle" as const }
-
-export function createSessionComposerController(options?: { closeMs?: number | (() => number) }) {
+export function createSessionComposerController(options?: {
+  closeMs?: number | (() => number)
+  working?: () => boolean
+  ready?: () => boolean
+}) {
   const params = useParams()
   const sdk = useSDK()
   const sync = useSync()
@@ -59,7 +61,10 @@ export function createSessionComposerController(options?: { closeMs?: number | (
     () => todos().length > 0 && todos().every((todo) => todo.status === "completed" || todo.status === "cancelled"),
   )
 
-  const live = createMemo(() => sync().data.session_working(params.id ?? "") || blocked())
+  const live = createMemo(
+    () => (options?.working?.() ?? false) || sync().data.session_working(params.id ?? "") || blocked(),
+  )
+  const ready = createMemo(() => options?.ready?.() ?? true)
 
   const [store, setStore] = createStore({
     sessionID: params.id,
@@ -82,7 +87,7 @@ export function createSessionComposerController(options?: { closeMs?: number | (
 
     setStore("responding", perm.id)
     sdk()
-      .client.permission.respond({ sessionID: perm.sessionID, permissionID: perm.id, response })
+      .api.permission.reply({ sessionID: perm.sessionID, requestID: perm.id, reply: response })
       .catch((err: unknown) => {
         const description = err instanceof Error ? err.message : String(err)
         showToast({ title: language.t("common.requestFailed"), description })
@@ -119,8 +124,8 @@ export function createSessionComposerController(options?: { closeMs?: number | (
 
   createEffect(
     on(
-      () => [params.id, todos().length, done(), live()] as const,
-      ([id, count, complete, active], previous) => {
+      () => [params.id, todos().length, done(), live(), ready()] as const,
+      ([id, count, complete, active, settled], previous) => {
         if (raf) cancelAnimationFrame(raf)
         raf = undefined
 
@@ -134,7 +139,8 @@ export function createSessionComposerController(options?: { closeMs?: number | (
           if (timer) window.clearTimeout(timer)
           timer = undefined
           setStore({ sessionID: id, dock: todoDockAtBoundary(next), closing: false, opening: false })
-          if (next === "clear") clear()
+          // Avoid clearing todos while the current session is still hydrating busy/active.
+          if (next === "clear" && settled) clear()
           return
         }
 

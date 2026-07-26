@@ -22,28 +22,41 @@ describe("timeline fixture validation", () => {
     ).toThrow()
     expect(() =>
       validateTimelineEvent({
-        directory: "C:/OpenCode/TimelineStability",
-        payload: {
-          id: "evt_invalid_status",
-          type: "session.status",
-          properties: { sessionID: "ses_timeline_stability", status: { type: "retry", attempt: 1 } },
-        },
+        id: "evt_invalid_retry",
+        type: "session.next.retried",
+        data: { timestamp: 1, sessionID: "ses_timeline_stability", attempt: 1 },
       }),
     ).toThrow()
   })
 
-  test("rejects duplicate IDs and orphan assistants", () => {
+  test("rejects duplicate message and content IDs", () => {
     expect(() => validateTimelineMessages([userMessage(), userMessage()])).toThrow(/duplicate message ID/)
     expect(() =>
-      validateTimelineMessages([userMessage(), assistantMessage([], { parentID: "msg_missing_parent" })]),
-    ).toThrow(/parent user/)
+      validateTimelineMessages([
+        userMessage(),
+        assistantMessage([
+          { id: "txt_duplicate", type: "text", text: "first" },
+          { id: "txt_duplicate", type: "text", text: "second" },
+        ]),
+      ]),
+    ).toThrow(/duplicate content ID/)
   })
 
   test("assigns deterministic event IDs", () => {
-    const first = event("session.status", { sessionID: "ses_timeline_stability", status: { type: "busy" } })
-    const second = event("session.status", { sessionID: "ses_timeline_stability", status: { type: "idle" } })
-    expect(first.payload.id).toMatch(/^evt_timeline_\d{4}$/)
-    expect(Number(second.payload.id.slice(-4))).toBe(Number(first.payload.id.slice(-4)) + 1)
+    const first = event("session.next.retried", {
+      timestamp: 1,
+      sessionID: "ses_timeline_stability",
+      attempt: 1,
+      error: { message: "retry", isRetryable: true },
+    })
+    const second = event("session.next.retried", {
+      timestamp: 2,
+      sessionID: "ses_timeline_stability",
+      attempt: 2,
+      error: { message: "retry", isRetryable: true },
+    })
+    expect(first.id).toMatch(/^evt_timeline_\d{4}$/)
+    expect(Number(second.id.slice(-4))).toBe(Number(first.id.slice(-4)) + 1)
   })
 })
 
@@ -63,6 +76,6 @@ if (false) {
     { id: "prt_invalid_owner", type: "agent", name: "explore", source: { value: "@explore", start: 0, end: 8 } },
   ])
 
-  // @ts-expect-error Retry status events require message and next.
-  event("session.status", { sessionID: "ses_timeline_stability", status: { type: "retry", attempt: 1 } })
+  // @ts-expect-error Native retry events require the provider error.
+  event("session.next.retried", { timestamp: 1, sessionID: "ses_timeline_stability", attempt: 1 })
 }

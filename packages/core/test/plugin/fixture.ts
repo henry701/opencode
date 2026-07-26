@@ -15,6 +15,8 @@ import { Npm } from "@opencode-ai/core/npm"
 import { PluginV2 } from "@opencode-ai/core/plugin"
 import { Reference } from "@opencode-ai/core/reference"
 import { SkillV2 } from "@opencode-ai/core/skill"
+import { ToolOutputStore } from "@opencode-ai/core/tool-output-store"
+import { ToolRegistry } from "@opencode-ai/core/tool/registry"
 import { Effect, Layer } from "effect"
 import { tempLocationLayer } from "../fixture/location"
 
@@ -44,9 +46,12 @@ export const PluginTestLayer = AppNodeBuilder.build(
     Integration.node,
     Reference.node,
     SkillV2.node,
+    ToolRegistry.node,
+    ToolRegistry.toolsNode,
   ]),
   [
     [Location.node, tempLocationLayer],
     [Npm.node, npmLayer],
+    [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
   ],
 )

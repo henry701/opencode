@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
 import path from "path"
-import { Effect, Layer, Stream } from "effect"
+import { DateTime, Effect, Layer, Stream } from "effect"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { asc, eq } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
@@ -23,6 +23,7 @@ import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
+import { SessionMessage } from "@opencode-ai/core/session/message"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { testEffect } from "./lib/effect"
 import { tmpdir } from "./fixture/tmpdir"
@@ -90,6 +91,93 @@ describe("SessionV2.create", () => {
           model,
         }),
       ).toMatchObject({ location: { directory: location.directory, workspaceID }, agent: "build", model })
+    }),
+  )
+
+  it.effect("exposes persisted session summary diffs through the current contract", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      const created = yield* session.create({ location })
+      const diffs = [
+        { file: "src/a.ts", patch: "@@ -1 +1 @@", additions: 1, deletions: 1, status: "modified" as const },
+      ]
+      yield* db
+        .update(SessionTable)
+        .set({ summary_additions: 1, summary_deletions: 1, summary_files: 1, summary_diffs: diffs })
+        .where(eq(SessionTable.id, created.id))
+        .run()
+        .pipe(Effect.orDie)
+
+      expect((yield* session.get(created.id)).summary).toEqual({ additions: 1, deletions: 1, files: 1, diffs })
+    }),
+  )
+
+  it.effect("updates the title and forks projected messages through native durable events", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const original = yield* session.create({
+        location,
+        title: "Review",
+        metadata: { source: "fork-test" },
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const first = SessionMessage.ID.create()
+      const compaction = SessionMessage.ID.create()
+      const boundary = SessionMessage.ID.create()
+      yield* events.publish(SessionEvent.Prompted, {
+        sessionID: original.id,
+        messageID: first,
+        timestamp: DateTime.makeUnsafe(1),
+        prompt: Prompt.make({ text: "keep" }),
+        delivery: "steer",
+      })
+      yield* events.publish(SessionEvent.Compaction.Started, {
+        sessionID: original.id,
+        messageID: compaction,
+        timestamp: DateTime.makeUnsafe(2),
+        reason: "manual",
+      })
+      yield* events.publish(SessionEvent.Compaction.Ended, {
+        sessionID: original.id,
+        messageID: compaction,
+        timestamp: DateTime.makeUnsafe(3),
+        reason: "manual",
+        text: "summary",
+        recent: "",
+      })
+      yield* events.publish(SessionEvent.Prompted, {
+        sessionID: original.id,
+        messageID: boundary,
+        timestamp: DateTime.makeUnsafe(4),
+        prompt: Prompt.make({ text: "exclude" }),
+        delivery: "steer",
+      })
+
+      expect(yield* session.update({ sessionID: original.id, title: "Reviewed" })).toMatchObject({
+        title: "Reviewed",
+      })
+      const forked = yield* session.fork({ sessionID: original.id, messageID: boundary })
+
+      expect(forked).toMatchObject({ parentID: original.id, title: "Reviewed (fork #1)" })
+      expect(yield* session.messages({ sessionID: forked.id, order: "asc" })).toMatchObject([
+        { type: "user", text: "keep" },
+        { type: "compaction", summary: "summary" },
+      ])
+      expect((yield* session.messages({ sessionID: forked.id, order: "asc" }))[0]?.id).not.toBe(first)
+      const row = yield* Database.Service.use(({ db }) =>
+        db.select().from(SessionTable).where(eq(SessionTable.id, forked.id)).get().pipe(Effect.orDie),
+      )
+      expect(row).toMatchObject({
+        metadata: { source: "fork-test" },
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      expect(
+        Array.from(yield* session.events({ sessionID: forked.id }).pipe(Stream.take(1), Stream.runCollect)).map(
+          (event) => event.type,
+        ),
+      ).toContain("session.next.message.imported")
     }),
   )
 
@@ -305,7 +393,7 @@ describe("SessionV2.create", () => {
     }),
   )
 
-  it.effect("reports unfinished Session operations as unavailable", () =>
+  it.effect("reports unfinished skill execution as unavailable", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
       const created = yield* session.create({ location })
@@ -317,7 +405,6 @@ describe("SessionV2.create", () => {
           Effect.map((error) => (error instanceof SessionV2.OperationUnavailableError ? error.operation : "not-found")),
         )
 
-      expect(yield* unavailable(session.shell({ sessionID: created.id, command: "pwd" }))).toBe("shell")
       expect(yield* unavailable(session.skill({ sessionID: created.id, skill: "review" }))).toBe("skill")
     }),
   )

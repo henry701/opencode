@@ -42,11 +42,18 @@ export interface Protocol<Body, Frame, Event, State> {
   readonly stream: ProtocolStream<Frame, Event, State>
 }
 
+export interface PreparedContext {
+  readonly systemPrompt?: string
+  readonly toolDefinitions?: string
+}
+
 export interface ProtocolBody<Body> {
   /** Schema for the validated provider-native body sent as the JSON request. */
   readonly schema: Schema.Codec<Body, unknown>
   /** Build the provider-native body from a common `LLMRequest`. */
   readonly from: (request: LLMRequest) => Effect.Effect<Body, LLMError>
+  /** Extract the exact model-visible system and tool definitions from the validated provider body. */
+  readonly context: (body: Body) => PreparedContext
 }
 
 export interface ProtocolStream<Frame, Event, State> {

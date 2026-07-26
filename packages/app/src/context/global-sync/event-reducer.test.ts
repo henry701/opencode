@@ -81,6 +81,7 @@ const baseState = (input: Partial<State> = {}) =>
     vcs: undefined,
     limit: 10,
     message: {},
+    session_message: {},
     part: {},
     part_text_accum_delta: {},
     ...input,
@@ -292,8 +293,8 @@ describe("applyDirectoryEvent", () => {
 
   test("cleans session caches when deleted and decrements only root totals", () => {
     const cases = [
-      { info: rootSession({ id: "ses_1" }), expectedTotal: 1 },
-      { info: rootSession({ id: "ses_2", parentID: "ses_1" }), expectedTotal: 2 },
+      { info: rootSession({ id: "ses_1" }), expectedTotal: 1, current: false },
+      { info: rootSession({ id: "ses_2", parentID: "ses_1" }), expectedTotal: 2, current: true },
     ]
 
     for (const item of cases) {
@@ -317,7 +318,10 @@ describe("applyDirectoryEvent", () => {
       )
 
       applyDirectoryEvent({
-        event: { type: "session.deleted", properties: { info: item.info } },
+        event: {
+          type: "session.deleted",
+          properties: item.current ? { sessionID: item.info.id } : { info: item.info },
+        },
         store,
         setStore,
         push() {},

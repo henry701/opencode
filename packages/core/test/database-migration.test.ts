@@ -15,6 +15,8 @@ import eventSourcedSessionInputMigration from "@opencode-ai/core/database/migrat
 import contextEpochAgentMigration from "@opencode-ai/core/database/migration/20260605042240_add_context_epoch_agent"
 import simplifyIntegrationCredentialsMigration from "@opencode-ai/core/database/migration/20260611192811_lush_chimera"
 import simplifySessionInputMigration from "@opencode-ai/core/database/migration/20260622202450_simplify_session_input"
+import addSessionInputLifecycleMigration from "@opencode-ai/core/database/migration/20260718215959_add_session_input_lifecycle"
+import sessionQueueLifecycleMigration from "@opencode-ai/core/database/migration/20260718220000_session_queue_lifecycle"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -152,6 +154,65 @@ describe("DatabaseMigration", () => {
         expect(yield* db.get(sql`SELECT connector_id, method_id, active FROM credential WHERE id = 'current'`)).toEqual(
           { connector_id: null, method_id: null, active: null },
         )
+      }),
+    )
+  })
+
+  test("backfills hidden legacy queued prompts into typed payloads and valid prompts", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(
+          sql`CREATE TABLE session_input (id text PRIMARY KEY, session_id text NOT NULL, prompt text NOT NULL, delivery text NOT NULL, admitted_seq integer NOT NULL, promoted_seq integer, time_created integer NOT NULL)`,
+        )
+        yield* db.run(
+          sql`CREATE INDEX session_input_session_pending_delivery_seq_idx ON session_input (session_id, promoted_seq, delivery, admitted_seq)`,
+        )
+        const payload = {
+          version: 1,
+          agent: "reviewer",
+          model: { providerID: "openai", modelID: "gpt-5", variant: "high" },
+          tools: { bash: false },
+          system: "Review carefully",
+          format: {
+            type: "json_schema",
+            schema: { type: "object", properties: { result: { type: "string" } } },
+            retryCount: 3,
+          },
+          permissions: [{ permission: "read", pattern: "*", action: "allow" }],
+          parts: [
+            { type: "text", text: "Inspect this" },
+            {
+              type: "file",
+              mime: "text/plain",
+              filename: "notes.txt",
+              url: "file:///notes.txt",
+            },
+            { type: "agent", name: "reviewer", source: { value: "@reviewer", start: 0, end: 9 } },
+            {
+              type: "subtask",
+              prompt: "Check the parser",
+              description: "Parser review",
+              agent: "reviewer",
+            },
+          ],
+        }
+        yield* db.run(sql`
+          INSERT INTO session_input (id, session_id, prompt, delivery, admitted_seq, time_created)
+          VALUES ('msg_legacy_queue', 'ses_legacy', ${JSON.stringify({ __opencodeQueue: payload })}, 'queue', 7, 1)
+        `)
+
+        yield* DatabaseMigration.applyOnly(db, [addSessionInputLifecycleMigration, sessionQueueLifecycleMigration])
+
+        const row = yield* db.get<{ prompt: string; payload: string }>(
+          sql`SELECT prompt, payload FROM session_input WHERE id = 'msg_legacy_queue'`,
+        )
+        expect(JSON.parse(row!.payload)).toEqual(payload)
+        expect(JSON.parse(row!.prompt)).toEqual({
+          text: "Inspect this\nCheck the parser",
+          files: [{ uri: "file:///notes.txt", mime: "text/plain", name: "notes.txt" }],
+          agents: [{ name: "reviewer", source: { text: "@reviewer", start: 0, end: 9 } }],
+        })
       }),
     )
   })

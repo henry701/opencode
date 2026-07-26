@@ -15,6 +15,12 @@ export interface Interface {
   readonly wake: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   /** Interrupt active work owned by this process. Idle interruption is a no-op. */
   readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  /** Holds automatic queued-input promotion for this process. Steers remain eligible. */
+  readonly pauseQueueDrain: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  /** Releases a queue hold and wakes eligible work. */
+  readonly resumeQueueDrain: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  /** Reads process-local queue hold state. */
+  readonly queueDrainPaused: (sessionID: SessionSchema.ID) => Effect.Effect<boolean>
 }
 
 /** Routes execution from a Session ID to the runner owned by that Session's Location. */
@@ -30,5 +36,8 @@ export const noopLayer = Layer.succeed(
     resume: () => Effect.void,
     wake: () => Effect.void,
     interrupt: () => Effect.void,
+    pauseQueueDrain: () => Effect.void,
+    resumeQueueDrain: () => Effect.void,
+    queueDrainPaused: () => Effect.succeed(false),
   }),
 )

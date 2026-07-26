@@ -10,6 +10,7 @@ import { Global } from "./global"
 import { Location } from "./location"
 import { Policy } from "./policy"
 import { AbsolutePath } from "./schema"
+import { NonNegativeInt } from "./schema"
 import { ConfigAgent } from "./config/agent"
 import { ConfigAttachments } from "./config/attachments"
 import { ConfigCompaction } from "./config/compaction"
@@ -38,6 +39,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   default_agent: Schema.String.pipe(Schema.optional).annotate({
     description: "Default primary agent to use when no session agent is selected",
+  }),
+  subagent_depth: NonNegativeInt.pipe(Schema.optional).annotate({
+    description: "Maximum subagent nesting depth. Defaults to 1, which prevents subagents from launching subagents.",
   }),
   autoupdate: Schema.Union([Schema.Boolean, Schema.Literal("notify")])
     .pipe(Schema.optional)

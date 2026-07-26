@@ -1232,7 +1232,7 @@ export function createRunDemo(input: Input) {
       properties: {
         sessionID: state.id,
         requestID: input.requestID,
-        answers: input.answers,
+        answers: input.answers.map((answer) => [...answer]),
       },
     } satisfies Event
     feed(state, event)
