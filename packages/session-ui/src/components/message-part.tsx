@@ -971,10 +971,6 @@ export function currentToolDefaultOpen(tool: string, shell = false, edit = false
   return toolDefaultOpen(tool, shell, edit)
 }
 
-export function currentToolDefaultOpen(tool: string, shell = false, edit = false) {
-  return toolDefaultOpen(tool, shell, edit)
-}
-
 export function partDefaultOpen(part: PartType, shell = false, edit = false) {
   if (part.type !== "tool") return
   return toolDefaultOpen(part.tool, shell, edit)
