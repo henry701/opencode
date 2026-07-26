@@ -1,4 +1,5 @@
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
+import { OpenCode, type OpenCodeClient } from "@opencode-ai/client/promise"
 import type { ServerConnection } from "@/context/server"
 import { decode64 } from "@/utils/base64"
 
@@ -17,25 +18,55 @@ export function authFromToken(token: string | null) {
   }
 }
 
+function headers(server: ServerConnection.HttpBase, input?: HeadersInit | Record<string, unknown>) {
+  const values =
+    input instanceof Headers || Array.isArray(input)
+      ? Object.fromEntries(new Headers(input).entries())
+      : Object.fromEntries(
+          Object.entries(input ?? {}).flatMap(([key, value]) => (typeof value === "string" ? [[key, value]] : [])),
+        )
+  return {
+    ...values,
+    ...(server.password
+      ? {
+          Authorization: `Basic ${authTokenFromCredentials({
+            username: server.username,
+            password: server.password,
+          })}`,
+        }
+      : {}),
+  }
+}
+
 export function createSdkForServer({
   server,
   ...config
 }: Omit<NonNullable<Parameters<typeof createOpencodeClient>[0]>, "baseUrl"> & {
   server: ServerConnection.HttpBase
 }) {
-  const auth = (() => {
-    if (!server.password) return
-    return {
-      Authorization: `Basic ${authTokenFromCredentials({ username: server.username, password: server.password })}`,
-    }
-  })()
-
   return createOpencodeClient({
     ...config,
-    headers: {
-      ...(config.headers instanceof Headers ? Object.fromEntries(config.headers.entries()) : config.headers),
-      ...auth,
-    },
+    headers: headers(server, config.headers),
     baseUrl: server.url,
   })
 }
+
+export function createApiForServer(input: {
+  server: ServerConnection.HttpBase
+  fetch?: typeof globalThis.fetch
+}): OpenCodeClient {
+  return OpenCode.make({
+    baseUrl: input.server.url,
+    fetch: input.fetch,
+    headers: input.server.password
+      ? {
+          Authorization: `Basic ${authTokenFromCredentials({
+            username: input.server.username,
+            password: input.server.password,
+          })}`,
+        }
+      : undefined,
+  })
+}
+
+export type ServerApi = OpenCodeClient

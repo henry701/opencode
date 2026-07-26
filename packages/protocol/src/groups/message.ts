@@ -3,6 +3,7 @@ import { SessionMessage } from "@opencode-ai/schema/session-message"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { InvalidCursorError, SessionNotFoundError, UnknownError } from "../errors"
+import { NonNegativeInt } from "@opencode-ai/schema/schema"
 
 export const SessionMessagesQuery = Schema.Struct({
   limit: Schema.optional(
@@ -28,6 +29,7 @@ export const MessageGroup = HttpApiGroup.make("server.message")
       query: SessionMessagesQuery,
       success: Schema.Struct({
         data: Schema.Array(SessionMessage.Message),
+        throughSeq: NonNegativeInt,
         cursor: Schema.Struct({
           previous: Schema.String.pipe(Schema.optional),
           next: Schema.String.pipe(Schema.optional),
@@ -39,7 +41,7 @@ export const MessageGroup = HttpApiGroup.make("server.message")
         identifier: "v2.session.messages",
         summary: "Get session messages",
         description:
-          "Retrieve projected messages for a session. Items keep the requested order across pages; use cursor.next or cursor.previous to move through the ordered timeline.",
+          "Retrieve projected messages for a session. throughSeq is an atomic replay boundary for a subsequent event subscription. Items keep the requested order across pages; use cursor.next or cursor.previous to move through the ordered timeline.",
       }),
     ),
   )

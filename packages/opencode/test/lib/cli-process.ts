@@ -123,6 +123,7 @@ export type ServeHandle = {
   readonly url: string
   readonly hostname: string
   readonly port: number
+  readonly stderr: () => string
   // Sends SIGTERM. The scope finalizer also calls this, so tests rarely need
   // to invoke it directly — useful for tests that assert exit behavior.
   readonly kill: () => void
@@ -383,6 +384,7 @@ export function withCliFixture<A, E>(
         url: match.url,
         hostname: match.hostname,
         port: match.port,
+        stderr: () => stderrChunks.join("").slice(-4000),
         kill: () => {
           proc.kill()
         },

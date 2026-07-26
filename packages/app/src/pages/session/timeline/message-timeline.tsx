@@ -89,37 +89,6 @@ type TimelineRowByTag<T extends TimelineRow.TimelineRow["_tag"]> = Extract<Timel
 const timelineFallbackItemSize = 60
 const timelineCache = new Map<string, { measurements: VirtualItem[]; toolOpen: Record<string, boolean | undefined> }>()
 
-const notifyVirtualizerScroll = (root: HTMLDivElement) => {
-  root.dispatchEvent(new Event("scroll"))
-}
-
-const syncTimelineScrollToDom = (root: HTMLDivElement, scrollTop: number) => {
-  const max = Math.max(0, root.scrollHeight - root.clientHeight)
-  const target = Math.min(Math.max(scrollTop, 0), max)
-  if (Math.abs(root.scrollTop - target) > 1) {
-    root.scrollTop = target
-    notifyVirtualizerScroll(root)
-    return
-  }
-  if (max <= 0) return
-  const nudge = target < max ? target + 1 : Math.max(0, target - 1)
-  root.scrollTop = nudge
-  requestAnimationFrame(() => {
-    root.scrollTop = target
-    notifyVirtualizerScroll(root)
-  })
-}
-
-const reconcileVirtualizerScroll = (
-  root: HTMLDivElement,
-  scrollTop: number,
-  virtualizer: ReturnType<typeof createVirtualizer<HTMLDivElement, HTMLDivElement>>,
-) => {
-  syncTimelineScrollToDom(root, scrollTop)
-  virtualizer.scrollOffset = root.scrollTop
-  notifyVirtualizerScroll(root)
-}
-
 const taskDescription = (part: PartType, sessionID: string) => {
   if (part.type !== "tool" || part.tool !== "task") return
   const metadata = "metadata" in part.state ? part.state.metadata : undefined
@@ -281,8 +250,6 @@ export function MessageTimeline(props: {
   onHistoryScroll: () => void
   onAutoScrollInteraction: (event: MouseEvent) => void
   shouldAnchorBottom: () => boolean
-  composerLayoutEpoch?: number
-  preservedScrollTop?: number
   centered: boolean
   setContentRef: (el: HTMLDivElement) => void
   userMessages: UserMessage[]
@@ -316,6 +283,14 @@ export function MessageTimeline(props: {
     return sync().data.session_status[id] ?? idle
   })
   const sessionMessages = createMemo(() => (sessionID() ? (sync().data.message[sessionID()!] ?? []) : []))
+  const projectedMessages = createMemo(() => {
+    const id = sessionID()
+    if (!id) return []
+    const visible = new Set(props.userMessages.map((message) => message.id))
+    const boundary = sessionMessages().find((message) => message.role === "user" && !visible.has(message.id))?.id
+    const messages = sync().data.session_message[id] ?? []
+    return boundary ? messages.filter((message) => message.id < boundary) : messages
+  })
   const info = createMemo(() => {
     const id = sessionID()
     if (!id) return
@@ -358,6 +333,7 @@ export function MessageTimeline(props: {
   const projection = createTimelineProjection({
     messages: sessionMessages,
     userMessages: () => props.userMessages,
+    sessionMessages: projectedMessages,
     parts: getMsgParts,
     status: sessionStatus,
     showReasoningSummaries: settings.general.showReasoningSummaries,
@@ -437,7 +413,6 @@ export function MessageTimeline(props: {
   let resizePinnedIndexes: number[] = []
   let resizePinFrame: number | undefined
   let virtualContent: HTMLDivElement | undefined
-  let lastAwayFromBottomScrollTop = 0
   const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>({
     get count() {
       return timelineRows().length
@@ -546,7 +521,6 @@ export function MessageTimeline(props: {
 
   const maybeAnchorBottom = () => {
     if (timelineRows().length === 0) return
-    if (prependLoading) return
     if (!props.shouldAnchorBottom() || props.hasScrollGesture()) return
     if (resizePinFrame !== undefined) cancelAnimationFrame(resizePinFrame)
     clearPrependAnchor()
@@ -565,42 +539,6 @@ export function MessageTimeline(props: {
     maybeAnchorBottom()
   })
 
-  let syncVirtualScrollFrame: number | undefined
-  const preserveScrollAnchor = () => {
-    if (props.shouldAnchorBottom()) return
-    const root = listRoot()
-    if (!root) return
-    const scrollTop = Math.max(root.scrollTop, lastAwayFromBottomScrollTop, props.preservedScrollTop ?? 0)
-    if (scrollTop > 80) lastAwayFromBottomScrollTop = scrollTop
-    if (syncVirtualScrollFrame !== undefined) cancelAnimationFrame(syncVirtualScrollFrame)
-    const restore = (attempt = 0) => {
-      const current = listRoot()
-      if (!current || props.shouldAnchorBottom()) return
-      reconcileVirtualizerScroll(current, scrollTop, virtualizer)
-      if (attempt < 8) requestAnimationFrame(() => restore(attempt + 1))
-    }
-    syncVirtualScrollFrame = requestAnimationFrame(() => {
-      syncVirtualScrollFrame = undefined
-      restore()
-    })
-  }
-
-  createEffect(
-    on(
-      () => props.composerLayoutEpoch,
-      () => {
-        if (props.shouldAnchorBottom()) return
-        const root = listRoot()
-        if (!root) return
-        const dom = Math.max(root.scrollTop, lastAwayFromBottomScrollTop, props.preservedScrollTop ?? 0)
-        if (dom > 80) lastAwayFromBottomScrollTop = dom
-        resizePinnedIndexes = []
-        preserveScrollAnchor()
-      },
-      { defer: true },
-    ),
-  )
-
   onCleanup(() => {
     clearPrependAnchor()
     timelineCache.delete(ownerSessionKey)
@@ -608,7 +546,6 @@ export function MessageTimeline(props: {
     while (timelineCache.size > 16) timelineCache.delete(timelineCache.keys().next().value!)
     if (resizePinFrame !== undefined) cancelAnimationFrame(resizePinFrame)
     if (overscanFrame !== undefined) cancelAnimationFrame(overscanFrame)
-    if (syncVirtualScrollFrame !== undefined) cancelAnimationFrame(syncVirtualScrollFrame)
     props.setRevealMessage?.(() => {})
     props.setScrollToEnd?.(() => {})
     props.setHistoryAnchor?.({ capture: () => {}, restore: () => {} })
@@ -696,9 +633,6 @@ export function MessageTimeline(props: {
     if (prependLoading) updatePrependAnchor()
     props.onScheduleScrollState(event.currentTarget)
     props.onHistoryScroll()
-    if (!props.shouldAnchorBottom() && event.currentTarget.scrollTop > 80) {
-      lastAwayFromBottomScrollTop = event.currentTarget.scrollTop
-    }
     if (!props.hasScrollGesture()) return
     props.onUserScroll()
     props.onAutoScrollHandleScroll()
@@ -740,7 +674,7 @@ export function MessageTimeline(props: {
 
   const titleMutation = useMutation(() => ({
     mutationFn: (input: { id: string; title: string }) =>
-      sdk().client.session.update({ sessionID: input.id, title: input.title }),
+      sdk().api.session.rename({ sessionID: input.id, title: input.title }),
     onSuccess: (_, input) => {
       sync().set(
         produce((draft) => {
@@ -884,7 +818,7 @@ export function MessageTimeline(props: {
     const nextSession = index === -1 ? undefined : (sessions[index + 1] ?? sessions[index - 1])
 
     await sdk()
-      .client.session.update({ sessionID, time: { archived: Date.now() } })
+      .api.session.archive({ sessionID })
       .then(() => {
         sync().set(
           produce((draft) => {
@@ -913,8 +847,8 @@ export function MessageTimeline(props: {
     const nextSession = index === -1 ? undefined : (sessions[index + 1] ?? sessions[index - 1])
 
     const result = await sdk()
-      .client.session.delete({ sessionID })
-      .then((x) => x.data)
+      .api.session.remove({ sessionID })
+      .then(() => true)
       .catch((err) => {
         showToast({
           title: language.t("session.delete.failed.title"),

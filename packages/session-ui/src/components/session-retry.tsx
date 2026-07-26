@@ -5,7 +5,9 @@ import { Card } from "@opencode-ai/ui/card"
 import { Tooltip } from "@opencode-ai/ui/tooltip"
 import { Spinner } from "@opencode-ai/ui/spinner"
 
-export function SessionRetry(props: { status: SessionStatus; show?: boolean }) {
+type RetryStatus = { type: "retry"; message: string; attempt: number; next?: number }
+
+export function SessionRetry(props: { status: SessionStatus | RetryStatus; show?: boolean }) {
   const i18n = useI18n()
   const retry = createMemo(() => {
     if (props.status.type !== "retry") return

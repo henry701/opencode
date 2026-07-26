@@ -85,7 +85,6 @@ test.describe("timeline adverse visual stability", () => {
       userMessage(undefined, { id: "msg_0000_virtual_user", created: 1700000000000 }),
       assistantMessage([shell(targetID, "completed", lines(20))], {
         id: "msg_0001_virtual_assistant",
-        parentID: "msg_0000_virtual_user",
         created: 1700000001000,
       }),
       ...history(35, 10),
@@ -233,7 +232,6 @@ function history(count: number, offset = 0): TimelineMessage[] {
         ],
         {
           id: `${prefix}_b_assistant`,
-          parentID: userID,
           created: 1699990001000 + value * 10_000,
         },
       ),

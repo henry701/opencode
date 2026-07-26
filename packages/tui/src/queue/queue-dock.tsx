@@ -85,6 +85,11 @@ export function QueueDock(props: {
   disabled?: boolean
   editing?: () => boolean
   editingMessageID?: () => string | undefined
+  /** TUI saves the edit in place; CLI offers send-now + re-queue. */
+  editingActions?: "save-edit" | "send-and-queue"
+  collapseGlyphs?: { collapsed: string; expanded: string }
+  /** When false, keep [send now] visible while editing (CLI). Default hides it. */
+  showSendNowWhileEditing?: boolean
   onEdit: (id: string) => void
   onSendNow: (id: string) => void
   onRemove: (id: string) => void
@@ -94,6 +99,7 @@ export function QueueDock(props: {
   const label = createMemo(() => (total() === 1 ? "1 message queued" : `${total()} messages queued`))
   const preview = () => props.items()[0]?.text ?? ""
   const border = () => props.customBorderChars ?? DEFAULT_BORDER
+  const collapseGlyphs = () => props.collapseGlyphs ?? { collapsed: "v", expanded: "^" }
   const hiddenCount = createMemo(() => {
     if (props.editing?.()) return 0
     return Math.max(0, total() - IDLE_VISIBLE_ITEMS)
@@ -110,7 +116,13 @@ export function QueueDock(props: {
     if (!props.editing?.()) return undefined
 
     const hints = props.hints?.()
-    const parts = [hints?.submit ? `${hints.submit} save edit` : "Return save edit"]
+    const parts =
+      props.editingActions === "send-and-queue"
+        ? [
+            hints?.submit ? `${hints.submit} send now` : "Return send now",
+            hints?.queue ? `${hints.queue} save to queue` : "Ctrl+Shift+Enter save to queue",
+          ]
+        : [hints?.submit ? `${hints.submit} save edit` : "Return save edit"]
     if (hints?.cancel) parts.push(`${hints.cancel} go back`)
     if (hints?.edit && hints?.editNext && total() > 1) parts.push(`${hints.edit}/${hints.editNext} switch`)
     return parts.join(" · ")
@@ -127,6 +139,7 @@ export function QueueDock(props: {
   })
 
   const itemText = (item: QueuedItem) => truncateQueueLine(item.text)
+  const showSendNow = () => !props.editing?.() || !!props.showSendNowWhileEditing
 
   return (
     <Show when={total() > 0 || props.editing?.()}>
@@ -159,7 +172,7 @@ export function QueueDock(props: {
               </text>
             </Show>
             <text fg={props.theme().textMuted} flexShrink={0}>
-              {collapsed() ? "v" : "^"}
+              {collapsed() ? collapseGlyphs().collapsed : collapseGlyphs().expanded}
             </text>
           </box>
           <Show when={!collapsed()}>
@@ -187,7 +200,7 @@ export function QueueDock(props: {
                     >
                       {itemText(entry.item)}
                     </text>
-                    <Show when={!props.editing?.()}>
+                    <Show when={showSendNow()}>
                       <box
                         flexShrink={0}
                         onMouseUp={() => {

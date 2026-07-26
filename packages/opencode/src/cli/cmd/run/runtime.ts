@@ -13,13 +13,25 @@
 //      local sessions,
 //   4. runs the prompt queue until the footer closes.
 import { createOpencodeClient } from "@opencode-ai/sdk/v2"
+import {
+  isSessionNotFoundError,
+  OpenCode,
+  type SessionsContextOutput,
+  type SessionsGetOutput,
+} from "@opencode-ai/client"
 import { Flag } from "@opencode-ai/core/flag/flag"
-import { MemoryPromptQueue } from "@/queue/prompt-queue"
-import { MessageID, SessionID } from "@/session/schema"
+import { MessageID } from "@/session/schema"
 import { createRunDemo } from "./demo"
-import { resolveModelInfo, resolveRunTuiConfig, resolveSessionInfo } from "./runtime.boot"
+import { resolveModelInfo, resolveRunTuiConfig } from "./runtime.boot"
 import { createRuntimeLifecycle } from "./runtime.lifecycle"
-import { buildQueuePromptPayload, buildQueueSendPayload, runPromptFromQueueDetail } from "./runtime.queue-remote"
+import {
+  buildQueuePromptPayload,
+  buildQueueSendPayload,
+  enqueueRemotePrompt,
+  loadCurrentCommandCatalog,
+  queuedPromptPreviews,
+  runPromptFromQueueDetail,
+} from "./runtime.queue-remote"
 import { trace } from "./trace"
 import { cycleVariant, formatModelLabel, resolveSavedVariant, resolveVariant, saveVariant } from "./variant.shared"
 import type {
@@ -29,6 +41,7 @@ import type {
   QueuedPromptPreview,
   RunInput,
   RunPrompt,
+  RunPromptPart,
   RunProvider,
   StreamCommit,
 } from "./types"
@@ -61,16 +74,8 @@ export async function hydrateRemoteQueue(input: {
 
 type BootContext = Pick<
   RunInput,
-  "sdk" | "directory" | "sessionID" | "sessionTitle" | "resume" | "agent" | "model" | "variant"
+  "sdk" | "next" | "directory" | "sessionID" | "sessionTitle" | "resume" | "agent" | "model" | "variant"
 >
-
-type CreateSessionInput = {
-  agent: string | undefined
-  model: RunInput["model"]
-  variant: string | undefined
-}
-
-type CreateSession = (sdk: RunInput["sdk"], input: CreateSessionInput) => Promise<{ id: string; title?: string }>
 
 type RunRuntimeInput = {
   boot: () => Promise<BootContext>
@@ -78,7 +83,6 @@ type RunRuntimeInput = {
   resolveSession?: (
     ctx: BootContext,
   ) => Promise<{ sessionID: string; sessionTitle?: string; agent?: string | undefined }>
-  createSession?: (ctx: BootContext, input: CreateSessionInput) => Promise<ResolvedSession>
   files: RunInput["files"]
   initialInput?: string
   thinking: boolean
@@ -94,7 +98,6 @@ type RunLocalInput = {
   resolveAgent: () => Promise<string | undefined>
   session: (sdk: RunInput["sdk"]) => Promise<{ id: string; title?: string } | undefined>
   share: (sdk: RunInput["sdk"], sessionID: string) => Promise<void>
-  createSession?: CreateSession
   agent: RunInput["agent"]
   model: RunInput["model"]
   variant: RunInput["variant"]
@@ -108,8 +111,8 @@ type RunLocalInput = {
 }
 
 type StreamTransportModule = Pick<
-  Awaited<typeof import("./stream.transport")>,
-  "createSessionTransport" | "formatUnknownError"
+  Awaited<typeof import("./stream.current")>,
+  "createCurrentSessionTransport" | "formatUnknownError"
 >
 
 export type RunRuntimeDeps = {
@@ -119,32 +122,13 @@ export type RunRuntimeDeps = {
 
 type StreamState = {
   mod: StreamTransportModule
-  handle: Awaited<ReturnType<StreamTransportModule["createSessionTransport"]>>
+  handle: Awaited<ReturnType<StreamTransportModule["createCurrentSessionTransport"]>>
 }
 
 type ResolvedSession = {
   sessionID: string
   sessionTitle?: string
   agent?: string | undefined
-}
-
-function createSessionResolver(fn?: CreateSession) {
-  if (!fn) {
-    return undefined
-  }
-
-  return async (ctx: BootContext, input: CreateSessionInput): Promise<ResolvedSession> => {
-    const created = await fn(ctx.sdk, input)
-    if (!created.id) {
-      throw new Error("Failed to create session")
-    }
-
-    return {
-      sessionID: created.id,
-      sessionTitle: created.title,
-      agent: input.agent,
-    }
-  }
 }
 
 type RuntimeState = {
@@ -183,6 +167,55 @@ function variantsFor(providers: RunProvider[], model: RunInput["model"]) {
   return Object.keys(providers.find((item) => item.id === model.providerID)?.models?.[model.modelID]?.variants ?? {})
 }
 
+function currentModel(model: RunInput["model"], variant: string | undefined) {
+  if (!model) return
+  return {
+    providerID: model.providerID,
+    id: model.modelID,
+    ...(variant === undefined ? {} : { variant }),
+  }
+}
+
+function runtimeModel(model: SessionsGetOutput["model"]): RunInput["model"] {
+  if (!model) return
+  return {
+    providerID: model.providerID,
+    modelID: model.id,
+  }
+}
+
+function currentHistory(messages: SessionsContextOutput): RunPrompt[] {
+  return messages.flatMap((message): RunPrompt[] => {
+    if (message.type !== "user") return []
+    return [
+      {
+        messageID: message.id,
+        text: message.text,
+        parts: (message.files ?? []).map(
+          (file): RunPromptPart => ({
+            type: "file",
+            url: file.uri,
+            filename: file.name ?? file.uri,
+            mime: file.mime,
+          }),
+        ),
+      },
+    ]
+  })
+}
+
+async function adoptCurrentSession(ctx: BootContext, sessionID: string) {
+  return ctx.next.sessions.get({ sessionID }).catch((error) => {
+    if (!isSessionNotFoundError(error)) throw error
+    return ctx.next.sessions.create({
+      id: sessionID,
+      agent: ctx.agent,
+      model: currentModel(ctx.model, ctx.variant),
+      location: { directory: ctx.directory },
+    })
+  })
+}
+
 const RESIZE_DELAY = 250
 const LOCAL_REPLAY_ROW_LIMIT = 100
 
@@ -195,11 +228,9 @@ async function resolveExitTitle(
     return undefined
   }
 
-  return ctx.sdk.session
-    .get({
-      sessionID: state.sessionID,
-    })
-    .then((x) => x.data?.title)
+  return ctx.next.sessions
+    .get({ sessionID: state.sessionID })
+    .then((session) => session.title)
     .catch(() => undefined)
 }
 
@@ -217,18 +248,26 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
   const modelTask = resolveModelInfo(ctx.sdk, ctx.directory, ctx.model)
   const sessionTask =
     ctx.resume === true
-      ? resolveSessionInfo(ctx.sdk, ctx.sessionID, ctx.model)
+      ? Promise.all([adoptCurrentSession(ctx, ctx.sessionID), ctx.next.sessions.context({ sessionID: ctx.sessionID })]).then(
+          ([info, messages]) => ({
+            first: messages.length === 0,
+            history: currentHistory(messages),
+            variant: info.model?.variant,
+            info,
+          }),
+        )
       : Promise.resolve({
           first: true,
-          history: [],
+          history: [] as RunPrompt[],
           variant: undefined,
+          info: undefined,
         })
   const savedTask = resolveSavedVariant(ctx.model)
   const [tuiConfig, session, savedVariant] = await Promise.all([tuiConfigTask, sessionTask, savedTask])
   const state: RuntimeState = {
     shown: !session.first,
     aborting: false,
-    model: ctx.model,
+    model: runtimeModel(session.info?.model) ?? ctx.model,
     providers: [],
     variants: [],
     limits: {},
@@ -236,23 +275,25 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     sessionID: ctx.sessionID,
     history: [...session.history],
     localRows: [],
-    sessionTitle: ctx.sessionTitle,
-    agent: ctx.agent,
+    sessionTitle: session.info?.title ?? ctx.sessionTitle,
+    agent: session.info?.agent ?? ctx.agent,
   }
   const ensureSession = () => {
-    if (!input.resolveSession || state.sessionID) {
-      return Promise.resolve()
-    }
-
-    if (state.session) {
-      return state.session
-    }
-
-    state.session = input.resolveSession(ctx).then((next) => {
-      state.sessionID = next.sessionID
-      state.sessionTitle = next.sessionTitle ?? state.sessionTitle
-      state.agent = next.agent
-    })
+    if (state.session) return state.session
+    state.session = (async () => {
+      if (!state.sessionID) {
+        if (!input.resolveSession) throw new Error("Session not found")
+        const next = await input.resolveSession(ctx)
+        state.sessionID = next.sessionID
+        state.sessionTitle = next.sessionTitle ?? state.sessionTitle
+        state.agent = next.agent
+      }
+      const adopted = await adoptCurrentSession(ctx, state.sessionID)
+      state.sessionTitle = adopted.title
+      state.agent = adopted.agent ?? state.agent
+      state.model = runtimeModel(adopted.model) ?? state.model
+      state.activeVariant = adopted.model?.variant ?? state.activeVariant
+    })()
     return state.session
   }
 
@@ -281,21 +322,21 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       }
 
       log?.write("send.permission.reply", next)
-      await ctx.sdk.permission.reply(next)
+      await ctx.next.permissions.reply(next)
     },
     onQuestionReply: async (next) => {
       if (state.demo?.questionReply(next)) {
         return
       }
 
-      await ctx.sdk.question.reply(next)
+      await ctx.next.questions.reply(next)
     },
     onQuestionReject: async (next) => {
       if (state.demo?.questionReject(next)) {
         return
       }
 
-      await ctx.sdk.question.reject(next)
+      await ctx.next.questions.reject(next)
     },
     onCycleVariant: () => {
       if (!state.model || state.variants.length === 0) {
@@ -317,6 +358,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         return
       }
 
+      await ensureSession()
       state.model = model
       state.activeVariant = undefined
       state.variants = variantsFor(state.providers, model)
@@ -338,6 +380,14 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       if (!current || current.providerID !== model.providerID || current.modelID !== model.modelID) {
         return
       }
+      await ctx.next.sessions.switchModel({
+        sessionID: state.sessionID,
+        model: {
+          providerID: model.providerID,
+          id: model.modelID,
+          ...(state.activeVariant === undefined ? {} : { variant: state.activeVariant }),
+        },
+      })
 
       return {
         modelLabel: formatModelLabel(model, state.activeVariant, state.providers),
@@ -359,8 +409,17 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         }
       }
 
+      await ensureSession()
       state.activeVariant = variant
       saveVariant(state.model, state.activeVariant)
+      await ctx.next.sessions.switchModel({
+        sessionID: state.sessionID,
+        model: {
+          providerID: state.model.providerID,
+          id: state.model.modelID,
+          ...(state.activeVariant === undefined ? {} : { variant: state.activeVariant }),
+        },
+      })
       return {
         status: state.activeVariant ? `variant ${state.activeVariant}` : "variant default",
         modelLabel: formatModelLabel(state.model, state.activeVariant, state.providers),
@@ -374,10 +433,8 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       }
 
       state.aborting = true
-      void ctx.sdk.session
-        .abort({
-          sessionID: state.sessionID,
-        })
+      void ctx.next.sessions
+        .interrupt({ sessionID: state.sessionID })
         .catch(() => {})
         .finally(() => {
           state.aborting = false
@@ -413,10 +470,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         .list({ directory: ctx.directory })
         .then((x) => Object.values(x.data ?? {}))
         .catch(() => []),
-      ctx.sdk.command
-        .list({ directory: ctx.directory })
-        .then((x) => x.data ?? [])
-        .catch(() => []),
+      loadCurrentCommandCatalog(ctx.next, ctx.directory).catch(() => []),
     ])
     if (footer.isClosed) {
       return
@@ -484,7 +538,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     })
   })
 
-  const streamTask = deps.streamTransport ?? import("./stream.transport")
+  const streamTask = deps.streamTransport ?? import("./stream.current")
   const ensureStream = () => {
     if (state.stream) {
       return state.stream
@@ -503,9 +557,8 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         throw new Error("runtime closed")
       }
 
-      const handle = await mod.createSessionTransport({
-        sdk: ctx.sdk,
-        directory: ctx.directory,
+      const handle = await mod.createCurrentSessionTransport({
+        client: ctx.next,
         sessionID: state.sessionID,
         thinking: input.thinking,
         replay: input.replay,
@@ -514,6 +567,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         providers: () => state.providers,
         footer,
         trace: log,
+        listQueue: async () => queuedPromptPreviews(await ctx.next.sessions.queueList({ sessionID: state.sessionID })),
       })
       if (footer.isClosed) {
         await handle.close()
@@ -572,25 +626,22 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     }
 
     const mod = await import("./runtime.queue")
-    const createSession = input.createSession
-    const memoryQueue = new MemoryPromptQueue()
     await mod.runPromptQueue({
       footer,
       initialInput: input.initialInput,
       trace: log,
       demo: !!state.demo,
-      sessionID: state.sessionID ? SessionID.make(state.sessionID) : undefined,
-      agent: state.agent,
-      model: state.model,
-      memoryQueue,
       enqueueRemote: state.demo
         ? undefined
         : async (prompt) => {
             await ensureStream()
             if (!state.sessionID) return
-            await ctx.sdk.session.queue.enqueue({
+            await enqueueRemotePrompt({
+              client: ctx.next,
               sessionID: state.sessionID,
-              ...buildQueuePromptPayload({
+              id: prompt.messageID ?? MessageID.ascending(),
+              prompt,
+              payload: buildQueuePromptPayload({
                 agent: state.agent,
                 model: state.model,
                 variant: state.activeVariant,
@@ -603,10 +654,10 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         : async (queueID, prompt) => {
             await ensureStream()
             if (!state.sessionID) return
-            await ctx.sdk.session.queue.update({
+            await ctx.next.sessions.queueUpdate({
               sessionID: state.sessionID,
-              queueID,
-              body: buildQueuePromptPayload({
+              messageID: queueID,
+              payload: buildQueuePromptPayload({
                 agent: state.agent,
                 model: state.model,
                 variant: state.activeVariant,
@@ -619,9 +670,9 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         : async (queueID) => {
             await ensureStream()
             if (!state.sessionID) return
-            await ctx.sdk.session.queue.remove({
+            await ctx.next.sessions.queueRemove({
               sessionID: state.sessionID,
-              queueID,
+              messageID: queueID,
             })
           },
       getQueueRemote: state.demo
@@ -629,28 +680,26 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         : async (queueID) => {
             await ensureStream()
             if (!state.sessionID) return
-            const result = await ctx.sdk.session.queue.get({
+            const result = await ctx.next.sessions.queueGet({
               sessionID: state.sessionID,
-              queueID,
+              messageID: queueID,
             })
-            if (!result.data) return
-            return runPromptFromQueueDetail(result.data)
+            return runPromptFromQueueDetail(result)
           },
       sendQueueRemote: state.demo
         ? undefined
         : async (queueID, prompt) => {
             await ensureStream()
             if (!state.sessionID) return
-            await ctx.sdk.session.queue.send({
+            await ctx.next.sessions.queueSend({
               sessionID: state.sessionID,
-              queueID,
-              body:
-                buildQueueSendPayload({
-                  agent: state.agent,
-                  model: state.model,
-                  variant: state.activeVariant,
-                  prompt,
-                }) ?? null,
+              messageID: queueID,
+              payload: buildQueueSendPayload({
+                agent: state.agent,
+                model: state.model,
+                variant: state.activeVariant,
+                prompt,
+              }),
             })
           },
       pauseQueueDrainRemote: state.demo
@@ -658,14 +707,14 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         : async () => {
             await ensureStream()
             if (!state.sessionID) return
-            await ctx.sdk.session.queue.drain.pause({ sessionID: state.sessionID })
+            await ctx.next.sessions.queueDrainPause({ sessionID: state.sessionID })
           },
       resumeQueueDrainRemote: state.demo
         ? undefined
         : async () => {
             await ensureStream()
             if (!state.sessionID) return
-            await ctx.sdk.session.queue.drain.resume({ sessionID: state.sessionID })
+            await ctx.next.sessions.queueDrainResume({ sessionID: state.sessionID })
           },
       onSend: (prompt) => {
         state.shown = true
@@ -680,14 +729,13 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
           })
         }
       },
-      onNewSession: createSession
-        ? async () => {
+      onNewSession: async () => {
             try {
               await state.switching?.catch(() => {})
-              const created = await createSession(ctx, {
+              const created = await ctx.next.sessions.create({
                 agent: state.agent,
-                model: state.model,
-                variant: state.activeVariant,
+                model: currentModel(state.model, state.activeVariant),
+                location: { directory: ctx.directory },
               })
               await footer.idle().catch(() => {})
               await state.stream?.then((item) => item.handle.close()).catch(() => {})
@@ -695,9 +743,11 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
               state.session = undefined
               state.selectSubagent = undefined
               state.shown = false
-              state.sessionID = created.sessionID
-              state.sessionTitle = created.sessionTitle
+              state.sessionID = created.id
+              state.sessionTitle = created.title
               state.agent = created.agent ?? state.agent
+              state.model = runtimeModel(created.model) ?? state.model
+              state.activeVariant = created.model?.variant ?? state.activeVariant
               state.history = []
               state.localRows = []
               includeFiles = true
@@ -756,8 +806,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
               rememberLocal(commit)
               footer.append(commit)
             }
-          }
-        : undefined,
+          },
       run: async (prompt, signal) => {
         if (state.demo && (await state.demo.prompt(prompt, signal))) {
           return
@@ -834,7 +883,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       void hydrateRemoteQueue({
         sessionID: state.sessionID,
         footer,
-        listQueue: async (sessionID) => ctx.sdk.session.queue.list({ sessionID }).then((result) => result.data ?? []),
+        listQueue: async (sessionID) => queuedPromptPreviews(await ctx.next.sessions.queueList({ sessionID })),
       })
     }
 
@@ -867,6 +916,10 @@ export async function runInteractiveLocalMode(input: RunLocalInput): Promise<voi
     fetch: input.fetch,
     directory: input.directory,
   })
+  const next = OpenCode.make({
+    baseUrl: "http://opencode.internal",
+    fetch: input.fetch,
+  })
   let session: Promise<ResolvedSession> | undefined
 
   return runInteractiveRuntime({
@@ -896,10 +949,10 @@ export async function runInteractiveLocalMode(input: RunLocalInput): Promise<voi
       })
       return session
     },
-    createSession: createSessionResolver(input.createSession),
     boot: async () => {
       return {
         sdk,
+        next,
         directory: input.directory,
         sessionID: "",
         sessionTitle: undefined,
@@ -914,7 +967,7 @@ export async function runInteractiveLocalMode(input: RunLocalInput): Promise<voi
 
 // Attach mode. Uses the caller-provided SDK client directly.
 export async function runInteractiveMode(
-  input: RunInput & { createSession?: CreateSession },
+  input: RunInput,
   deps?: RunRuntimeDeps,
 ): Promise<void> {
   return runInteractiveRuntime(
@@ -928,6 +981,7 @@ export async function runInteractiveMode(
       demo: input.demo,
       boot: async () => ({
         sdk: input.sdk,
+        next: input.next,
         directory: input.directory,
         sessionID: input.sessionID,
         sessionTitle: input.sessionTitle,
@@ -936,7 +990,6 @@ export async function runInteractiveMode(
         model: input.model,
         variant: input.variant,
       }),
-      createSession: createSessionResolver(input.createSession),
     },
     deps,
   )

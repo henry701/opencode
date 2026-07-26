@@ -1,4 +1,5 @@
 import { createOpencodeClient } from "@opencode-ai/sdk/v2"
+import { OpenCode } from "@opencode-ai/client"
 import type { GlobalEvent } from "@opencode-ai/sdk/v2"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { createSimpleContext } from "./helper"
@@ -31,6 +32,11 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     }
 
     let sdk = createSDK()
+    const next = OpenCode.make({
+      baseUrl: props.url,
+      fetch: props.fetch,
+      headers: props.headers,
+    })
 
     const handlers = new Set<(event: GlobalEvent) => void>()
     const emitter = {
@@ -142,6 +148,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       get client() {
         return sdk
       },
+      next,
       directory: props.directory,
       event: emitter,
       fetch: props.fetch ?? fetch,

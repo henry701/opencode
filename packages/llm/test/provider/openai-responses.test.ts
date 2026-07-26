@@ -170,7 +170,10 @@ describe("OpenAI Responses route", () => {
 
       expect(prepared.route).toBe("openai-responses-websocket")
       expect(prepared.protocol).toBe("openai-responses")
-      expect(prepared.metadata).toEqual({ transport: "websocket-json" })
+      expect(prepared.metadata).toEqual({
+        transport: "websocket-json",
+        systemPrompt: "You are concise.",
+      })
       expect(prepared.body).toMatchObject({ model: "gpt-4.1-mini", store: false, stream: true })
     }),
   )

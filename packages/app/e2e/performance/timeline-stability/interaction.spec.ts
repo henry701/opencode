@@ -174,8 +174,9 @@ test("expands and collapses an edit diff without moving twice", async ({ page },
 })
 
 test("shows all and expands historical diff summary without overlap", async ({ page }, testInfo) => {
-  const firstUser = userMessage(undefined, {
-    summary: {
+  const firstUser = userMessage()
+  const firstAssistant = assistantMessage([], {
+    snapshot: {
       diffs: Array.from({ length: 12 }, (_, index) => ({
         file: `src/diff-${index}.ts`,
         additions: 1,
@@ -188,11 +189,10 @@ test("shows all and expands historical diff summary without overlap", async ({ p
   await setupTimeline(page, {
     messages: [
       firstUser,
-      assistantMessage(),
+      firstAssistant,
       userMessage(undefined, { id: nextUserID, created: 1700000010000 }),
       assistantMessage([], {
         id: "msg_2001_diff_interaction_assistant",
-        parentID: nextUserID,
         created: 1700000011000,
       }),
     ],

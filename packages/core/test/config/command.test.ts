@@ -1,7 +1,7 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
-import { Effect, Schema } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { CommandV2 } from "@opencode-ai/core/command"
 import { Config } from "@opencode-ai/core/config"
 import { ConfigCommandPlugin } from "@opencode-ai/core/config/plugin/command"
@@ -11,11 +11,23 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { AbsolutePath } from "@opencode-ai/core/schema"
+import { Location } from "@opencode-ai/core/location"
 import { tmpdir } from "../fixture/tmpdir"
+import { location } from "../fixture/location"
 import { testEffect } from "../lib/effect"
 import { host } from "../plugin/host"
 
-const it = testEffect(AppNodeBuilder.build(LayerNode.group([CommandV2.node, FSUtil.node])))
+const it = testEffect(
+  AppNodeBuilder.build(LayerNode.group([CommandV2.node, FSUtil.node]), [
+    [
+      Location.node,
+      Layer.succeed(
+        Location.Service,
+        Location.Service.of(location(Location.Ref.make({ directory: AbsolutePath.make("/repo") }))),
+      ),
+    ],
+  ]),
+)
 const decode = Schema.decodeUnknownSync(Config.Info)
 
 describe("ConfigCommandPlugin.Plugin", () => {
@@ -72,9 +84,11 @@ Review files`,
                 variant: ModelV2.VariantID.make("high"),
               },
               subtask: true,
+              source: "command",
+              hints: [],
             }),
-            CommandV2.Info.make({ name: "empty", template: "" }),
-            CommandV2.Info.make({ name: "nested/docs", template: "Write docs" }),
+            CommandV2.Info.make({ name: "empty", template: "", source: "command", hints: [] }),
+            CommandV2.Info.make({ name: "nested/docs", template: "Write docs", source: "command", hints: [] }),
           ])
         }),
       ),

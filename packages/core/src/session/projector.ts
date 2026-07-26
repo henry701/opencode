@@ -1,6 +1,6 @@
 export * as SessionProjector from "./projector"
 
-import { and, desc, eq, gt, or, sql } from "drizzle-orm"
+import { and, desc, eq, gt, sql } from "drizzle-orm"
 import { DateTime, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
@@ -256,6 +256,18 @@ const layer = Layer.effectDiscard(
         yield* SessionContextEpoch.reset(db, event.data.sessionID)
       }),
     )
+    yield* events.project(SessionEvent.InfoUpdated, (event) =>
+      db
+        .update(SessionTable)
+        .set({
+          ...(event.data.title === undefined ? {} : { title: event.data.title }),
+          time_updated: DateTime.toEpochMillis(event.data.timestamp),
+        })
+        .where(eq(SessionTable.id, event.data.sessionID))
+        .run()
+        .pipe(Effect.orDie),
+    )
+    yield* events.project(SessionEvent.MessageImported, (event) => insertMessage(db, event, event.data.message))
     yield* events.project(SessionV1.Event.Deleted, (event) =>
       db.delete(SessionTable).where(eq(SessionTable.id, event.data.sessionID)).run().pipe(Effect.orDie),
     )
@@ -354,6 +366,7 @@ const layer = Layer.effectDiscard(
           id: event.data.messageID,
           sessionID: event.data.sessionID,
           prompt: event.data.prompt,
+          payload: event.data.payload,
           delivery: event.data.delivery,
           timeCreated: event.data.timestamp,
           promotedSeq: event.durable.seq,
@@ -369,15 +382,48 @@ const layer = Layer.effectDiscard(
           id: event.data.messageID,
           sessionID: event.data.sessionID,
           prompt: event.data.prompt,
+          payload: event.data.payload,
           delivery: event.data.delivery,
           timeCreated: event.data.timestamp,
         })
       }),
     )
+    yield* events.project(SessionEvent.PromptRevised, (event) =>
+      event.durable === undefined
+        ? Effect.die("Durable Session event is missing aggregate sequence")
+        : SessionInput.projectRevised(db, {
+            id: event.data.messageID,
+            sessionID: event.data.sessionID,
+            prompt: event.data.prompt,
+            payload: event.data.payload,
+            updatedSeq: event.durable.seq,
+          }),
+    )
+    yield* events.project(SessionEvent.PromptDiscarded, (event) =>
+      event.durable === undefined
+        ? Effect.die("Durable Session event is missing aggregate sequence")
+        : SessionInput.projectDiscarded(db, {
+            id: event.data.messageID,
+            sessionID: event.data.sessionID,
+            discardedSeq: event.durable.seq,
+          }),
+    )
+    yield* events.project(SessionEvent.PromptExpedited, (event) =>
+      event.durable === undefined
+        ? Effect.die("Durable Session event is missing aggregate sequence")
+        : SessionInput.projectExpedited(db, {
+            id: event.data.messageID,
+            sessionID: event.data.sessionID,
+            prompt: event.data.prompt,
+            payload: event.data.payload,
+            updatedSeq: event.durable.seq,
+          }),
+    )
     yield* events.project(SessionEvent.ContextUpdated, (event) => run(db, event))
     yield* events.project(SessionEvent.Synthetic, (event) => run(db, event))
     yield* events.project(SessionEvent.Shell.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Shell.Ended, (event) => run(db, event))
+    yield* events.project(SessionEvent.Command.Executed, () => Effect.void)
     yield* events.project(SessionEvent.Step.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Step.Ended, (event) => run(db, event))
     yield* events.project(SessionEvent.Step.Failed, (event) => run(db, event))
@@ -436,10 +482,7 @@ const layer = Layer.effectDiscard(
         yield* db
           .delete(SessionInputTable)
           .where(
-            and(
-              eq(SessionInputTable.session_id, event.data.sessionID),
-              or(gt(SessionInputTable.admitted_seq, boundary.seq), gt(SessionInputTable.promoted_seq, boundary.seq)),
-            ),
+            and(eq(SessionInputTable.session_id, event.data.sessionID), gt(SessionInputTable.promoted_seq, boundary.seq)),
           )
           .run()
           .pipe(Effect.orDie)

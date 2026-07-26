@@ -21,6 +21,7 @@ import { JsonObject, optionalArray, ProviderShared } from "./shared"
 import { GeminiToolSchema } from "./utils/gemini-tool-schema"
 import { Lifecycle } from "./utils/lifecycle"
 import { ToolSchemaProjection } from "./utils/tool-schema"
+import { PreparedContext } from "./utils/prepared-context"
 
 const ADAPTER = "gemini"
 const MEDIA_MIMES = new Set<string>(ProviderShared.MEDIA_MIMES)
@@ -488,6 +489,17 @@ export const protocol = Protocol.make({
   body: {
     schema: GeminiBody,
     from: fromRequest,
+    context: (body) =>
+      PreparedContext.make(
+        body.systemInstruction?.parts.map((part) => part.text) ?? [],
+        (body.tools ?? []).flatMap((tool) =>
+          tool.functionDeclarations.map((definition) => ({
+            name: definition.name,
+            description: definition.description,
+            inputSchema: definition.parameters ?? {},
+          })),
+        ),
+      ),
   },
   stream: {
     event: Protocol.jsonEvent(GeminiEvent),

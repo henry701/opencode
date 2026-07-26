@@ -1,7 +1,16 @@
 import { expect, test } from "bun:test"
 import { DateTime, Effect, Stream } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
-import { AbsolutePath, Agent, Location, Model, OpenCode, Prompt, Session, SessionMessage } from "../src/effect"
+import {
+  AbsolutePath,
+  Agent,
+  Location,
+  Model,
+  OpenCode,
+  Session,
+  SessionInputPayload,
+  SessionMessage,
+} from "../src/effect"
 
 test("sessions.get returns the decoded Effect projection", async () => {
   const httpClient = HttpClient.make((request) =>
@@ -124,7 +133,12 @@ test("session methods retain decoded Effect inputs and outputs", async () => {
     })
     const admitted = yield* client.sessions.prompt({
       sessionID: Session.ID.make("ses_test"),
-      prompt: Prompt.make({ text: "Hello" }),
+      payload: SessionInputPayload.Payload.make({
+        version: 1,
+        agent: "build",
+        model: { providerID: "anthropic", modelID: "claude" },
+        parts: [{ type: "text", text: "Hello" }],
+      }),
       resume: false,
     })
     yield* client.sessions.compact({ sessionID: Session.ID.make("ses_test") })

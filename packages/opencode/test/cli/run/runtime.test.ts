@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
+import { OpenCode } from "@opencode-ai/client"
 import { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { runInteractiveMode } from "@/cli/cmd/run/runtime"
 import type { FooterApi, RunProvider } from "@/cli/cmd/run/types"
@@ -183,6 +184,41 @@ describe("run interactive runtime", () => {
     const task = runInteractiveMode(
       {
         sdk,
+        next: OpenCode.make({
+          baseUrl: "http://opencode.test",
+          fetch: Object.assign(
+            async (request: RequestInfo | URL) => {
+              const pathname = new URL(request instanceof Request ? request.url : request.toString()).pathname
+              const data =
+                pathname.endsWith("/context")
+                  ? [
+                      {
+                        id: "msg-user-1",
+                        type: "user",
+                        text: "hello",
+                        time: { created: 1 },
+                      },
+                    ]
+                  : {
+                      id: "ses-1",
+                      projectID: "prj-1",
+                      agent: "build",
+                      model: { providerID: "openai", id: "gpt-5" },
+                      cost: 0,
+                      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+                      time: { created: 1, updated: 1 },
+                      title: "Session",
+                      location: { directory: "/tmp" },
+                    }
+              return new Response(JSON.stringify({ data }), {
+                headers: { "content-type": "application/json" },
+              })
+            },
+            {
+              preconnect: globalThis.fetch.preconnect.bind(globalThis.fetch),
+            },
+          ),
+        }),
         directory: "/tmp",
         sessionID: "ses-1",
         sessionTitle: "Session",
@@ -208,7 +244,7 @@ describe("run interactive runtime", () => {
           close: () => Promise.resolve(),
         }),
         streamTransport: Promise.resolve({
-          createSessionTransport: async (input: { providers?: () => RunProvider[]; footer: FooterApi }) => {
+          createCurrentSessionTransport: async (input: { providers?: () => RunProvider[]; footer: FooterApi }) => {
             transportProviders.push(input.providers?.() ?? [])
             setTimeout(() => {
               input.footer.close()
@@ -234,5 +270,6 @@ describe("run interactive runtime", () => {
     await task
 
     expect(transportProviders).toEqual([[provider]])
+    expect(sdk.session.messages).not.toHaveBeenCalled()
   })
 })

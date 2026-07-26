@@ -8,7 +8,6 @@ import { createMediaQuery } from "@solid-primitives/media"
 
 import { useFile } from "@/context/file"
 import { useLayout } from "@/context/layout"
-import { useSync } from "@/context/sync"
 import { useLanguage } from "@/context/language"
 import { useProviders } from "@/hooks/use-providers"
 import { useSDK } from "@/context/sdk"
@@ -16,11 +15,15 @@ import { getSessionContext } from "@/components/session/session-context-metrics"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { createSessionTabs } from "@/pages/session/helpers"
 import { useSettings } from "@/context/settings"
+import type { SessionMessage } from "@opencode-ai/schema/session-message"
+import type { Session } from "@opencode-ai/schema/session"
 
 interface SessionContextUsageProps {
   variant?: "button" | "indicator"
   buttonAppearance?: "default" | "v2"
   placement?: ComponentProps<typeof TooltipV2>["placement"]
+  messages?: () => readonly SessionMessage.Message[]
+  session?: () => Session.Info | undefined
 }
 
 function ContextTooltipRow(props: { name: JSX.Element; value: JSX.Element }) {
@@ -44,7 +47,6 @@ function openSessionContext(args: {
 }
 
 export function SessionContextUsage(props: SessionContextUsageProps) {
-  const sync = useSync()
   const file = useFile()
   const layout = useLayout()
   const language = useLanguage()
@@ -62,9 +64,6 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
     normalizeTab: (tab) => (tab.startsWith("file://") ? file.tab(tab) : tab),
     fileBrowser: () => settings.general.newLayoutDesigns() && isDesktop() && !!params.id,
   })
-  const messages = createMemo(() => (params.id ? (sync().data.message[params.id] ?? []) : []))
-  const info = createMemo(() => (params.id ? sync().session.get(params.id) : undefined))
-
   const usd = createMemo(
     () =>
       new Intl.NumberFormat(language.intl(), {
@@ -73,9 +72,9 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
       }),
   )
 
-  const context = createMemo(() => getSessionContext(messages(), [...providers.all().values()]))
+  const context = createMemo(() => getSessionContext(props.messages?.() ?? [], [...providers.all().values()]))
   const cost = createMemo(() => {
-    return usd().format(info()?.cost ?? 0)
+    return usd().format(props.session?.()?.cost ?? 0)
   })
   const contextVisible = createMemo(() => view().reviewPanel.opened() && tabState.activeTab() === "context")
   const hasOtherTabs = createMemo(() =>

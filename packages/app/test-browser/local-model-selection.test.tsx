@@ -31,6 +31,9 @@ const sameProviderSelectedModel = {
 beforeAll(async () => {
   mock.module("@solidjs/router", () => ({
     useParams: () => params,
+    useLocation: () => ({}),
+    useNavigate: () => () => undefined,
+    useSearchParams: () => [{}],
   }))
   mock.module("@opencode-ai/ui/context", () => ({
     createSimpleContext: (input: { name: string; init: (props: Record<string, unknown>) => unknown }) => {

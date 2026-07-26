@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { Message } from "@opencode-ai/sdk/v2/client"
+import type { SessionMessage } from "@opencode-ai/schema/session-message"
 import { getSessionContext } from "./session-context-metrics"
 
 const assistant = (
@@ -10,10 +10,11 @@ const assistant = (
   modelID = "gpt-4.1",
 ) => {
   return {
-    id,
-    role: "assistant",
-    providerID,
-    modelID,
+    id: id as SessionMessage.ID,
+    type: "assistant",
+    agent: "build",
+    model: { providerID, id: modelID },
+    content: [],
     cost,
     tokens: {
       input: tokens.input,
@@ -25,16 +26,18 @@ const assistant = (
       },
     },
     time: { created: 1 },
-  } as unknown as Message
+  } as unknown as SessionMessage.Assistant
 }
 
 const user = (id: string) => {
   return {
-    id,
-    role: "user",
-    cost: 0,
+    id: id as SessionMessage.ID,
+    type: "user",
+    text: id,
+    files: [],
+    agents: [],
     time: { created: 1 },
-  } as unknown as Message
+  } as unknown as SessionMessage.User
 }
 
 describe("getSessionContext", () => {
@@ -59,7 +62,7 @@ describe("getSessionContext", () => {
 
     const ctx = getSessionContext(messages, providers)
 
-    expect(ctx?.message.id).toBe("a2")
+    expect(ctx?.message.id).toBe("a2" as never)
     expect(ctx?.total).toBe(500)
     expect(ctx?.input).toBe(300)
     expect(ctx?.usage).toBe(50)
@@ -87,8 +90,8 @@ describe("getSessionContext", () => {
     messages.push(assistant("a2", { input: 100, output: 20, reasoning: 0, read: 0, write: 0 }, 0.75))
     const two = getSessionContext(messages, providers)
 
-    expect(one?.message.id).toBe("a1")
-    expect(two?.message.id).toBe("a2")
+    expect(one?.message.id).toBe("a1" as never)
+    expect(two?.message.id).toBe("a2" as never)
   })
 
   test("returns undefined when inputs are undefined", () => {

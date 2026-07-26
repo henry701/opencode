@@ -71,19 +71,17 @@ for (const deviceScaleFactor of [1.25, 1.5]) {
 test("keeps the patch card inside a fractionally short virtual row", async ({ page }) => {
   const patchID = "prt_patch_outline"
   const file = {
-    filePath: "src/outline.ts",
-    relativePath: "src/outline.ts",
-    type: "update",
+    file: "src/outline.ts",
+    status: "modified",
     additions: 1,
     deletions: 1,
-    before: "const outline = false\n",
-    after: "const outline = true\n",
+    patch: "@@ -1 +1 @@\n-const outline = false\n+const outline = true",
   }
   const timeline = await setupTimeline(page, {
     messages: [
       userMessage(),
       assistantMessage([
-        toolPart(patchID, "apply_patch", "completed", { files: [file.filePath] }, { metadata: { files: [file] } }),
+        toolPart(patchID, "apply_patch", "completed", { files: [file.file] }, { metadata: { files: [file] } }),
       ]),
     ],
     settings: { editToolPartsExpanded: true, newLayoutDesigns: true },
@@ -128,8 +126,9 @@ test("allows paint rounding for every framed row but not fixed turn gaps", async
   const secondUserID = "msg_outline_second_user"
   await setupTimeline(page, {
     messages: [
-      userMessage(undefined, {
-        summary: {
+      userMessage(),
+      assistantMessage([textPart("prt_outline_text", "Assistant text")], {
+        snapshot: {
           diffs: [
             {
               file: "src/summary.ts",
@@ -140,7 +139,6 @@ test("allows paint rounding for every framed row but not fixed turn gaps", async
           ],
         },
       }),
-      assistantMessage([textPart("prt_outline_text", "Assistant text")]),
       userMessage(undefined, { id: secondUserID, created: 1700000010000 }),
       assistantMessage([], {
         id: "msg_outline_second_assistant",

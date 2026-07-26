@@ -5,12 +5,13 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
+import { SessionV1 } from "@opencode-ai/core/v1/session"
 
 import { AccessToken, AccountID, OrgID, RefreshToken } from "../../src/account/schema"
 import { AccountRepo } from "../../src/account/repo"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { Session } from "@/session/session"
-import type { SessionID } from "../../src/session/schema"
+import { MessageID, type SessionID } from "../../src/session/schema"
 import { ShareNext } from "@/share/share-next"
 import { SessionShareTable } from "@opencode-ai/core/share/sql"
 import { Database } from "@opencode-ai/core/database/database"
@@ -169,6 +170,83 @@ describe("ShareNext", () => {
           expect(createRequests).toHaveLength(1)
           expect(createRequests[0].method).toBe("POST")
           expect(createRequests[0].url).toBe("https://legacy-share.example.com/api/share")
+        }).pipe(Effect.provide(integrationLayer(client)))
+      },
+      { config: { enterprise: { url: "https://legacy-share.example.com" } } },
+    ),
+  )
+
+  it.live("full and live sync redact prepared context from shared assistant messages", () =>
+    provideTmpdirInstance(
+      () => {
+        const synced: string[] = []
+        const client = HttpClient.make((req) => {
+          if (req.url.endsWith("/api/share")) {
+            return Effect.succeed(
+              json(req, {
+                id: "shr_abc",
+                url: "https://legacy-share.example.com/share/abc",
+                secret: "sec_123",
+              }),
+            )
+          }
+          if (req.url.endsWith("/sync") && req.body._tag === "Uint8Array") {
+            synced.push(new TextDecoder().decode(req.body.body))
+          }
+          return Effect.succeed(json(req, { ok: true }))
+        })
+
+        return Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const info = yield* sessions.create({ title: "private context" })
+          const assistant = yield* sessions.updateMessage({
+            id: MessageID.ascending(),
+            role: "assistant",
+            parentID: MessageID.ascending(),
+            sessionID: info.id,
+            mode: "build",
+            agent: "build",
+            path: { cwd: "/tmp", root: "/tmp" },
+            cost: 0,
+            tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+            modelID: "test-model",
+            providerID: "test-provider",
+            time: { created: Date.now() },
+            system_prompt: "private system prompt",
+            tool_defs: "private tool definitions",
+          } as SessionV1.Assistant)
+
+          yield* (yield* ShareNext.Service).create(info.id)
+          yield* pollWithTimeout(
+            Effect.sync(() => (synced.length > 0 ? true : undefined)),
+            "timed out waiting for full share sync",
+            "5 seconds",
+          )
+
+          const body = JSON.parse(synced.at(-1)!) as {
+            data: Array<{ type: string; data: Record<string, unknown> }>
+          }
+          const message = body.data.find((item) => item.type === "message")?.data
+          expect(message?.system_prompt).toBeUndefined()
+          expect(message?.tool_defs).toBeUndefined()
+
+          yield* sessions.updateMessage({
+            ...assistant,
+            system_prompt: "updated private system prompt",
+            tool_defs: "updated private tool definitions",
+          })
+          yield* pollWithTimeout(
+            Effect.sync(() => (synced.length > 1 ? true : undefined)),
+            "timed out waiting for live share sync",
+            "5 seconds",
+          )
+
+          const liveBody = JSON.parse(synced.at(-1)!) as {
+            data: Array<{ type: string; data: Record<string, unknown> }>
+          }
+          const liveMessage = liveBody.data.find((item) => item.type === "message")?.data
+          expect(liveMessage?.system_prompt).toBeUndefined()
+          expect(liveMessage?.tool_defs).toBeUndefined()
         }).pipe(Effect.provide(integrationLayer(client)))
       },
       { config: { enterprise: { url: "https://legacy-share.example.com" } } },

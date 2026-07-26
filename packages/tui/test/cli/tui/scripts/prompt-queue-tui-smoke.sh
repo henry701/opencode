@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke driver for deferred prompt queue through the same HTTP API the TUI uses.
+# Smoke driver for deferred prompt queue through the current HTTP API the TUI uses.
 #
 # Required env:
 #   OPENCODE_SERVER_URL  — e.g. http://127.0.0.1:4096 from `opencode serve`
@@ -38,33 +38,46 @@ session_id() {
     printf '%s' "$OPENCODE_SESSION_ID"
     return
   fi
-  api POST /session -d '{"title":"prompt-queue-tui-smoke"}' | jq -er '.id'
+  api POST /api/session -d "$(
+    jq -nc --arg directory "$DIRECTORY" '{
+      agent: "build",
+      model: { providerID: "test", id: "test-model" },
+      location: { directory: $directory }
+    }'
+  )" | jq -er '.data.id'
 }
 
 queue_prompt() {
   local sid=$1
   local text=$2
-  api POST "/session/${sid}/queue" -d "$(
+  api POST "/api/session/${sid}/queue" -d "$(
     jq -nc --arg t "$text" '{
-      agent: "build",
-      model: { providerID: "test", modelID: "test-model" },
-      parts: [{ type: "text", text: $t }]
+      payload: {
+        version: 1,
+        agent: "build",
+        model: { providerID: "test", modelID: "test-model" },
+        parts: [{ type: "text", text: $t }]
+      }
     }'
   )" >/dev/null
 }
 
 start_open_async() {
   local sid=$1
-  api POST "/session/${sid}/prompt_async" -d '{
-    "agent": "build",
-    "model": { "providerID": "test", "modelID": "test-model" },
-    "parts": [{ "type": "text", "text": "open turn" }]
+  api POST "/api/session/${sid}/prompt" -d '{
+    "payload": {
+      "version": 1,
+      "agent": "build",
+      "model": { "providerID": "test", "modelID": "test-model" },
+      "parts": [{ "type": "text", "text": "open turn" }]
+    }
   }' >/dev/null
 }
 
 attach_capture() {
   local sid=$1
   local out="${ARTIFACT_DIR}/tui-attach.txt"
+  : >"$out"
   if [[ "${OPENCODE_SKIP_ATTACH:-}" == "1" ]]; then
     printf 'attach skipped\n' >"$out"
     return 0
@@ -74,13 +87,15 @@ attach_capture() {
     return 0
   fi
   if [[ "${OPENCODE_EDIT_FIRST:-}" == "1" ]]; then
-    coproc ATTACH {
-      timeout --kill-after=2 15 script -qefc \
+    coproc {
+      timeout --kill-after=2 30 script -qefc \
         "cd '${CLI_CWD}' && exec bun run --conditions=browser '${CLI_ENTRY}' attach '${SERVER_URL}' --session '${sid}' --dir '${DIRECTORY}'" \
         "$out" >/dev/null 2>&1
     }
+    local attach_pid=$COPROC_PID
+    local attach_stdin=${COPROC[1]}
     local ready=0
-    for _ in {1..60}; do
+    for _ in {1..120}; do
       if grep -aq "messages queued" "$out"; then
         ready=1
         break
@@ -88,42 +103,49 @@ attach_capture() {
       sleep 0.2
     done
     if [[ "$ready" != "1" ]]; then
-      kill "$ATTACH_PID" 2>/dev/null || true
-      wait "$ATTACH_PID" 2>/dev/null || true
+      printf 'attach never rendered queued-message dock\n' >&2
+      kill "$attach_pid" 2>/dev/null || true
+      wait "$attach_pid" 2>/dev/null || true
       return 1
     fi
-    printf '\033[1;3A' >&"${ATTACH[1]}"
+    printf '\033[1;3A' >&"$attach_stdin"
     for _ in {1..10}; do
       grep -aq "Editing queued message" "$out" && break
       sleep 0.1
     done
     if ! grep -aq "Editing queued message" "$out"; then
-      printf '\033[57352;3u' >&"${ATTACH[1]}"
+      printf '\033[57352;3u' >&"$attach_stdin"
       for _ in {1..10}; do
         grep -aq "Editing queued message" "$out" && break
         sleep 0.1
       done
     fi
     if ! grep -aq "Editing queued message" "$out"; then
-      kill "$ATTACH_PID" 2>/dev/null || true
-      wait "$ATTACH_PID" 2>/dev/null || true
+      printf 'attach did not enter queued-message editing\n' >&2
+      kill "$attach_pid" 2>/dev/null || true
+      wait "$attach_pid" 2>/dev/null || true
       return 1
     fi
-    printf '%s' '-edited' >&"${ATTACH[1]}"
+    printf '%s' '-edited' >&"$attach_stdin"
     sleep 0.2
-    printf '\r' >&"${ATTACH[1]}"
+    printf '\r' >&"$attach_stdin"
 
     local edited=0
     for _ in {1..40}; do
-      if api GET "/session/${sid}/queue" | jq -e \
-        'length == 3 and .[0].text == "queue-one-edited"' >/dev/null; then
+      if api GET "/api/session/${sid}/queue" | jq -e '
+        .data | length == 3 and
+        ([.[0].payload.parts[] | select(.type == "text" and (.synthetic != true)) | .text] | join("\n")) == "queue-one-edited"
+      ' >/dev/null; then
         edited=1
         break
       fi
       sleep 0.2
     done
-    kill "$ATTACH_PID" 2>/dev/null || true
-    wait "$ATTACH_PID" 2>/dev/null || true
+    kill "$attach_pid" 2>/dev/null || true
+    wait "$attach_pid" 2>/dev/null || true
+    if [[ "$edited" != "1" ]]; then
+      printf 'attach edit was not persisted to the current queue API\n' >&2
+    fi
     [[ "$edited" == "1" ]]
     return
   fi
@@ -151,8 +173,10 @@ main() {
   attach_capture "$sid"
 
   if [[ "${OPENCODE_EDIT_FIRST:-}" == "1" ]]; then
-    api GET "/session/${sid}/queue" | jq -er \
-      'length == 3 and .[0].text == "queue-one-edited"' >/dev/null
+    api GET "/api/session/${sid}/queue" | jq -er '
+      .data | length == 3 and
+      ([.[0].payload.parts[] | select(.type == "text" and (.synthetic != true)) | .text] | join("\n")) == "queue-one-edited"
+    ' >/dev/null
     printf 'queue-one-edited\n' >"${ARTIFACT_DIR}/edited.txt"
   fi
 }

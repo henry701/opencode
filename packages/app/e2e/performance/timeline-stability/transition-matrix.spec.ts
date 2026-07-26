@@ -16,7 +16,6 @@ import {
   partUpdated,
   setupTimeline,
   shell,
-  status,
   textPart,
   toolPart,
   userMessage,
@@ -43,7 +42,11 @@ test("keeps unchanged siblings stable while a middle part is inserted and remove
   await timeline.send(partUpdated(textPart(middleID, "Inserted middle row. ".repeat(12))), 350)
   await expect(page.locator(`[data-timeline-part-id="${middleID}"]`)).toBeVisible()
   await timeline.send(
-    event("message.part.removed", { sessionID: "ses_timeline_stability", messageID: assistantID, partID: middleID }),
+    event("session.next.revert.committed", {
+      timestamp: 1700000003000,
+      sessionID: "ses_timeline_stability",
+      messageID: assistantID,
+    }),
     500,
   )
   await expect(page.locator(`[data-timeline-part-id="${middleID}"]`)).toHaveCount(0)
@@ -66,7 +69,7 @@ test("streams text through growth, canonical replacement, and completion", async
   await timeline.send(partDelta(textID, " streamed content"), 100)
   await timeline.send(partDelta(textID, "\n\n- item one\n- item two\n- item three"), 180)
   await timeline.send(partUpdated(textPart(textID, "Canonical replacement with a shorter final paragraph.")), 200)
-  await timeline.send(messageUpdated(completedAssistantInfo(assistant.info)), 500)
+  await timeline.send(messageUpdated(completedAssistantInfo(assistant)), 500)
   const trace = await stopVisualProbe<keyof typeof regions>(page)
   await reportVisualStability(
     testInfo,
@@ -123,7 +126,7 @@ test("inserts a completed question between stable rows", async ({ page }, testIn
 test("replaces thinking with an assistant error without a blank turn", async ({ page }, testInfo) => {
   const assistant = assistantMessage([], { completed: false })
   const timeline = await setupTimeline(page, { messages: [userMessage(), assistant], cpuRate: 4 })
-  await timeline.send(status("busy"), 150)
+  await timeline.sendStatus("busy", 150)
   await expect(page.locator('[data-timeline-row="Thinking"]')).toBeVisible()
   const regions = defineVisualRegions({
     thinking: { selector: '[data-timeline-row="Thinking"]' },
@@ -132,8 +135,8 @@ test("replaces thinking with an assistant error without a blank turn", async ({ 
   await startVisualProbe(page, regions)
   await timeline.send(
     messageUpdated({
-      ...assistant.info,
-      error: { name: "APIError", data: { message: "Provider failed visibly", isRetryable: false } },
+      ...assistant,
+      error: { type: "unknown", message: "Provider failed visibly" },
     }),
     500,
   )
@@ -163,25 +166,25 @@ test("updates retry attempts and long provider messages without remounting the r
     messages: [userMessage(), assistantMessage([], { completed: false })],
     cpuRate: 4,
   })
-  await timeline.send(status("retry", 1), 120)
+  await timeline.sendStatus("retry", 120, 1)
   await expect(page.locator('[data-timeline-row="Retry"]')).toBeVisible()
   const regions = defineVisualRegions({
     retry: { selector: '[data-timeline-row="Retry"]' },
   })
   await startVisualProbe(page, regions)
   await timeline.send(
-    event("session.status", {
+    event("session.next.retried", {
+      timestamp: 1700000002000,
       sessionID: "ses_timeline_stability",
-      status: {
-        type: "retry",
-        attempt: 2,
+      attempt: 2,
+      error: {
         message: "A very long provider retry message ".repeat(8),
-        next: Date.now() + 10_000,
+        isRetryable: true,
       },
     }),
     300,
   )
-  await timeline.send(status("retry", 3), 300)
+  await timeline.sendStatus("retry", 300, 3)
   const trace = await stopVisualProbe<keyof typeof regions>(page)
   await reportVisualStability(
     testInfo,
@@ -214,13 +217,11 @@ test("reducer-hardening: removes a historical turn one message at a time without
       userMessage(undefined, { id: removeUserID, created: 1690000000000 }),
       assistantMessage([textPart("prt_remove_text", "Removed historical content. ".repeat(15))], {
         id: removeAssistantID,
-        parentID: removeUserID,
         created: 1690000001000,
       }),
       userMessage(undefined, { id: anchorUserID, created: 1700000000000 }),
       assistantMessage([textPart("prt_anchor_text", "Visible anchor response")], {
         id: "msg_2001_anchor_assistant",
-        parentID: anchorUserID,
         created: 1700000001000,
       }),
     ],
@@ -231,10 +232,21 @@ test("reducer-hardening: removes a historical turn one message at a time without
   })
   await startVisualProbe(page, regions)
   await timeline.send(
-    event("message.removed", { sessionID: "ses_timeline_stability", messageID: removeAssistantID }),
+    event("session.next.revert.committed", {
+      timestamp: 1700000003000,
+      sessionID: "ses_timeline_stability",
+      messageID: removeAssistantID,
+    }),
     200,
   )
-  await timeline.send(event("message.removed", { sessionID: "ses_timeline_stability", messageID: removeUserID }), 500)
+  await timeline.send(
+    event("session.next.revert.committed", {
+      timestamp: 1700000003001,
+      sessionID: "ses_timeline_stability",
+      messageID: removeUserID,
+    }),
+    500,
+  )
   const trace = await stopVisualProbe<keyof typeof regions>(page)
   await reportVisualStability(
     testInfo,

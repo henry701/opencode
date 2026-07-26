@@ -10,7 +10,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { Project } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { ProviderV2 } from "@opencode-ai/core/provider"
-import { AbsolutePath } from "@opencode-ai/core/schema"
+import { AbsolutePath, RelativePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionMessage } from "@opencode-ai/core/session/message"
@@ -63,9 +63,31 @@ describe("SessionProjector", () => {
         })
         .run()
       const boundary = SessionMessage.ID.make("msg_boundary")
+      const later = SessionMessage.ID.make("msg_later")
+      const pending = SessionMessage.ID.make("msg_pending")
       yield* db
         .insert(SessionMessageTable)
-        .values([assistantRow(boundary, 1), assistantRow(SessionMessage.ID.make("msg_later"), 2)])
+        .values([assistantRow(boundary, 1), assistantRow(later, 2)])
+        .run()
+      yield* db
+        .insert(SessionInputTable)
+        .values([
+          {
+            id: later,
+            session_id: sessionID,
+            prompt: Prompt.make({ text: "already promoted" }),
+            delivery: "steer",
+            admitted_seq: 2,
+            promoted_seq: 2,
+          },
+          {
+            id: pending,
+            session_id: sessionID,
+            prompt: Prompt.make({ text: "still pending" }),
+            delivery: "queue",
+            admitted_seq: 3,
+          },
+        ])
         .run()
       const events = yield* EventV2.Service
       yield* events.publish(SessionEvent.RevertEvent.Staged, {
@@ -93,6 +115,9 @@ describe("SessionProjector", () => {
       expect(
         (yield* db.select({ id: SessionMessageTable.id }).from(SessionMessageTable).all()).map((row) => row.id),
       ).toEqual([boundary])
+      expect(
+        (yield* db.select({ id: SessionInputTable.id }).from(SessionInputTable).all()).map((row) => row.id),
+      ).toEqual([pending])
     }),
   )
 
@@ -439,6 +464,9 @@ describe("SessionProjector", () => {
         finish: "stop",
         cost: 0,
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        snapshot: "snapshot-end",
+        files: [RelativePath.make("src/a.ts")],
+        diffs: [{ file: "src/a.ts", patch: "@@ -1 +1 @@", additions: 1, deletions: 1, status: "modified" }],
       })
 
       const rows = yield* db
@@ -455,6 +483,11 @@ describe("SessionProjector", () => {
       expect(messages[1]).toMatchObject({
         type: "assistant",
         finish: "stop",
+        snapshot: {
+          end: "snapshot-end",
+          files: ["src/a.ts"],
+          diffs: [{ file: "src/a.ts", patch: "@@ -1 +1 @@", additions: 1, deletions: 1, status: "modified" }],
+        },
         time: { completed: DateTime.makeUnsafe(1) },
       })
     }),

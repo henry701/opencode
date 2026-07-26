@@ -11,12 +11,40 @@ import type {
   SessionsActiveOutput,
   SessionsGetInput,
   SessionsGetOutput,
+  SessionsUpdateInput,
+  SessionsUpdateOutput,
+  SessionsForkInput,
+  SessionsForkOutput,
+  SessionsShareInput,
+  SessionsShareOutput,
+  SessionsUnshareInput,
+  SessionsUnshareOutput,
   SessionsSwitchAgentInput,
   SessionsSwitchAgentOutput,
   SessionsSwitchModelInput,
   SessionsSwitchModelOutput,
   SessionsPromptInput,
   SessionsPromptOutput,
+  SessionsCommandInput,
+  SessionsCommandOutput,
+  SessionsQueueListInput,
+  SessionsQueueListOutput,
+  SessionsQueueEnqueueInput,
+  SessionsQueueEnqueueOutput,
+  SessionsQueueDrainPauseInput,
+  SessionsQueueDrainPauseOutput,
+  SessionsQueueDrainResumeInput,
+  SessionsQueueDrainResumeOutput,
+  SessionsQueueGetInput,
+  SessionsQueueGetOutput,
+  SessionsQueueUpdateInput,
+  SessionsQueueUpdateOutput,
+  SessionsQueueRemoveInput,
+  SessionsQueueRemoveOutput,
+  SessionsQueueSendInput,
+  SessionsQueueSendOutput,
+  SessionsShellInput,
+  SessionsShellOutput,
   SessionsCompactInput,
   SessionsCompactOutput,
   SessionsWaitInput,
@@ -112,6 +140,26 @@ import type {
   ProjectCopiesRemoveOutput,
   ProjectCopiesRefreshInput,
   ProjectCopiesRefreshOutput,
+  McpStatusInput,
+  McpStatusOutput,
+  McpConnectInput,
+  McpConnectOutput,
+  McpAddInput,
+  McpAddOutput,
+  McpAuthStartInput,
+  McpAuthStartOutput,
+  McpAuthCallbackInput,
+  McpAuthCallbackOutput,
+  McpAuthRemoveInput,
+  McpAuthRemoveOutput,
+  McpDisconnectInput,
+  McpDisconnectOutput,
+  McpResourcesInput,
+  McpResourcesOutput,
+  McpResourceTemplatesInput,
+  McpResourceTemplatesOutput,
+  McpResourceReadInput,
+  McpResourceReadOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -343,6 +391,52 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ).then((value) => value.data),
+      update: (input: SessionsUpdateInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsUpdateOutput }>(
+          {
+            method: "PATCH",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}`,
+            body: { title: input["title"] },
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      fork: (input: SessionsForkInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsForkOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/fork`,
+            body: { messageID: input["messageID"] },
+            successStatus: 200,
+            declaredStatuses: [404, 500, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      share: (input: SessionsShareInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsShareOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/share`,
+            successStatus: 200,
+            declaredStatuses: [404, 503, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      unshare: (input: SessionsUnshareInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsUnshareOutput }>(
+          {
+            method: "DELETE",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/share`,
+            successStatus: 200,
+            declaredStatuses: [404, 503, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
       switchAgent: (input: SessionsSwitchAgentInput, requestOptions?: RequestOptions) =>
         request<SessionsSwitchAgentOutput>(
           {
@@ -372,13 +466,141 @@ export function make(options: ClientOptions) {
           {
             method: "POST",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/prompt`,
-            body: { id: input["id"], prompt: input["prompt"], delivery: input["delivery"], resume: input["resume"] },
+            body: {
+              id: input["id"],
+              prompt: input["prompt"],
+              payload: input["payload"],
+              delivery: input["delivery"],
+              resume: input["resume"],
+            },
+            successStatus: 200,
+            declaredStatuses: [409, 400, 404, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      command: (input: SessionsCommandInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsCommandOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/command`,
+            body: {
+              id: input["id"],
+              name: input["name"],
+              arguments: input["arguments"],
+              payload: input["payload"],
+              delivery: input["delivery"],
+              resume: input["resume"],
+            },
+            successStatus: 200,
+            declaredStatuses: [404, 409, 503, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      queueList: (input: SessionsQueueListInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsQueueListOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/queue`,
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      queueEnqueue: (input: SessionsQueueEnqueueInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsQueueEnqueueOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/queue`,
+            body: { id: input["id"], payload: input["payload"], resume: input["resume"] },
             successStatus: 200,
             declaredStatuses: [409, 404, 400, 401],
             empty: false,
           },
           requestOptions,
         ).then((value) => value.data),
+      queueDrainPause: (input: SessionsQueueDrainPauseInput, requestOptions?: RequestOptions) =>
+        request<SessionsQueueDrainPauseOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/queue/drain-pause`,
+            successStatus: 204,
+            declaredStatuses: [404, 400, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
+      queueDrainResume: (input: SessionsQueueDrainResumeInput, requestOptions?: RequestOptions) =>
+        request<SessionsQueueDrainResumeOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/queue/drain-resume`,
+            successStatus: 204,
+            declaredStatuses: [404, 400, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
+      queueGet: (input: SessionsQueueGetInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsQueueGetOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/queue/${encodeURIComponent(input.messageID)}`,
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      queueUpdate: (input: SessionsQueueUpdateInput, requestOptions?: RequestOptions) =>
+        request<SessionsQueueUpdateOutput>(
+          {
+            method: "PATCH",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/queue/${encodeURIComponent(input.messageID)}`,
+            body: { payload: input["payload"] },
+            successStatus: 204,
+            declaredStatuses: [404, 400, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
+      queueRemove: (input: SessionsQueueRemoveInput, requestOptions?: RequestOptions) =>
+        request<SessionsQueueRemoveOutput>(
+          {
+            method: "DELETE",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/queue/${encodeURIComponent(input.messageID)}`,
+            successStatus: 204,
+            declaredStatuses: [404, 400, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
+      queueSend: (input: SessionsQueueSendInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsQueueSendOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/queue/${encodeURIComponent(input.messageID)}/send`,
+            body: { payload: input["payload"] },
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      shell: (input: SessionsShellInput, requestOptions?: RequestOptions) =>
+        request<SessionsShellOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/shell`,
+            body: { command: input["command"] },
+            successStatus: 204,
+            declaredStatuses: [404, 503, 400, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
       compact: (input: SessionsCompactInput, requestOptions?: RequestOptions) =>
         request<SessionsCompactOutput>(
           {
@@ -983,6 +1205,131 @@ export function make(options: ClientOptions) {
             successStatus: 204,
             declaredStatuses: [400, 401],
             empty: true,
+          },
+          requestOptions,
+        ),
+    },
+    mcp: {
+      status: (input?: McpStatusInput, requestOptions?: RequestOptions) =>
+        request<McpStatusOutput>(
+          {
+            method: "GET",
+            path: `/api/mcp`,
+            query: { location: input?.["location"] },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      connect: (input: McpConnectInput, requestOptions?: RequestOptions) =>
+        request<McpConnectOutput>(
+          {
+            method: "POST",
+            path: `/api/mcp/${encodeURIComponent(input.name)}/connect`,
+            query: { location: input["location"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      add: (input: McpAddInput, requestOptions?: RequestOptions) =>
+        request<McpAddOutput>(
+          {
+            method: "POST",
+            path: `/api/mcp`,
+            query: { location: input["location"] },
+            body: { name: input["name"], server: input["server"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      authStart: (input: McpAuthStartInput, requestOptions?: RequestOptions) =>
+        request<McpAuthStartOutput>(
+          {
+            method: "POST",
+            path: `/api/mcp/${encodeURIComponent(input.name)}/auth`,
+            query: { location: input["location"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      authCallback: (input: McpAuthCallbackInput, requestOptions?: RequestOptions) =>
+        request<McpAuthCallbackOutput>(
+          {
+            method: "POST",
+            path: `/api/mcp/${encodeURIComponent(input.name)}/auth/callback`,
+            query: { location: input["location"] },
+            body: { code: input["code"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      authRemove: (input: McpAuthRemoveInput, requestOptions?: RequestOptions) =>
+        request<McpAuthRemoveOutput>(
+          {
+            method: "DELETE",
+            path: `/api/mcp/${encodeURIComponent(input.name)}/auth`,
+            query: { location: input["location"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      disconnect: (input: McpDisconnectInput, requestOptions?: RequestOptions) =>
+        request<McpDisconnectOutput>(
+          {
+            method: "POST",
+            path: `/api/mcp/${encodeURIComponent(input.name)}/disconnect`,
+            query: { location: input["location"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      resources: (input?: McpResourcesInput, requestOptions?: RequestOptions) =>
+        request<McpResourcesOutput>(
+          {
+            method: "GET",
+            path: `/api/mcp/resource`,
+            query: { location: input?.["location"], server: input?.["server"] },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      resourceTemplates: (input?: McpResourceTemplatesInput, requestOptions?: RequestOptions) =>
+        request<McpResourceTemplatesOutput>(
+          {
+            method: "GET",
+            path: `/api/mcp/resource-template`,
+            query: { location: input?.["location"], server: input?.["server"] },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      resourceRead: (input: McpResourceReadInput, requestOptions?: RequestOptions) =>
+        request<McpResourceReadOutput>(
+          {
+            method: "POST",
+            path: `/api/mcp/resource/read`,
+            query: { location: input["location"] },
+            body: { server: input["server"], uri: input["uri"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
           },
           requestOptions,
         ),

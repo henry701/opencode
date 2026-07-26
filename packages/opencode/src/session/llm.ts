@@ -47,20 +47,24 @@ export type StreamInput = {
   toolChoice?: "auto" | "required" | "none"
 }
 
-export type ContextMetadataEvent = {
-  type: "context-metadata"
+export type PreparedContext = {
   systemPrompt?: string
   toolDefs?: string
 }
 
-export type StreamEvent = LLMEvent | ContextMetadataEvent
+export type StreamHooks = {
+  onPrepared?: (context: PreparedContext) => Effect.Effect<void>
+}
+
+export type StreamEvent = LLMEvent
 
 export type StreamRequest = StreamInput & {
   abort: AbortSignal
+  hooks?: StreamHooks
 }
 
 export interface Interface {
-  readonly stream: (input: StreamInput) => Stream.Stream<StreamEvent, unknown>
+  readonly stream: (input: StreamInput, hooks?: StreamHooks) => Stream.Stream<StreamEvent, unknown>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/LLM") {}
@@ -99,11 +103,10 @@ function stringifyToolDefs(tools: Record<string, Tool>) {
   )
 }
 
-function contextMetadata(prepared: LLMRequestPrep.Prepared): ContextMetadataEvent {
+function preparedContext(prepared: LLMRequestPrep.Prepared): PreparedContext {
   const systemPrompt = prepared.system.join("\n").trim()
   const toolDefs = stringifyToolDefs(prepared.tools)
   return {
-    type: "context-metadata",
     ...(systemPrompt ? { systemPrompt } : {}),
     ...(toolDefs ? { toolDefs } : {}),
   }
@@ -161,6 +164,7 @@ const live: Layer.Layer<
         flags,
         isWorkflow,
       })
+      if (input.hooks?.onPrepared) yield* input.hooks.onPrepared(preparedContext(prepared))
 
       // Wire up toolExecutor for DWS workflow models so that tool calls
       // from the workflow service are executed via opencode's tool system
@@ -298,7 +302,6 @@ const live: Layer.Layer<
           })
           return {
             type: "native" as const,
-            context: contextMetadata(prepared),
             stream: native.stream,
           }
         }
@@ -328,7 +331,6 @@ const live: Layer.Layer<
       // LLMAISDK.toLLMEvents below normalizes fullStream parts for the processor.
       return {
         type: "ai-sdk" as const,
-        context: contextMetadata(prepared),
         result: streamText({
           onError(error) {
             bridge.fork(
@@ -406,7 +408,7 @@ const live: Layer.Layer<
       }
     })
 
-    const stream: Interface["stream"] = (input) =>
+    const stream: Interface["stream"] = (input, hooks) =>
       Stream.scoped(
         Stream.unwrap(
           Effect.gen(function* () {
@@ -415,9 +417,9 @@ const live: Layer.Layer<
               (ctrl) => Effect.sync(() => ctrl.abort()),
             )
 
-            const result = yield* run({ ...input, abort: ctrl.signal })
+            const result = yield* run({ ...input, abort: ctrl.signal, hooks })
 
-            if (result.type === "native") return Stream.make(result.context).pipe(Stream.concat(result.stream))
+            if (result.type === "native") return result.stream
 
             // Adapter seam: both runtimes expose the same LLMEvent stream. Native
             // already returns one; AI SDK streams are converted here.
@@ -428,7 +430,7 @@ const live: Layer.Layer<
               Stream.mapEffect((event) => LLMAISDK.toLLMEvents(state, event)),
               Stream.flatMap((events) => Stream.fromIterable(events)),
             )
-            return Stream.make(result.context).pipe(Stream.concat(providerStream))
+            return providerStream
           }),
         ),
       )

@@ -1,8 +1,8 @@
 import { expect, test } from "@playwright/test"
 import {
   assistantMessage,
+  compactionMessage,
   setupTimeline,
-  status,
   toolPart,
   userMessage,
   userText,
@@ -69,42 +69,28 @@ test.describe("session timeline projection", () => {
   })
 
   test("projects gaps, dividers, assistant parts, and errors together", async ({ page }) => {
-    const firstUser = userMessage(
-      [
-        userText("The user made the following comment regarding lines 4 through 8 of src/a.ts: Keep this stable", {
-          id: "prt_comment",
-          synthetic: true,
-          metadata: {
-            opencodeComment: {
-              path: "src/a.ts",
-              selection: { startLine: 4, startChar: 0, endLine: 8, endChar: 0 },
-              comment: "Keep this stable",
-            },
+    const firstUser = userMessage([
+      userText("The user made the following comment regarding lines 4 through 8 of src/a.ts: Keep this stable", {
+        id: "prt_comment",
+        synthetic: true,
+        metadata: {
+          opencodeComment: {
+            path: "src/a.ts",
+            selection: { startLine: 4, startChar: 0, endLine: 8, endChar: 0 },
+            comment: "Keep this stable",
           },
-        }),
-        userText("Continue after the comment", { id: "prt_visible_user" }),
-      ],
-      { summary: { diffs: Array.from({ length: 11 }, (_, index) => summaryDiff(index)) } },
-    )
-    const aborted = assistantMessage(
-      [
-        { id: "prt_before_abort", type: "text", text: "Before interruption" },
-        { id: "prt_compaction", type: "compaction", auto: true },
-      ],
-      {
-        id: "msg_1001_assistant_aborted",
-        error: { name: "MessageAbortedError", data: { message: "Stopped" } },
-      },
-    )
+        },
+      }),
+      userText("Continue after the comment", { id: "prt_visible_user" }),
+    ])
+    const aborted = assistantMessage([{ id: "prt_before_abort", type: "text", text: "Before interruption" }], {
+      id: "msg_1001_assistant_aborted",
+      error: { type: "interrupted", message: "Stopped" },
+      snapshot: { diffs: Array.from({ length: 11 }, (_, index) => summaryDiff(index)) },
+    })
     const failed = assistantMessage([{ id: "prt_after_abort", type: "text", text: "After interruption" }], {
       id: "msg_1002_assistant_failed",
-      error: {
-        name: "APIError",
-        data: {
-          message: JSON.stringify({ error: { type: "provider_error", message: "Visible provider failure" } }),
-          isRetryable: false,
-        },
-      },
+      error: { type: "unknown", message: "Visible provider failure" },
       created: 1700000003000,
     })
     const nextUser = userMessage([userText("Second turn", { id: "prt_second_user" })], {
@@ -116,12 +102,14 @@ test.describe("session timeline projection", () => {
       parentID: "msg_2000_second_user",
       created: 1700000006000,
     })
-    const timeline = await setupTimeline(page, { messages: [firstUser, aborted, failed, nextUser, nextAssistant] })
-    await timeline.send(status("idle"), 100)
+    const timeline = await setupTimeline(page, {
+      messages: [firstUser, aborted, compactionMessage(), failed, nextUser, nextAssistant],
+    })
+    await timeline.sendStatus("idle", 100)
     const scroller = page.locator(".scroll-view__viewport", { has: page.locator("[data-timeline-row]") })
     await scroller.evaluate((element) => (element.scrollTop = 0))
 
-    await expect(page.locator('[data-timeline-row="TurnDivider"]')).toHaveCount(1)
+    await expect(page.locator('[data-timeline-row="TurnDivider"]')).toHaveCount(2)
     await expect(page.getByText("Session compacted", { exact: true })).toBeVisible()
     await expect(page.getByText("Visible provider failure")).toBeVisible()
     await scroller.evaluate((element) => (element.scrollTop = element.scrollHeight))
@@ -129,23 +117,20 @@ test.describe("session timeline projection", () => {
   })
 
   test("renders comment strips and historical diff summary overflow", async ({ page }) => {
-    const user = userMessage(
-      [
-        userText("The user made the following comment regarding lines 4 through 8 of src/a.ts: Keep this stable", {
-          id: "prt_comment_only",
-          synthetic: true,
-          metadata: {
-            opencodeComment: {
-              path: "src/a.ts",
-              selection: { startLine: 4, startChar: 0, endLine: 8, endChar: 0 },
-              comment: "Keep this stable",
-            },
+    const user = userMessage([
+      userText("The user made the following comment regarding lines 4 through 8 of src/a.ts: Keep this stable", {
+        id: "prt_comment_only",
+        synthetic: true,
+        metadata: {
+          opencodeComment: {
+            path: "src/a.ts",
+            selection: { startLine: 4, startChar: 0, endLine: 8, endChar: 0 },
+            comment: "Keep this stable",
           },
-        }),
-        userText("Continue after the comment", { id: "prt_comment_visible" }),
-      ],
-      { summary: { diffs: Array.from({ length: 11 }, (_, index) => summaryDiff(index)) } },
-    )
+        },
+      }),
+      userText("Continue after the comment", { id: "prt_comment_visible" }),
+    ])
     const nextUser = userMessage(undefined, { id: "msg_2000_diff_next_user", created: 1700000010000 })
     const nextAssistant = assistantMessage([], {
       id: "msg_2001_diff_next_assistant",
@@ -153,7 +138,12 @@ test.describe("session timeline projection", () => {
       created: 1700000011000,
     })
     await setupTimeline(page, {
-      messages: [user, assistantMessage(), nextUser, nextAssistant],
+      messages: [
+        user,
+        assistantMessage([], { snapshot: { diffs: Array.from({ length: 11 }, (_, index) => summaryDiff(index)) } }),
+        nextUser,
+        nextAssistant,
+      ],
       settings: { newLayoutDesigns: false },
     })
     const scroller = page.locator(".scroll-view__viewport", { has: page.locator("[data-timeline-row]") })
@@ -169,7 +159,7 @@ test.describe("session timeline projection", () => {
     const user = userMessage()
     const before = assistantMessage([{ id: "prt_before", type: "text", text: "Before" }], {
       id: "msg_1001_before",
-      error: { name: "MessageAbortedError", data: { message: "Stopped" } },
+      error: { type: "interrupted", message: "Stopped" },
     })
     const after = assistantMessage([{ id: "prt_after", type: "text", text: "After" }], {
       id: "msg_1002_after",

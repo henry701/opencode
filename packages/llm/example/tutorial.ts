@@ -189,6 +189,7 @@ const FakeProtocol = Protocol.make<FakeBody, string, string, void>({
           .map((part) => part.text)
           .join("\n"),
       }),
+    context: () => ({}),
   },
   stream: {
     event: Schema.String,

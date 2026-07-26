@@ -159,9 +159,12 @@ export default {
           \`id\` text PRIMARY KEY,
           \`session_id\` text NOT NULL,
           \`prompt\` text NOT NULL,
+          \`payload\` text,
           \`delivery\` text NOT NULL,
           \`admitted_seq\` integer NOT NULL,
           \`promoted_seq\` integer,
+          \`updated_seq\` integer,
+          \`discarded_seq\` integer,
           \`time_created\` integer NOT NULL,
           CONSTRAINT \`fk_session_input_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
         );
@@ -247,7 +250,7 @@ export default {
       yield* tx.run(`CREATE INDEX \`part_message_id_id_idx\` ON \`part\` (\`message_id\`,\`id\`);`)
       yield* tx.run(`CREATE INDEX \`part_session_idx\` ON \`part\` (\`session_id\`);`)
       yield* tx.run(
-        `CREATE INDEX \`session_input_session_pending_delivery_seq_idx\` ON \`session_input\` (\`session_id\`,\`promoted_seq\`,\`delivery\`,\`admitted_seq\`);`,
+        `CREATE INDEX \`session_input_session_pending_delivery_seq_idx\` ON \`session_input\` (\`session_id\`,\`promoted_seq\`,\`discarded_seq\`,\`delivery\`,\`admitted_seq\`);`,
       )
       yield* tx.run(
         `CREATE UNIQUE INDEX \`session_input_session_admitted_seq_idx\` ON \`session_input\` (\`session_id\`,\`admitted_seq\`);`,

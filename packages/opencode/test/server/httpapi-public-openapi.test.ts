@@ -70,10 +70,13 @@ function isBuiltInEndpointError(name: string) {
 }
 
 describe("PublicApi OpenAPI v2 errors", () => {
-  test("exposes queued prompts through the durable queue routes only", () => {
+  test("exposes queued prompts only through the current durable queue routes", () => {
     const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
 
-    expect(spec.paths["/session/{sessionID}/queue"]).toBeDefined()
+    expect(spec.paths["/api/session/{sessionID}/queue"]).toBeDefined()
+    expect(spec.paths["/api/session/{sessionID}/queue/{messageID}"]).toBeDefined()
+    expect(spec.paths["/api/session/{sessionID}/queue/{messageID}/send"]).toBeDefined()
+    expect(spec.paths["/session/{sessionID}/queue"]).toBeUndefined()
     expect(spec.paths["/session/{sessionID}/deferred/{queueID}"]).toBeUndefined()
     expect(spec.paths["/session/{sessionID}/deferred/{queueID}/send"]).toBeUndefined()
   })

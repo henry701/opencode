@@ -61,6 +61,14 @@ export function fromPromise(plugin: Plugin) {
           command: {
             transform: transform(host.command),
             reload: () => run(host.command.reload()),
+            execute: {
+              before: (callback) =>
+                register(
+                  host.command.execute.before((input, output) =>
+                    Effect.promise(() => Promise.resolve(callback(input, output))),
+                  ),
+                ),
+            },
           },
           integration: {
             transform: transform(host.integration),

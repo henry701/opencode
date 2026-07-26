@@ -205,6 +205,7 @@ export function createChildStoreManager(input: {
             project: "",
             projectMeta: initialMeta,
             icon: initialIcon,
+            prompt_queue: {},
             get provider_ready() {
               return instanceQueriesEnabled() && !providerQuery.isLoading
             },
@@ -255,7 +256,7 @@ export function createChildStoreManager(input: {
             vcs: vcsStore.value,
             limit: 5,
             message: {},
-            prompt_queue: {},
+            session_message: {},
             part: {},
             part_text_accum_delta: {},
           })

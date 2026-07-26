@@ -1,4 +1,5 @@
-import type { Part, QueueItemDetail } from "@opencode-ai/sdk/v2"
+import type { SessionsQueueGetOutput } from "@opencode-ai/client"
+import type { Part } from "@opencode-ai/sdk/v2"
 
 export type QueuedItem = {
   id: string
@@ -21,9 +22,11 @@ export function truncateQueueLine(text: string, maxLength = 72) {
   return `${line.slice(0, maxLength - 1)}...`
 }
 
-export function partsPreview(parts: Part[] | QueueItemDetail["parts"]) {
+type QueuePart = Part | SessionsQueueGetOutput["payload"]["parts"][number]
+
+export function partsPreview(parts: readonly QueuePart[]) {
   const text = parts
-    .filter((part): part is Extract<(Part | QueueItemDetail["parts"][number]), { type: "text" }> => {
+    .filter((part): part is Extract<QueuePart, { type: "text" }> => {
       return part.type === "text" && !part.synthetic
     })
     .map((part) => part.text)

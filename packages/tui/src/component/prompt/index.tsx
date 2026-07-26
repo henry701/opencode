@@ -24,6 +24,7 @@ import { useSDK } from "../../context/sdk"
 import { useRoute } from "../../context/route"
 import { useProject } from "../../context/project"
 import { useSync } from "../../context/sync"
+import { useData } from "../../context/data"
 import { useEvent } from "../../context/event"
 import { editorSelectionKey, useEditorContext, type EditorSelection } from "../../context/editor"
 import { normalizePromptContent, openEditor } from "../../editor"
@@ -35,9 +36,14 @@ import { computePromptTraits } from "../../prompt/traits"
 import { expandPastedTextPlaceholders, expandTrackedPastedText } from "../../prompt/part"
 import { usePromptStash } from "../../prompt/stash"
 import { queueEditCommitPlan, queueEditSwitchPlan, queueSendNowDispatch } from "../../queue/edit"
+import {
+  parseRegisteredCommand,
+  reviseQueuedPayload,
+  submitQueuedPayload,
+  type QueuedPayload,
+} from "../../queue/remote"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
-import { queueMutationError } from "./queue-actions"
 import { partsToPromptInfo } from "./queue"
 import { PromptQueueDock } from "./queue-dock"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
@@ -61,6 +67,7 @@ import { usePromptWorkspace } from "./workspace"
 import { usePromptMove } from "./move"
 import { readLocalAttachment } from "./local-attachment"
 import { useLocation } from "../../context/location"
+import { Identifier } from "@opencode-ai/core/id/id"
 
 registerOpencodeSpinner()
 
@@ -163,6 +170,7 @@ export function Prompt(props: PromptProps) {
   const route = useRoute()
   const project = useProject()
   const sync = useSync()
+  const data = useData()
   const tuiConfig = useTuiConfig()
   const dialog = useDialog()
   const toast = useToast()
@@ -184,6 +192,7 @@ export function Prompt(props: PromptProps) {
   const fileContextEnabled = createMemo(() => kv.get("file_context_enabled", true))
   const [dismissedEditorSelectionKey, setDismissedEditorSelectionKey] = createSignal<string>()
   const [editingQueuedMessageID, setEditingQueuedMessageID] = createSignal<string | undefined>()
+  const [editingQueuedPayload, setEditingQueuedPayload] = createSignal<QueuedPayload | undefined>()
   const [queueEscapeGuard, setQueueEscapeGuard] = createSignal(false)
   let queueComposerBusy = false
   let promptDisposed = false
@@ -192,6 +201,7 @@ export function Prompt(props: PromptProps) {
     if (!selection) return
     return editorSelectionKey(selection) === dismissedEditorSelectionKey() ? undefined : selection
   })
+  const currentCommands = createMemo(() => data.location.command.list(location()) ?? [])
   const editorPath = createMemo(() => editorContext()?.filePath)
   const editorSelectionLabel = createMemo(() => {
     const ranges = editorContext()?.ranges
@@ -427,7 +437,7 @@ export function Prompt(props: PromptProps) {
           }, 5000)
 
           if (next >= 2) {
-            void sdk.client.session.abort({
+            void sdk.next.sessions.interrupt({
               sessionID: props.sessionID,
             })
             setStore("interrupt", 0)
@@ -596,7 +606,7 @@ export function Prompt(props: PromptProps) {
 
   const queueItems = createMemo(() => {
     if (!props.sessionID) return []
-    return sync.data.prompt_queue[props.sessionID] ?? []
+    return data.session.queue.list(props.sessionID) ?? []
   })
 
   useBindings(() => ({
@@ -1138,10 +1148,7 @@ export function Prompt(props: PromptProps) {
   }
 
   function isRegisteredSlashCommand(inputText: string) {
-    if (!inputText.startsWith("/")) return false
-    const firstLine = inputText.split("\n")[0]
-    const command = firstLine.split(" ")[0].slice(1)
-    return sync.data.command.some((x) => x.name === command)
+    return parseRegisteredCommand(inputText, currentCommands()) !== undefined
   }
 
   function resetPromptAfterSend(
@@ -1186,6 +1193,7 @@ export function Prompt(props: PromptProps) {
 
   function exitQueueEditMode() {
     setEditingQueuedMessageID(undefined)
+    setEditingQueuedPayload(undefined)
     setQueueEscapeGuard(false)
     clearPromptDraft()
     setCursorVersion((value) => value + 1)
@@ -1193,7 +1201,7 @@ export function Prompt(props: PromptProps) {
 
   async function resumeQueueDrain(sessionID = props.sessionID) {
     if (!sessionID) return
-    await sdk.client.session.queue.drain.resume({ sessionID }).catch(() => {})
+    await sdk.next.sessions.queueDrainResume({ sessionID }).catch(() => {})
   }
 
   function resumeQueueDrainForCurrentEdit() {
@@ -1210,25 +1218,12 @@ export function Prompt(props: PromptProps) {
 
   function queueEditBody() {
     syncPromptInputFromTextarea()
-    const agent = local.agent.current()
-    if (!agent) return
-    const selectedModel = local.model.current()
-    if (!selectedModel) return
-    const inputText = expandedInputText()
-    const nonTextParts = store.prompt.parts.filter((part) => part.type !== "text")
-    const editorParts = editorContextParts()
+    const payload = editingQueuedPayload()
+    if (!payload) return
+    const text = expandedInputText()
     return {
-      agent: agent.name,
-      model: selectedModel,
-      variant: local.model.variant.current(),
-      parts: [
-        ...editorParts,
-        {
-          type: "text" as const,
-          text: inputText,
-        },
-        ...nonTextParts,
-      ],
+      payload: reviseQueuedPayload(payload, text),
+      text,
     }
   }
 
@@ -1236,12 +1231,10 @@ export function Prompt(props: PromptProps) {
     if (!props.sessionID || props.disabled) return false
     const body = queueEditBody()
     if (!body) return false
-    if (queueEditCommitPlan({ text: body.parts.find((part) => part.type === "text")?.text ?? "" }).type === "remove") {
-      const result = await sdk.client.session.queue
-        .remove({ sessionID: props.sessionID, queueID: messageID })
-        .catch((error: unknown) => ({ error }))
-      const error = queueMutationError({ result, fallback: "no response" })
-      if (error) {
+    if (queueEditCommitPlan({ text: body.text }).type === "remove") {
+      try {
+        await sdk.next.sessions.queueRemove({ sessionID: props.sessionID, messageID })
+      } catch (error) {
         toast.show({
           message: `Removing queued prompt failed: ${errorMessage(error)}`,
           variant: "error",
@@ -1252,15 +1245,13 @@ export function Prompt(props: PromptProps) {
       return true
     }
 
-    const result = await sdk.client.session.queue
-      .update({
+    try {
+      await sdk.next.sessions.queueUpdate({
         sessionID: props.sessionID,
-        queueID: messageID,
-        body,
+        messageID,
+        payload: body.payload,
       })
-      .catch((error: unknown) => ({ error }))
-    const error = queueMutationError({ result, fallback: "no response" })
-    if (error) {
+    } catch (error) {
       toast.show({
         message: `Saving queued prompt failed: ${errorMessage(error)}`,
         variant: "error",
@@ -1276,7 +1267,7 @@ export function Prompt(props: PromptProps) {
     if (queueComposerBusy || editingQueuedMessageID()) return false
     if (!props.sessionID || props.disabled) return false
     const sessionID = props.sessionID
-    if (!sync.data.prompt_queue[sessionID]?.some((item) => item.id === messageID)) return false
+    if (!data.session.queue.list(sessionID)?.some((item) => item.id === messageID)) return false
 
     const releaseQueueComposer = () => {
       if (!queueComposerBusy) return
@@ -1288,16 +1279,12 @@ export function Prompt(props: PromptProps) {
     try {
       const sendTask = queueSendNowDispatch({
         send: () =>
-          sdk.client.session.queue
-            .send({
+          sdk.next.sessions
+            .queueSend({
               sessionID,
-              queueID: messageID,
-              body: null,
+              messageID,
             })
-            .then((result) => {
-              const sendError = queueMutationError({ result, fallback: "no response" })
-              if (sendError) throw sendError
-            }),
+            .then(() => {}),
         onError: async (sendError: unknown) => {
           toast.show({
             message: `Sending queued prompt failed: ${errorMessage(sendError)}`,
@@ -1329,11 +1316,9 @@ export function Prompt(props: PromptProps) {
     if (queueComposerBusy) return false
     if (!props.sessionID || props.disabled) return false
     const sessionID = props.sessionID
-    const result = await sdk.client.session.queue
-      .remove({ sessionID, queueID: messageID })
-      .catch((error: unknown) => ({ error }))
-    const error = queueMutationError({ result, fallback: "no response" })
-    if (error) {
+    try {
+      await sdk.next.sessions.queueRemove({ sessionID, messageID })
+    } catch (error) {
       toast.show({
         message: `Removing queued prompt failed: ${errorMessage(error)}`,
         variant: "error",
@@ -1374,27 +1359,20 @@ export function Prompt(props: PromptProps) {
     if (queueComposerBusy) return false
     if (!props.sessionID || props.disabled) return false
     const sessionID = props.sessionID
-    await sdk.client.session.queue.drain.pause({ sessionID }).catch(() => {})
+    await sdk.next.sessions.queueDrainPause({ sessionID }).catch(() => {})
 
-    const parts = sync.data.part[messageID] ?? []
-    const promptInfo =
-      parts.length > 0
-        ? partsToPromptInfo(parts)
-        : await (async () => {
-            const detail = await sdk.client.session.queue.get({ sessionID, queueID: messageID }).catch(() => undefined)
-            if (!detail?.data || typeof detail.data !== "object" || !("parts" in detail.data)) {
-              const preview = sync.data.prompt_queue[sessionID]?.find((item) => item.id === messageID)
-              if (preview?.text) return { input: preview.text, parts: [] as PromptInfo["parts"] }
-              const listRes = await sdk.client.session.queue.list({ sessionID }).catch(() => undefined)
-              const listed = listRes?.data?.find((item) => item.id === messageID)
-              if (listed?.text) return { input: listed.text, parts: [] as PromptInfo["parts"] }
-              return { input: "", parts: [] as PromptInfo["parts"] }
-            }
-            return partsToPromptInfo(detail.data.parts)
-          })()
+    const detail = await sdk.next.sessions.queueGet({ sessionID, messageID }).catch(() => undefined)
+    const queued =
+      detail ??
+      (await sdk.next.sessions
+        .queueList({ sessionID })
+        .then((items) => items.find((item) => item.id === messageID))
+        .catch(() => undefined))
+    if (!queued) return false
+    const promptInfo = partsToPromptInfo(queued.payload.parts)
     if (!promptInfo.input.trim() && promptInfo.parts.length === 0) return false
 
-    if (!messageID.startsWith("pqu_")) await sdk.client.session.revert({ sessionID, messageID }).catch(() => {})
+    setEditingQueuedPayload(queued.payload)
     setEditingQueuedMessageID(messageID)
     input.setText(promptInfo.input)
     setStore("prompt", promptInfo)
@@ -1429,7 +1407,6 @@ export function Prompt(props: PromptProps) {
     if (auto()?.visible) return false
     if (!store.prompt.input.trim()) return false
     if (store.mode === "shell") return false
-    if (isRegisteredSlashCommand(store.prompt.input)) return false
     if (!props.sessionID) return submitInner()
 
     const agent = local.agent.current()
@@ -1464,13 +1441,15 @@ export function Prompt(props: PromptProps) {
     const currentMode = store.mode
     const editorParts = editorContextParts()
 
-    const result = await sdk.client.session.queue
-      .enqueue({
-        sessionID,
-        ...selectedModel,
+    try {
+      const payload = {
+        version: 1 as const,
         agent: agent.name,
-        model: selectedModel,
-        variant,
+        model: {
+          providerID: selectedModel.providerID,
+          modelID: selectedModel.modelID,
+          ...(variant === undefined ? {} : { variant }),
+        },
         parts: [
           ...editorParts,
           {
@@ -1479,10 +1458,15 @@ export function Prompt(props: PromptProps) {
           },
           ...nonTextParts,
         ],
+      }
+      await submitQueuedPayload({
+        client: sdk.next,
+        sessionID,
+        id: Identifier.ascending("message"),
+        payload,
+        command: parseRegisteredCommand(inputText, currentCommands()),
       })
-      .catch((error: unknown) => ({ error }))
-    const error = queueMutationError({ result, fallback: "no response" })
-    if (error) {
+    } catch (error) {
       toast.show({
         message: `Queueing prompt failed: ${errorMessage(error)}`,
         variant: "error",
@@ -1546,20 +1530,26 @@ export function Prompt(props: PromptProps) {
       if (move.pending() && !directory) return false
       finishMoveProgress = Boolean(move.progress())
 
-      const res = await sdk.client.session.create({
-        directory,
-        workspace: workspaceID,
-        agent: agent.name,
-        model: {
-          providerID: selectedModel.providerID,
-          id: selectedModel.modelID,
-          variant,
-        },
-      })
+      const created = await sdk.next.sessions
+        .create({
+          agent: agent.name,
+          model: {
+            providerID: selectedModel.providerID,
+            id: selectedModel.modelID,
+            ...(variant === undefined ? {} : { variant }),
+          },
+          location: {
+            directory: directory ?? location()?.directory ?? (await sdk.next.location.get()).directory,
+            ...(workspaceID === undefined ? {} : { workspaceID }),
+          },
+        })
+        .catch((error) => {
+          console.log("Creating a session failed:", error)
+          return undefined
+        })
 
-      if (res.error) {
+      if (!created) {
         if (finishMoveProgress) move.finishSubmit()
-        console.log("Creating a session failed:", res.error)
 
         toast.show({
           message: "Creating a session failed. Open console for more details.",
@@ -1569,7 +1559,7 @@ export function Prompt(props: PromptProps) {
         return true
       }
 
-      sessionID = res.data.id
+      sessionID = created.id
     }
 
     const inputText = expandTrackedPastedText(
@@ -1604,61 +1594,46 @@ export function Prompt(props: PromptProps) {
             },
           ]
         : []
+    const payload = {
+      version: 1 as const,
+      agent: agent.name,
+      model: {
+        providerID: selectedModel.providerID,
+        modelID: selectedModel.modelID,
+        ...(variant === undefined ? {} : { variant }),
+      },
+      parts: [
+        ...editorParts,
+        {
+          type: "text" as const,
+          text: inputText,
+        },
+        ...nonTextParts,
+      ],
+    }
 
     if (store.mode === "shell") {
       move.startSubmit()
-      void sdk.client.session.shell({
-        sessionID,
-        agent: agent.name,
-        model: {
-          providerID: selectedModel.providerID,
-          modelID: selectedModel.modelID,
-        },
-        command: inputText,
-      })
+      void sdk.next.sessions.shell({ sessionID, command: inputText })
       setStore("mode", "normal")
-    } else if (
-      inputText.startsWith("/") &&
-      sync.data.command.some((x) => x.name === inputText.split("\n")[0].split(" ")[0].slice(1))
-    ) {
+    } else if (isRegisteredSlashCommand(inputText)) {
       move.startSubmit()
-      // Parse command from first line, preserve multi-line content in arguments
-      const firstLineEnd = inputText.indexOf("\n")
-      const firstLine = firstLineEnd === -1 ? inputText : inputText.slice(0, firstLineEnd)
-      const [command, ...firstLineArgs] = firstLine.split(" ")
-      const restOfInput = firstLineEnd === -1 ? "" : inputText.slice(firstLineEnd + 1)
-      const args = firstLineArgs.join(" ") + (restOfInput ? "\n" + restOfInput : "")
-
-      void sdk.client.session.command({
+      const command = parseRegisteredCommand(inputText, currentCommands())!
+      void sdk.next.sessions.command({
         sessionID,
-        command: command.slice(1),
-        arguments: args,
-        agent: agent.name,
-        model: `${selectedModel.providerID}/${selectedModel.modelID}`,
-        variant,
-        parts: nonTextParts.filter((x) => x.type === "file"),
+        id: Identifier.ascending("message"),
+        name: command.name,
+        arguments: command.arguments,
+        payload,
+        resume: true,
       })
     } else {
       move.startSubmit()
-      sdk.client.session
-        .prompt(
-          {
-            sessionID,
-            ...selectedModel,
-            agent: agent.name,
-            model: selectedModel,
-            variant,
-            parts: [
-              ...editorParts,
-              {
-                type: "text",
-                text: inputText,
-              },
-              ...nonTextParts,
-            ],
-          },
-          { throwOnError: true },
-        )
+      sdk.next.sessions
+        .prompt({
+          sessionID,
+          payload,
+        })
         .catch((error) => {
           toast.show({
             title: "Failed to send prompt",

@@ -2,21 +2,24 @@ import { expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { Flag } from "@opencode-ai/core/flag/flag"
-import { Deferred, Effect, Latch, Option, Schema, Stream } from "effect"
+import { ConfigProvider, Deferred, Effect, Latch, Option, Schema, Stream } from "effect"
 import type { OpenCodeEvent } from "../src"
+
+// The default ConfigProvider snapshots the process environment on first use,
+// so per-host database placement must come through the create() config seam
+// rather than env mutation.
+const databaseConfig = (directory: string) =>
+  ConfigProvider.fromUnknown({ OPENCODE_DB: join(directory, "opencode.sqlite") })
 
 test("embedded client uses the real router and handlers", async () => {
   const directory = await mkdtemp(join(tmpdir(), "opencode-embedded-"))
-  const database = Flag.OPENCODE_DB
-  Flag.OPENCODE_DB = join(directory, "opencode.sqlite")
   const { AbsolutePath, Agent, Location, Model, OpenCode, Prompt, Provider, Session, Tool } = await import("../src")
   const sessionID = Session.ID.make(`ses_embedded_${crypto.randomUUID()}`)
   const model = Model.Ref.make({ id: Model.ID.make("embedded"), providerID: Provider.ID.make("test") })
 
   try {
     const program = Effect.gen(function* () {
-      const opencode = yield* OpenCode.create()
+      const opencode = yield* OpenCode.create({ configProvider: databaseConfig(directory) })
       yield* opencode.tools.register({
         embedded_tool: Tool.make({
           description: "Embedded test tool",
@@ -98,22 +101,21 @@ test("embedded client uses the real router and handlers", async () => {
       expect(missingMessage._tag).toBe("MessageNotFoundError")
     })
     await Effect.runPromise(Effect.scoped(program))
+    // The database materializes at the path this host's ConfigProvider chose.
+    expect(await Bun.file(join(directory, "opencode.sqlite")).exists()).toBe(true)
   } finally {
-    Flag.OPENCODE_DB = database
     await rm(directory, { recursive: true, force: true })
   }
-})
+}, 10_000)
 
 test("Location-owned runner events reach the ready global client", async () => {
   const directory = await mkdtemp(join(tmpdir(), "opencode-embedded-events-"))
-  const database = Flag.OPENCODE_DB
-  Flag.OPENCODE_DB = join(directory, "opencode.sqlite")
   const { AbsolutePath, Location, OpenCode, Prompt, Session } = await import("../src")
   const sessionID = Session.ID.make(`ses_embedded_${crypto.randomUUID()}`)
 
   try {
     const program = Effect.gen(function* () {
-      const opencode = yield* OpenCode.create()
+      const opencode = yield* OpenCode.create({ configProvider: databaseConfig(directory) })
       const connected = yield* Latch.make(false)
       const prompted = yield* Deferred.make<OpenCodeEvent>()
       yield* opencode.events.subscribe().pipe(
@@ -138,22 +140,19 @@ test("Location-owned runner events reach the ready global client", async () => {
     })
     await Effect.runPromise(Effect.scoped(program))
   } finally {
-    Flag.OPENCODE_DB = database
     await rm(directory, { recursive: true, force: true })
   }
 }, 10_000)
 
 test("independent embedded hosts do not share live notifications", async () => {
   const directory = await mkdtemp(join(tmpdir(), "opencode-embedded-hosts-"))
-  const database = Flag.OPENCODE_DB
-  Flag.OPENCODE_DB = join(directory, "opencode.sqlite")
   const { AbsolutePath, Agent, Location, OpenCode, Session } = await import("../src")
   const sessionID = Session.ID.make(`ses_embedded_${crypto.randomUUID()}`)
 
   try {
     const program = Effect.gen(function* () {
-      const first = yield* OpenCode.create()
-      const second = yield* OpenCode.create()
+      const first = yield* OpenCode.create({ configProvider: databaseConfig(directory) })
+      const second = yield* OpenCode.create({ configProvider: databaseConfig(directory) })
       const firstReady = yield* Latch.make(false)
       const secondReady = yield* Latch.make(false)
       const firstEvent = yield* Latch.make(false)
@@ -181,15 +180,12 @@ test("independent embedded hosts do not share live notifications", async () => {
     })
     await Effect.runPromise(Effect.scoped(program))
   } finally {
-    Flag.OPENCODE_DB = database
     await rm(directory, { recursive: true, force: true })
   }
 }, 10_000)
 
 test("embedded client is available as a Layer service", async () => {
   const directory = await mkdtemp(join(tmpdir(), "opencode-embedded-layer-"))
-  const database = Flag.OPENCODE_DB
-  Flag.OPENCODE_DB = join(directory, "opencode.sqlite")
   const { AbsolutePath, Location, OpenCode, Session } = await import("../src")
   const sessionID = Session.ID.make(`ses_embedded_${crypto.randomUUID()}`)
 
@@ -201,12 +197,11 @@ test("embedded client is available as a Layer service", async () => {
           id: sessionID,
           location: Location.Ref.make({ directory: AbsolutePath.make(directory) }),
         })
-      }).pipe(Effect.provide(OpenCode.layer), Effect.scoped),
+      }).pipe(Effect.provide(OpenCode.layerWith({ configProvider: databaseConfig(directory) })), Effect.scoped),
     )
 
     expect(created.id).toBe(sessionID)
   } finally {
-    Flag.OPENCODE_DB = database
     await rm(directory, { recursive: true, force: true })
   }
 })

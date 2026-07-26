@@ -35,7 +35,7 @@ const QueryCommand = effectCmd({
       }
       return
     }
-    const child = spawn("sqlite3", [Database.path()], {
+    const child = spawn("sqlite3", [yield* Database.path], {
       stdio: "inherit",
     })
     yield* Effect.promise(() => new Promise((resolve) => child.on("close", resolve)))
@@ -47,7 +47,7 @@ const PathCommand = effectCmd({
   describe: "print the database path",
   instance: false,
   handler: Effect.fn("Cli.db.path")(function* () {
-    console.log(Database.path())
+    console.log(yield* Database.path)
   }),
 })
 

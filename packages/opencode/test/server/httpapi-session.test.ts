@@ -568,6 +568,30 @@ describe("session HttpApi", () => {
         const test = yield* TestInstance
         const headers = { "x-opencode-directory": test.directory }
         const session = yield* createSession({ title: "v2 prompt recording" })
+        for (const method of ["POST", "DELETE"] as const) {
+          const response = yield* request(`/api/session/${session.id}/share`, { method, headers })
+          expect(response.status).toBe(503)
+        }
+        for (const body of [
+          { resume: false },
+          {
+            prompt: { text: "hello" },
+            payload: {
+              version: 1,
+              agent: "build",
+              model: { providerID: "fake", modelID: "fake" },
+              parts: [{ type: "text", text: "hello" }],
+            },
+            resume: false,
+          },
+        ]) {
+          const invalid = yield* request(`/api/session/${session.id}/prompt`, {
+            method: "POST",
+            headers: { ...headers, "content-type": "application/json" },
+            body: JSON.stringify(body),
+          })
+          expect(invalid.status).toBe(400)
+        }
 
         const recordPrompt = () =>
           request(`/api/session/${session.id}/prompt`, {
@@ -633,7 +657,94 @@ describe("session HttpApi", () => {
         )
         expect(message).toMatchObject({ id: wakeID, type: "user" })
       }),
-    { git: true, config: { formatter: false, lsp: false } },
+    { git: true, config: { formatter: false, lsp: false, share: "disabled" } },
+  )
+
+  it.instance(
+    "serves the durable current queue API without exposing the legacy queue routes",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const session = yield* createSession({ title: "current queue" })
+        const payload = (text: string) => ({
+          version: 1,
+          agent: "build",
+          model: { providerID: "fake", modelID: "fake" },
+          parts: [{ type: "text", text }],
+        })
+        const enqueue = (id: string, text: string) =>
+          requestJson<{ data: { id: string; position: number; payload: ReturnType<typeof payload> } }>(
+            `/api/session/${session.id}/queue`,
+            {
+              method: "POST",
+              headers,
+              body: JSON.stringify({ id, payload: payload(text), resume: false }),
+            },
+          )
+
+        const items = []
+        for (let index = 0; index < 4; index++) {
+          items.push(yield* enqueue(`msg_http_queue_${index}`, `queued ${index}`))
+        }
+        expect(items.map((item) => [item.data.id, item.data.position])).toEqual([
+          ["msg_http_queue_0", 0],
+          ["msg_http_queue_1", 1],
+          ["msg_http_queue_2", 2],
+          ["msg_http_queue_3", 3],
+        ])
+
+        const list = yield* requestJson<{ data: { id: string }[] }>(`/api/session/${session.id}/queue`, { headers })
+        expect(list.data.map((item) => item.id)).toEqual(items.map((item) => item.data.id))
+
+        const first = items[0]!.data
+        const detail = yield* requestJson<{ data: typeof first }>(
+          `/api/session/${session.id}/queue/${first.id}`,
+          { headers },
+        )
+        expect(detail.data.payload.parts).toEqual([{ type: "text", text: "queued 0" }])
+
+        const update = yield* request(`/api/session/${session.id}/queue/${first.id}`, {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({ payload: payload("edited") }),
+        })
+        expect(update.status).toBe(204)
+        const edited = yield* requestJson<{ data: typeof first }>(
+          `/api/session/${session.id}/queue/${first.id}`,
+          { headers },
+        )
+        expect(edited.data.payload.parts).toEqual([{ type: "text", text: "edited" }])
+
+        for (const suffix of ["drain-pause", "drain-resume"]) {
+          const response = yield* request(`/api/session/${session.id}/queue/${suffix}`, {
+            method: "POST",
+            headers,
+          })
+          expect(response.status).toBe(204)
+        }
+
+        const removed = yield* request(`/api/session/${session.id}/queue/${first.id}`, {
+          method: "DELETE",
+          headers,
+        })
+        expect(removed.status).toBe(204)
+        for (const suffix of ["", "/send"]) {
+          const stale = yield* request(`/api/session/${session.id}/queue/${first.id}${suffix}`, {
+            method: suffix ? "POST" : "GET",
+            headers,
+            ...(suffix ? { body: JSON.stringify({}) } : {}),
+          })
+          expect(stale.status).toBe(404)
+          expect(yield* responseJson(stale)).toMatchObject({
+            _tag: "QueueItemNotFoundError",
+            sessionID: session.id,
+            messageID: first.id,
+          })
+        }
+
+      }),
+    { git: true, config: { formatter: false, lsp: false, share: "disabled" } },
   )
 
   it.instance(

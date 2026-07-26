@@ -13,46 +13,47 @@ const editPartID = "prt_0001_edit"
 export const textPartID = "prt_9999_text"
 const title = "Timeline collapse state regression"
 const model = { providerID: "opencode", modelID: "claude-opus-4-6", variant: "max" }
+let eventID = 0
 
-type EventPayload = {
-  directory: string
-  payload: Record<string, unknown>
+type EventPayload = { id: string; type: string; data: Record<string, unknown>; durable?: Record<string, unknown> }
+
+function currentEvent(type: string, data: Record<string, unknown>): EventPayload {
+  const id = ++eventID
+  return {
+    id: `evt_benchmark_${id}`,
+    type,
+    data,
+    ...(type.endsWith(".delta") ? {} : { durable: { aggregateID: sessionID, seq: id, version: 1 } }),
+  }
 }
 
 const userMessage = {
-  info: {
-    id: userMessageID,
-    sessionID,
-    role: "user",
-    time: { created: 1700000000000 },
-    summary: { diffs: [] },
+  id: userMessageID,
+  type: "user" as const,
+  text: "Please edit the file.",
+  files: [],
+  agents: [],
+  time: { created: 1700000000000 },
+  payload: {
+    version: 1 as const,
     agent: "build",
     model,
+    parts: [{ id: "prt_user_text", type: "text", text: "Please edit the file." }],
   },
-  parts: [
-    {
-      id: "prt_user_text",
-      sessionID,
-      messageID: userMessageID,
-      type: "text",
-      text: "Please edit the file.",
-    },
-  ],
 }
 
 const editPart = {
   id: editPartID,
-  sessionID,
-  messageID: assistantMessageID,
   type: "tool",
-  callID: "call_edit_regression",
-  tool: "edit",
+  name: "edit",
+  time: { created: 1700000001000, completed: 1700000002000 },
   state: {
     status: "completed",
     input: { filePath: "src/regression.ts" },
-    output: "Edited src/regression.ts",
-    title: "src/regression.ts",
-    metadata: {
+    content: [{ type: "text", text: "Edited src/regression.ts" }],
+    result: "Edited src/regression.ts",
+    structured: {
+      title: "src/regression.ts",
       filediff: {
         file: "src/regression.ts",
         additions: 1,
@@ -62,35 +63,24 @@ const editPart = {
       },
       diff: "diff --git a/src/regression.ts b/src/regression.ts\n-export const value = 'before'\n+export const value = 'after'\n",
     },
-    time: { start: 1700000001000, end: 1700000002000 },
   },
 }
 
 const streamedTextPart = {
   id: textPartID,
-  sessionID,
-  messageID: assistantMessageID,
   type: "text",
   text: "Streaming added a later assistant text part.",
 }
 
 const assistantMessage = {
-  info: {
-    id: assistantMessageID,
-    sessionID,
-    role: "assistant",
-    time: { created: 1700000001000 },
-    parentID: userMessageID,
-    modelID: model.modelID,
-    providerID: model.providerID,
-    mode: "build",
-    agent: "build",
-    path: { cwd: directory, root: directory },
-    cost: 0.01,
-    tokens: { input: 100, output: 200, reasoning: 0, cache: { read: 0, write: 0 } },
-    variant: "max",
-  },
-  parts: [editPart],
+  id: assistantMessageID,
+  type: "assistant" as const,
+  time: { created: 1700000001000 },
+  agent: "build",
+  model: { providerID: model.providerID, id: model.modelID, variant: model.variant },
+  cost: 0.01,
+  tokens: { input: 100, output: 200, reasoning: 0, cache: { read: 0, write: 0 } },
+  content: [editPart],
 }
 
 export async function setupTimelineBenchmark(
@@ -105,23 +95,24 @@ export async function setupTimelineBenchmark(
 ) {
   const events: EventPayload[] = []
   let eventBatch = options.eventBatch
-  const currentUserMessage = options.turnDiffs
-    ? { ...userMessage, info: { ...userMessage.info, summary: { diffs: options.turnDiffs } } }
-    : userMessage
+  const currentAssistantMessage = options.turnDiffs
+    ? { ...assistantMessage, snapshot: { diffs: options.turnDiffs } }
+    : assistantMessage
   await mockOpenCodeServer(page, {
     directory,
     project: project(),
     provider: provider(),
     sessions: [session()],
     vcsDiff: options.vcsDiff,
-    pageMessages: () => ({
+    currentPageMessages: () => ({
       items: [
         ...Array.from({ length: options.historyTurns }, (_, index) => performanceTurn(index)).flat(),
-        currentUserMessage,
-        assistantMessage,
-      ],
+        userMessage,
+        currentAssistantMessage,
+      ].toReversed(),
+      throughSeq: 0,
     }),
-    events: () => events.splice(0, eventBatch),
+    currentEvents: () => events.splice(0, eventBatch),
     eventRetry: 16,
   })
   await page.addInitScript(
@@ -188,33 +179,25 @@ export async function setupTimelineBenchmark(
 }
 
 export function buildInitialStreamEvent(deltaCount: number): EventPayload {
-  return {
-    directory,
-    payload: {
-      type: "message.part.updated",
-      properties: {
-        part: {
-          ...streamedTextPart,
-          text: `Streaming${streamChunk(0, deltaCount + 1)}\n\n\`\`\`ts\nconst initial = true\n\`\`\``,
-        },
-      },
-    },
-  }
+  return currentEvent("session.next.text.ended", {
+    timestamp: 1700000002000,
+    sessionID,
+    assistantMessageID,
+    textID: streamedTextPart.id,
+    text: `Streaming${streamChunk(0, deltaCount + 1)}\n\n\`\`\`ts\nconst initial = true\n\`\`\``,
+  })
 }
 
 export function buildStreamDeltaEvents(deltaCount: number): EventPayload[] {
-  return Array.from({ length: deltaCount }, (_, index) => ({
-    directory,
-    payload: {
-      type: "message.part.delta",
-      properties: {
-        messageID: assistantMessageID,
-        partID: textPartID,
-        field: "text",
-        delta: streamChunk(index + 1, deltaCount + 1),
-      },
-    },
-  }))
+  return Array.from({ length: deltaCount }, (_, index) =>
+    currentEvent("session.next.text.delta", {
+      timestamp: 1700000002000 + index,
+      sessionID,
+      assistantMessageID,
+      textID: textPartID,
+      delta: streamChunk(index + 1, deltaCount + 1),
+    }),
+  )
 }
 
 function performanceTurn(index: number) {
@@ -223,23 +206,19 @@ function performanceTurn(index: number) {
   const assistantID = `msg_0000_${suffix}_b_assistant`
   const before = historicalSource(index, false)
   const after = historicalSource(index, true)
-  const parts = [
+  const content = [
     ...(index % 5 === 0
       ? [
           {
             id: `prt_0000_${suffix}_reasoning`,
-            sessionID,
-            messageID: assistantID,
             type: "reasoning",
             text: `Reviewing the existing implementation. ${"constraint analysis ".repeat(20)}`,
-            time: { start: 1690000001000 + index * 2_000, end: 1690000001200 + index * 2_000 },
+            time: { created: 1690000001000 + index * 2_000, completed: 1690000001200 + index * 2_000 },
           },
         ]
       : []),
     {
       id: `prt_0000_${suffix}_assistant`,
-      sessionID,
-      messageID: assistantID,
       type: "text",
       text: historicalMarkdown(index),
     },
@@ -247,20 +226,18 @@ function performanceTurn(index: number) {
       ? [
           {
             id: `prt_0000_${suffix}_edit`,
-            sessionID,
-            messageID: assistantID,
             type: "tool",
-            callID: `call_0000_${suffix}_edit`,
-            tool: "edit",
+            name: "edit",
+            time: { created: 1690000001200 + index * 2_000, completed: 1690000001400 + index * 2_000 },
             state: {
               status: "completed",
               input: { filePath: `src/history-${index}.ts` },
-              output: `Edited src/history-${index}.ts`,
-              title: `src/history-${index}.ts`,
-              metadata: {
+              content: [{ type: "text", text: `Edited src/history-${index}.ts` }],
+              result: `Edited src/history-${index}.ts`,
+              structured: {
+                title: `src/history-${index}.ts`,
                 filediff: { file: `src/history-${index}.ts`, additions: 48, deletions: 48, before, after },
               },
-              time: { start: 1690000001200 + index * 2_000, end: 1690000001400 + index * 2_000 },
             },
           },
         ]
@@ -269,20 +246,18 @@ function performanceTurn(index: number) {
       ? [
           {
             id: `prt_0000_${suffix}_write`,
-            sessionID,
-            messageID: assistantID,
             type: "tool",
-            callID: `call_0000_${suffix}_write`,
-            tool: "write",
+            name: "write",
+            time: { created: 1690000001400 + index * 2_000, completed: 1690000001500 + index * 2_000 },
             state: {
               status: "completed",
               input: { filePath: `src/generated-${index}.tsx`, content: after },
-              output: `Wrote src/generated-${index}.tsx`,
-              title: `src/generated-${index}.tsx`,
-              metadata: {
+              content: [{ type: "text", text: `Wrote src/generated-${index}.tsx` }],
+              result: `Wrote src/generated-${index}.tsx`,
+              structured: {
+                title: `src/generated-${index}.tsx`,
                 filediff: { file: `src/generated-${index}.tsx`, additions: 32, deletions: 0, before: "", after },
               },
-              time: { start: 1690000001400 + index * 2_000, end: 1690000001500 + index * 2_000 },
             },
           },
         ]
@@ -291,17 +266,16 @@ function performanceTurn(index: number) {
       ? [
           {
             id: `prt_0000_${suffix}_patch`,
-            sessionID,
-            messageID: assistantID,
             type: "tool",
-            callID: `call_0000_${suffix}_patch`,
-            tool: "apply_patch",
+            name: "apply_patch",
+            time: { created: 1690000001500 + index * 2_000, completed: 1690000001700 + index * 2_000 },
             state: {
               status: "completed",
               input: { patchText: realisticPatch(index) },
-              output: "Success. Updated src/components/SessionCard.tsx",
-              title: "src/components/SessionCard.tsx",
-              metadata: {
+              content: [{ type: "text", text: "Success. Updated src/components/SessionCard.tsx" }],
+              result: "Success. Updated src/components/SessionCard.tsx",
+              structured: {
+                title: "src/components/SessionCard.tsx",
                 files: [
                   {
                     filePath: "src/components/SessionCard.tsx",
@@ -315,7 +289,6 @@ function performanceTurn(index: number) {
                   },
                 ],
               },
-              time: { start: 1690000001500 + index * 2_000, end: 1690000001700 + index * 2_000 },
             },
           },
         ]
@@ -323,43 +296,29 @@ function performanceTurn(index: number) {
   ]
   return [
     {
-      info: {
-        id: userID,
-        sessionID,
-        role: "user",
-        time: { created: 1690000000000 + index * 2_000 },
-        summary: { diffs: [] },
+      id: userID,
+      type: "user" as const,
+      text: `Historical prompt ${index}`,
+      files: [],
+      agents: [],
+      time: { created: 1690000000000 + index * 2_000 },
+      payload: {
+        version: 1 as const,
         agent: "build",
         model,
+        parts: [{ id: `prt_0000_${suffix}_user`, type: "text", text: `Historical prompt ${index}` }],
       },
-      parts: [
-        {
-          id: `prt_0000_${suffix}_user`,
-          sessionID,
-          messageID: userID,
-          type: "text",
-          text: `Historical prompt ${index}`,
-        },
-      ],
     },
     {
-      info: {
-        id: assistantID,
-        sessionID,
-        role: "assistant",
-        time: { created: 1690000001000 + index * 2_000, completed: 1690000001500 + index * 2_000 },
-        parentID: userID,
-        modelID: model.modelID,
-        providerID: model.providerID,
-        mode: "build",
-        agent: "build",
-        path: { cwd: directory, root: directory },
-        cost: 0.01,
-        tokens: { input: 100, output: 200, reasoning: 0, cache: { read: 0, write: 0 } },
-        variant: "max",
-        finish: "stop",
-      },
-      parts,
+      id: assistantID,
+      type: "assistant" as const,
+      time: { created: 1690000001000 + index * 2_000, completed: 1690000001500 + index * 2_000 },
+      agent: "build",
+      model: { providerID: model.providerID, id: model.modelID, variant: model.variant },
+      cost: 0.01,
+      tokens: { input: 100, output: 200, reasoning: 0, cache: { read: 0, write: 0 } },
+      finish: "stop",
+      content,
     },
   ]
 }

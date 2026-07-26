@@ -10,6 +10,8 @@ type Input = {
   readonly sessionID: SessionSchema.ID
   readonly agent: string
   readonly model: ModelV2.Ref
+  readonly systemPrompt?: string
+  readonly toolDefinitions?: string
   readonly snapshot?: string
 }
 
@@ -70,6 +72,13 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
   let assistantFailed = false
   let providerFailed = false
   let stepSettlement: { readonly finish: string; readonly tokens: ReturnType<typeof tokens> } | undefined
+  let prepared: {
+    readonly systemPrompt?: string
+    readonly toolDefinitions?: string
+  } = {
+    systemPrompt: input.systemPrompt,
+    toolDefinitions: input.toolDefinitions,
+  }
 
   const startAssistant = Effect.fnUntraced(function* () {
     if (assistantMessageID !== undefined) return assistantMessageID
@@ -77,6 +86,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
     assistantActive = true
     yield* events.publish(SessionEvent.Step.Started, {
       ...input,
+      ...prepared,
       assistantMessageID,
       timestamp: yield* timestamp,
       snapshot: input.snapshot,
@@ -196,7 +206,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
     yield* flushFragments()
   })
 
-  const failAssistant = Effect.fnUntraced(function* (message: string) {
+  const failAssistant = Effect.fnUntraced(function* (error: SessionMessage.Error) {
     if (assistantFailed) return
     yield* flush()
     const assistantMessageID = yield* startAssistant()
@@ -206,7 +216,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
       sessionID: input.sessionID,
       timestamp: yield* timestamp,
       assistantMessageID,
-      error: { type: "unknown", message },
+      error,
     })
   })
 
@@ -403,12 +413,19 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
         return
       case "provider-error":
         providerFailed = true
-        yield* failAssistant(event.message)
+        yield* failAssistant({ type: "unknown", message: event.message })
         return
     }
   })
 
+  const setPreparedContext = (context: { readonly systemPrompt?: string; readonly toolDefinitions?: string }) =>
+    Effect.sync(() => {
+      if (assistantMessageID !== undefined) throw new Error("Provider context prepared after assistant output started")
+      prepared = context
+    })
+
   return {
+    setPreparedContext,
     publish,
     flush,
     failAssistant,

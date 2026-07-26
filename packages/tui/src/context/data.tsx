@@ -18,11 +18,13 @@ import type {
   SkillV2Info,
   V2Event,
 } from "@opencode-ai/sdk/v2"
+import type { MessagesListOutput } from "@opencode-ai/client"
 import { createStore, produce } from "solid-js/store"
 import { createSimpleContext } from "./helper"
 import { useSDK } from "./sdk"
 import { useEvent } from "./event"
 import { createSignal, onCleanup, onMount } from "solid-js"
+import { queueEventSessionID, queuedPromptPreviews, type QueuedPromptPreview } from "../queue/remote"
 
 type LocationData = {
   agent?: AgentV2Info[]
@@ -34,10 +36,46 @@ type LocationData = {
   skill?: SkillV2Info[]
 }
 
+type Mutable<T> = T extends readonly (infer Item)[]
+  ? Mutable<Item>[]
+  : T extends object
+    ? { -readonly [Key in keyof T]: Mutable<T[Key]> }
+    : T
+
+function mutable<T>(input: T): Mutable<T> {
+  return structuredClone(input) as Mutable<T>
+}
+
+function mutableSessionMessages(input: MessagesListOutput["data"]): SessionMessage[] {
+  return input.map((value) => {
+    const message = mutable(value)
+    if (message.type !== "user") return message
+    if (!message.payload) return { ...message, payload: undefined }
+    const format =
+      message.payload.format?.type === "json_schema"
+        ? {
+            type: "json_schema" as const,
+            schema: message.payload.format.schema,
+            ...(typeof message.payload.format.retryCount === "number"
+              ? { retryCount: message.payload.format.retryCount }
+              : {}),
+          }
+        : message.payload.format
+    return {
+      ...message,
+      payload: {
+        ...message.payload,
+        format,
+      },
+    }
+  })
+}
+
 type Data = {
   session: {
     info: Record<string, SessionV2Info>
     message: Record<string, SessionMessage[]>
+    queue: Record<string, QueuedPromptPreview[]>
     permission: Record<string, PermissionV2Request[]>
     question: Record<string, QuestionV2Request[]>
   }
@@ -62,6 +100,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       session: {
         info: {},
         message: {},
+        queue: {},
         permission: {},
         question: {},
       },
@@ -76,9 +115,14 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     const [defaultLocation, setDefaultLocation] = createSignal<LocationRef>({
       directory: sdk.directory ?? process.cwd(),
     })
+    const hydratingMessages = new Map<string, Set<string>>()
+    const messageRefreshVersion = new Map<string, number>()
 
     const message = {
       update(sessionID: string, fn: (messages: SessionMessage[]) => void) {
+        const before = new Map(
+          (store.session.message[sessionID] ?? []).map((message) => [message.id, JSON.stringify(message)]),
+        )
         setStore(
           "session",
           "message",
@@ -86,6 +130,14 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             fn((draft[sessionID] ??= []))
           }),
         )
+        const touched = hydratingMessages.get(sessionID)
+        if (!touched) return
+        for (const item of store.session.message[sessionID] ?? []) {
+          if (before.get(item.id) !== JSON.stringify(item)) touched.add(item.id)
+        }
+        for (const id of before.keys()) {
+          if (!(store.session.message[sessionID] ?? []).some((item) => item.id === id)) touched.add(id)
+        }
       },
       prepend(messages: SessionMessage[], item: SessionMessage) {
         if (messages.some((existing) => existing.id === item.id)) return
@@ -157,6 +209,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               text: event.data.prompt.text,
               files: event.data.prompt.files,
               agents: event.data.prompt.agents,
+              payload: event.data.payload,
               time: { created: event.data.timestamp },
             })
           })
@@ -215,6 +268,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               type: "assistant",
               agent: event.data.agent,
               model: event.data.model,
+              systemPrompt: event.data.systemPrompt,
+              toolDefinitions: event.data.toolDefinitions,
               content: [],
               snapshot: event.data.snapshot ? { start: event.data.snapshot } : undefined,
               time: { created: event.data.timestamp },
@@ -389,6 +444,20 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             })
           })
           break
+        case "session.next.revert.staged":
+          if (store.session.info[event.data.sessionID])
+            setStore("session", "info", event.data.sessionID, "revert", mutable(event.data.revert))
+          break
+        case "session.next.revert.cleared":
+          if (store.session.info[event.data.sessionID])
+            setStore("session", "info", event.data.sessionID, "revert", undefined)
+          break
+        case "session.next.revert.committed":
+          void Promise.all([
+            result.session.refresh(event.data.sessionID),
+            result.session.message.refresh(event.data.sessionID),
+          ])
+          break
         case "reference.updated":
           void result.location.reference.refresh()
           break
@@ -404,6 +473,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
 
     onMount(() => {
       const unsub = events.subscribe((event, metadata) => {
+        const queueSessionID = queueEventSessionID(event)
+        if (queueSessionID) void result.session.queue.refresh(queueSessionID).catch(() => {})
         handleEvent({
           ...event,
           data: event.properties,
@@ -419,16 +490,51 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           return store.session.info[sessionID]
         },
         async refresh(sessionID: string) {
-          const result = await sdk.client.v2.session.get({ sessionID }, { throwOnError: true })
-          setStore("session", "info", sessionID, result.data.data)
+          setStore("session", "info", sessionID, mutable(await sdk.next.sessions.get({ sessionID })))
         },
         message: {
           list(sessionID: string) {
             return store.session.message[sessionID]
           },
           async refresh(sessionID: string) {
-            const result = await sdk.client.v2.session.messages({ sessionID }, { throwOnError: true })
-            setStore("session", "message", sessionID, result.data.data)
+            const touched = new Set<string>()
+            const version = (messageRefreshVersion.get(sessionID) ?? 0) + 1
+            messageRefreshVersion.set(sessionID, version)
+            hydratingMessages.set(sessionID, touched)
+            try {
+              const fetched = mutableSessionMessages(
+                (await sdk.next.messages.list({ sessionID, order: "desc", limit: 200 })).data,
+              )
+              if (messageRefreshVersion.get(sessionID) !== version) return
+              const current = store.session.message[sessionID] ?? []
+              const remote = new Set(fetched.map((message) => message.id))
+              setStore(
+                "session",
+                "message",
+                sessionID,
+                [
+                  ...fetched.map((message) =>
+                    touched.has(message.id) ? (current.find((item) => item.id === message.id) ?? message) : message,
+                  ),
+                  ...current.filter((message) => touched.has(message.id) && !remote.has(message.id)),
+                ].toSorted((a, b) => b.time.created - a.time.created || b.id.localeCompare(a.id)),
+              )
+            } finally {
+              if (hydratingMessages.get(sessionID) === touched) hydratingMessages.delete(sessionID)
+            }
+          },
+        },
+        queue: {
+          list(sessionID: string) {
+            return store.session.queue[sessionID]
+          },
+          async refresh(sessionID: string) {
+            setStore(
+              "session",
+              "queue",
+              sessionID,
+              queuedPromptPreviews(await sdk.next.sessions.queueList({ sessionID })),
+            )
           },
         },
         permission: {

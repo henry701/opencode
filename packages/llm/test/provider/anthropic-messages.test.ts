@@ -54,6 +54,7 @@ describe("Anthropic Messages route", () => {
         max_tokens: 20,
         temperature: 0,
       })
+      expect(prepared.metadata?.systemPrompt).toBe("You are concise.")
     }),
   )
 

@@ -13,10 +13,10 @@
 //
 // Custom answers: if a question has custom=true, an extra "Type your own
 // answer" option appears. Selecting it enters editing mode with a text field.
-import type { QuestionInfo, QuestionRequest } from "@opencode-ai/sdk/v2"
-import type { QuestionReject, QuestionReply } from "./types"
+import type { QuestionInfo, QuestionReject, QuestionReply, QuestionRequest } from "./types"
 
 export type QuestionBodyState = {
+  sessionID: string
   requestID: string
   tab: number
   answers: string[][]
@@ -31,9 +31,10 @@ export type QuestionStep = {
   reply?: QuestionReply
 }
 
-export function createQuestionBodyState(requestID: string): QuestionBodyState {
+export function createQuestionBodyState(request: QuestionRequest): QuestionBodyState {
   return {
-    requestID,
+    sessionID: request.sessionID,
+    requestID: request.id,
     tab: 0,
     answers: [],
     custom: [],
@@ -43,12 +44,12 @@ export function createQuestionBodyState(requestID: string): QuestionBodyState {
   }
 }
 
-export function questionSync(state: QuestionBodyState, requestID: string): QuestionBodyState {
-  if (state.requestID === requestID) {
+export function questionSync(state: QuestionBodyState, request: QuestionRequest): QuestionBodyState {
+  if (state.requestID === request.id && state.sessionID === request.sessionID) {
     return state
   }
 
-  return createQuestionBodyState(requestID)
+  return createQuestionBodyState(request)
 }
 
 export function questionSingle(request: QuestionRequest): boolean {
@@ -181,6 +182,7 @@ function questionPick(
     return {
       state: next,
       reply: {
+        sessionID: request.sessionID,
         requestID: request.id,
         answers: [[answer]],
       },
@@ -307,6 +309,7 @@ export function questionSave(state: QuestionBodyState, request: QuestionRequest)
 
 export function questionSubmit(request: QuestionRequest, state: QuestionBodyState): QuestionReply {
   return {
+    sessionID: request.sessionID,
     requestID: request.id,
     answers: questionAnswers(state, request.questions.length),
   }
@@ -314,6 +317,7 @@ export function questionSubmit(request: QuestionRequest, state: QuestionBodyStat
 
 export function questionReject(request: QuestionRequest): QuestionReject {
   return {
+    sessionID: request.sessionID,
     requestID: request.id,
   }
 }

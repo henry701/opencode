@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test"
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import { mockOpenCodeServer } from "../../utils/mock-server"
-import { fixture, pageMessages } from "./session-timeline-stress.fixture"
+import { currentPageMessages, fixture } from "./session-timeline-stress.fixture"
 
 export async function installTimelineSettings(page: Page) {
   await page.addInitScript(() => {
@@ -31,7 +31,7 @@ export function mockStressTimeline(
     provider: fixture.provider,
     directory: fixture.directory,
     project: fixture.project,
-    pageMessages,
+    currentPageMessages,
     onMessages: input?.onMessages,
     vcsDiff: input?.vcsDiff,
   })

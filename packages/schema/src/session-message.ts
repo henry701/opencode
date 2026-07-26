@@ -5,9 +5,11 @@ import { optional } from "./schema"
 import { ProviderMetadata, ToolContent } from "./llm"
 import { Model } from "./model"
 import { FileAttachment, Prompt } from "./prompt"
+import { FileDiff } from "./file-diff"
 import { DateTimeUtcFromMillis, RelativePath, statics } from "./schema"
 import { SessionID } from "./session-id"
 import { ascending } from "./identifier"
+import { SessionInputPayload } from "./session-input-payload"
 
 export const ID = Schema.String.check(Schema.isStartsWith("msg_")).pipe(
   Schema.brand("Session.Message.ID"),
@@ -20,6 +22,15 @@ export const UnknownError = Schema.Struct({
   type: Schema.Literal("unknown"),
   message: Schema.String,
 }).annotate({ identifier: "Session.Error.Unknown" })
+
+export interface InterruptedError extends Schema.Schema.Type<typeof InterruptedError> {}
+export const InterruptedError = Schema.Struct({
+  type: Schema.Literal("interrupted"),
+  message: Schema.String,
+}).annotate({ identifier: "Session.Error.Interrupted" })
+
+export const Error = Schema.Union([UnknownError, InterruptedError]).pipe(Schema.toTaggedUnion("type"))
+export type Error = UnknownError | InterruptedError
 
 const Base = {
   id: ID,
@@ -47,6 +58,7 @@ export const User = Schema.Struct({
   text: Prompt.fields.text,
   files: Prompt.fields.files,
   agents: Prompt.fields.agents,
+  payload: SessionInputPayload.Payload.pipe(optional),
   type: Schema.Literal("user"),
 }).annotate({ identifier: "Session.Message.User" })
 
@@ -167,11 +179,14 @@ export const Assistant = Schema.Struct({
   type: Schema.Literal("assistant"),
   agent: Schema.String,
   model: Model.Ref,
+  systemPrompt: Schema.String.pipe(optional),
+  toolDefinitions: Schema.String.pipe(optional),
   content: AssistantContent.pipe(Schema.Array),
   snapshot: Schema.Struct({
     start: Schema.String.pipe(optional),
     end: Schema.String.pipe(optional),
     files: Schema.Array(RelativePath).pipe(optional),
+    diffs: Schema.Array(FileDiff.Info).pipe(optional),
   }).pipe(optional),
   finish: Schema.String.pipe(optional),
   cost: Schema.Finite.pipe(optional),
@@ -181,7 +196,7 @@ export const Assistant = Schema.Struct({
     reasoning: Schema.Finite,
     cache: Schema.Struct({ read: Schema.Finite, write: Schema.Finite }),
   }).pipe(optional),
-  error: UnknownError.pipe(optional),
+  error: Error.pipe(optional),
   time: Schema.Struct({
     created: DateTimeUtcFromMillis,
     completed: DateTimeUtcFromMillis.pipe(optional),

@@ -23,8 +23,14 @@ import { effectCmd } from "../effect-cmd"
 import { EOL } from "os"
 import { Filesystem } from "@/util/filesystem"
 import { createOpencodeClient, type OpencodeClient, type ToolPart } from "@opencode-ai/sdk/v2"
+import { OpenCode } from "@opencode-ai/client"
 import { FormatError, FormatUnknownError } from "../error"
 import { INTERACTIVE_INPUT_ERROR, resolveInteractiveStdin } from "./run/runtime.stdin"
+import {
+  createCurrentCommandFooter,
+  resolveCurrentCommandSession,
+  runCurrentCommandTurn,
+} from "./run/noninteractive.current"
 
 type ModelInput = Parameters<OpencodeClient["session"]["prompt"]>[0]["model"]
 
@@ -532,47 +538,25 @@ export const RunCommand = effectCmd({
         }
       }
 
-      async function share(sdk: OpencodeClient, sessionID: string) {
+      async function share(
+        sdk: OpencodeClient,
+        sessionID: string,
+        next?: ReturnType<typeof OpenCode.make>,
+      ) {
         const cfg = await sdk.config.get()
         if (!cfg.data) return
         if (cfg.data.share !== "auto" && !flags.autoShare && !args.share) return
-        const res = await sdk.session.share({ sessionID }).catch((error) => {
-          if (error instanceof Error && error.message.includes("disabled")) {
+        const result = await (
+          next
+            ? next.sessions.share({ sessionID }).then((session) => session.share?.url)
+            : sdk.session.share({ sessionID }).then((response) => response.data?.share?.url)
+        ).catch((error) => {
+          if (error instanceof Error && (error.message.includes("disabled") || error.message.includes("unavailable"))) {
             UI.println(UI.Style.TEXT_DANGER_BOLD + "!  " + error.message)
           }
-          return { error }
+          return undefined
         })
-        if (!res.error && "data" in res && res.data?.share?.url) {
-          UI.println(UI.Style.TEXT_INFO_BOLD + "~  " + res.data.share.url)
-        }
-      }
-
-      async function createFreshSession(
-        sdk: OpencodeClient,
-        input: { agent: string | undefined; model: ModelInput | undefined; variant: string | undefined },
-      ): Promise<SessionInfo> {
-        const result = await sdk.session.create({
-          title: args.title !== undefined && args.title !== "" ? args.title : undefined,
-          agent: input.agent,
-          model: input.model
-            ? {
-                providerID: input.model.providerID,
-                id: input.model.modelID,
-                variant: input.variant,
-              }
-            : undefined,
-          permission: [...rules],
-        })
-        const id = result.data?.id
-        if (!id) {
-          throw new Error("Failed to create session")
-        }
-
-        void share(sdk, id).catch(() => {})
-        return {
-          id,
-          title: result.data?.title,
-        }
+        if (result) UI.println(UI.Style.TEXT_INFO_BOLD + "~  " + result)
       }
 
       async function current(sdk: OpencodeClient): Promise<string> {
@@ -668,7 +652,69 @@ export const RunCommand = effectCmd({
       }
 
       async function execute(sdk: OpencodeClient) {
-        const sess = await session(sdk)
+        const next = OpenCode.make({
+          baseUrl: args.attach ?? "http://opencode.internal",
+          fetch: args.attach ? undefined : fetchFn,
+          headers: attachHeaders,
+        })
+        const nativeCommand = !interactive && !!args.command
+        const nativeDirectory = args.attach
+          ? (directory ?? (await next.location.get()).directory)
+          : (directory ?? root)
+        const requestedModel = pick(args.model)
+        const requestedAgent = nativeCommand && args.agent
+          ? await next.agents
+              .list({ location: { directory: nativeDirectory } })
+              .then((result) => {
+                const found = result.data.find((item) => item.id === args.agent)
+                if (!found) {
+                  UI.println(
+                    UI.Style.TEXT_WARNING_BOLD + "!",
+                    UI.Style.TEXT_NORMAL,
+                    `agent "${args.agent}" not found. Falling back to default agent`,
+                  )
+                  return undefined
+                }
+                if (found.mode !== "subagent") return found.id
+                UI.println(
+                  UI.Style.TEXT_WARNING_BOLD + "!",
+                  UI.Style.TEXT_NORMAL,
+                  `agent "${args.agent}" is a subagent, not a primary agent. Falling back to default agent`,
+                )
+                return undefined
+              })
+          : undefined
+        const currentSession = nativeCommand
+          ? await resolveCurrentCommandSession({
+              client: next,
+              directory: nativeDirectory,
+              sessionID: args.session,
+              continue: args.continue,
+              fork: args.fork,
+              title: title(),
+              agent: requestedAgent,
+              model: requestedModel
+                ? {
+                    providerID: requestedModel.providerID,
+                    id: requestedModel.modelID,
+                    ...(args.variant === undefined ? {} : { variant: args.variant }),
+                  }
+                : undefined,
+            }).catch((error) => {
+              if (args.session) {
+                UI.error("Session not found")
+                process.exit(1)
+              }
+              throw error
+            })
+          : undefined
+        const sess = currentSession
+          ? {
+              id: currentSession.id,
+              title: currentSession.title,
+              directory: currentSession.location.directory,
+            }
+          : await session(sdk)
         if (!sess?.id) {
           UI.error("Session not found")
           process.exit(1)
@@ -821,11 +867,50 @@ export const RunCommand = effectCmd({
         const client = args.attach ? attachSDK(cwd) : sdk
 
         // Validate agent if specified
-        const agent = await pickAgent(client)
+        const agent = nativeCommand ? requestedAgent : await pickAgent(client)
 
-        await share(client, sessionID)
+        await share(client, sessionID, nativeCommand ? next : undefined)
 
         if (!interactive) {
+          if (args.command) {
+            const info = currentSession ?? (await next.sessions.get({ sessionID }))
+            const commandAgent = agent ?? info.agent
+            const commandModel = requestedModel ??
+              (info.model
+                ? {
+                    providerID: info.model.providerID,
+                    modelID: info.model.id,
+                  }
+                : undefined)
+            if (!commandAgent || !commandModel) {
+              UI.error("Command execution requires an agent and model")
+              process.exitCode = 1
+              return
+            }
+
+            const current = createCurrentCommandFooter({
+              client: next,
+              sessionID,
+              auto,
+              json: args.format === "json",
+            })
+            await runCurrentCommandTurn({
+              client: next,
+              footer: current.footer,
+              sessionID,
+              agent: commandAgent,
+              model: commandModel,
+              variant: args.variant ?? info.model?.variant,
+              command: args.command,
+              arguments: message,
+              parts: files,
+              permissions: rules,
+              thinking,
+            })
+            if (current.failed()) process.exitCode = 1
+            return
+          }
+
           const events = await client.event.subscribe()
           const completed = loop(client, events).catch((e) => {
             console.error(e)
@@ -835,24 +920,6 @@ export const RunCommand = effectCmd({
             if (args.attach) return
             const error = await completed
             if (error) process.exitCode = 1
-          }
-
-          if (args.command) {
-            const result = await client.session.command({
-              sessionID,
-              agent,
-              model: args.model,
-              command: args.command,
-              arguments: message,
-              variant: args.variant,
-            })
-            if (result.error) {
-              if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
-              process.exitCode = 1
-              return
-            }
-            await finish()
-            return
           }
 
           const model = pick(args.model)
@@ -877,6 +944,7 @@ export const RunCommand = effectCmd({
         try {
           await runInteractiveMode({
             sdk: client,
+            next,
             directory: cwd,
             sessionID,
             sessionTitle: sess.title,
@@ -888,7 +956,6 @@ export const RunCommand = effectCmd({
             variant: args.variant,
             files,
             initialInput,
-            createSession: createFreshSession,
             thinking,
             backgroundSubagents: flags.experimentalBackgroundSubagents,
             demo: args.demo,
@@ -918,7 +985,6 @@ export const RunCommand = effectCmd({
             resolveAgent: localAgent,
             session,
             share,
-            createSession: createFreshSession,
             agent: args.agent,
             model,
             variant: args.variant,

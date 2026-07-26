@@ -48,8 +48,8 @@ import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
 import { ModelsProvider } from "@/context/models"
 import { useNotification } from "@/context/notification"
-import { usePlatform } from "@/context/platform"
 import { PromptProvider, usePrompt } from "@/context/prompt"
+import { usePlatform } from "@/context/platform"
 import { SDKProvider, useSDK } from "@/context/sdk"
 import { useServerSDK } from "@/context/server-sdk"
 import { ServerConnection, serverName, useServer } from "@/context/server"
@@ -58,13 +58,11 @@ import { useSync } from "@/context/sync"
 import { useTabs } from "@/context/tabs"
 import { TerminalProvider, useTerminal } from "@/context/terminal"
 import { PromptInput } from "@/components/prompt-input"
+import { PromptInputV2Composer, usePromptInputV2Controller } from "@/components/prompt-input-v2"
 import { useSettingsCommand } from "@/components/settings-dialog"
-import { buildRequestParts } from "@/components/prompt-input/build-request-parts"
 import { setCursorPosition } from "@/components/prompt-input/editor-dom"
 import { promptLength } from "@/components/prompt-input/history"
-import { type FollowupDraft } from "@/components/prompt-input/submit"
-import { partsFromQueueDetail } from "@/utils/queue-parts"
-import { applyQueueSaveSuccess, removeQueuedFollowup } from "@/pages/session.queue-save"
+import { type FollowupDraft, sendFollowupDraft } from "@/components/prompt-input/submit"
 import {
   createPromptInputController,
   createSessionComposerController,
@@ -105,10 +103,9 @@ import { useUsageExceededDialogs } from "./session/usage-exceeded-dialogs"
 import { createSessionOwnership } from "./session/session-ownership"
 import { createSessionLineage } from "./session/session-lineage"
 
-const emptyUserMessages: UserMessage[] = []
-type QueuePreview = { id: string; text: string }
-type FollowupEdit = Pick<FollowupDraft, "prompt" | "context"> & { id: string }
-const emptyQueue: QueuePreview[] = []
+type FollowupItem = FollowupDraft & { id: string }
+type FollowupEdit = Pick<FollowupItem, "id" | "prompt" | "context">
+const emptyFollowups: FollowupItem[] = []
 
 type ChangeMode = "git" | "branch" | "turn"
 type VcsMode = "git" | "branch"
@@ -535,7 +532,6 @@ export default function Page() {
 
   const info = createMemo(() => (params.id ? sync().session.get(params.id) : undefined))
   const isChildSession = createMemo(() => !!info()?.parentID)
-  const diffs = createMemo(() => (params.id ? list(sync().data.session_diff[params.id]) : []))
   const canReview = createMemo(() => !!sync().project)
   const reviewTab = createMemo(() => isDesktop())
   const tabState = createSessionTabs({
@@ -607,52 +603,18 @@ export default function Page() {
   })
 
   const [followup, setFollowup] = persisted(
-    Persist.serverWorkspace(serverSDK().scope, sdk().directory, "followup", ["followup.v2"]),
+    Persist.serverWorkspace(serverSDK().scope, sdk().directory, "followup", ["followup.v1"]),
     createStore<{
+      items: Record<string, FollowupItem[] | undefined>
       failed: Record<string, string | undefined>
       paused: Record<string, boolean | undefined>
       edit: Record<string, FollowupEdit | undefined>
     }>({
+      items: {},
       failed: {},
       paused: {},
       edit: {},
     }),
-  )
-
-  const [editingQueueMessageID, setEditingQueueMessageID] = createSignal<string | undefined>()
-  const [composerLayoutEpoch, setComposerLayoutEpoch] = createSignal(0)
-
-  const stopEditingQueueMessage = () => setEditingQueueMessageID(undefined)
-
-  const pauseQueueDrain = (sessionID: string) => {
-    void sdk().client.session.queue.drain.pause({ sessionID }).catch(() => {})
-  }
-
-  const resumeQueueDrain = (sessionID: string) => {
-    void sdk().client.session.queue.drain.resume({ sessionID }).catch(() => {})
-  }
-
-  const cancelQueueEdit = () => {
-    const sessionID = params.id
-    if (!sessionID) return
-    stopEditingQueueMessage()
-    clearFollowupEdit()
-    prompt.reset()
-    resumeQueueDrain(sessionID)
-  }
-
-  createEffect(
-    on(
-      () => params.id,
-      (id, prev) => {
-        if (!prev || prev === id || !editingQueueMessageID()) return
-        stopEditingQueueMessage()
-        clearFollowupEdit()
-        prompt.reset()
-        resumeQueueDrain(prev)
-      },
-      { defer: true },
-    ),
   )
 
   createComputed((prev) => {
@@ -705,7 +667,8 @@ export default function Page() {
   const mobileChanges = createMemo(() => !isDesktop() && store.mobileTab === "changes")
   const wantsReview = createMemo(() =>
     isDesktop()
-      ? desktopFileTreeOpen() || (desktopReviewOpen() && activeTab() === "review")
+      ? desktopFileTreeOpen() ||
+        (desktopReviewOpen() && (activeTab() === "review" || (newSessionDesign() && !!activeFileTab())))
       : store.mobileTab === "changes",
   )
   const vcsMode = createMemo<VcsMode | undefined>(() => {
@@ -726,8 +689,8 @@ export default function Page() {
       queryFn: mode
         ? () =>
             sdk()
-              .client.vcs.diff({ mode })
-              .then((result) => list(result.data))
+              .api.vcs.diff({ location: { directory: sdk().directory }, mode: mode === "git" ? "working" : mode })
+              .then((result) => result.data)
               .catch((error) => {
                 console.debug("[session-review] failed to load vcs diff", { mode, error })
                 return []
@@ -774,8 +737,12 @@ export default function Page() {
           retry: 2,
           queryFn: () =>
             sdk()
-              .client.vcs.diff({ mode, directory: scope, context })
-              .then((result) => result.data ?? []),
+              .api.vcs.diff({
+                location: { directory: scope },
+                mode: mode === "git" ? "working" : mode,
+                context,
+              })
+              .then((result) => result.data),
         })
         .then((diffs) => diffs.find((diff) => diff.file === file))
 
@@ -802,7 +769,7 @@ export default function Page() {
     return "main"
   })
 
-  const setActiveMessage = (message: UserMessage | undefined) => {
+  const setActiveMessage = (message: { id: string } | undefined) => {
     messageMark = scrollMark
     setStore("messageId", message?.id)
   }
@@ -907,8 +874,6 @@ export default function Page() {
   let scrollToEnd = () => {}
   let scrollMark = 0
   let messageMark = 0
-  const [timelineScrollTop, setTimelineScrollTop] = createSignal(0)
-  const [pendingTabBottomAnchor, setPendingTabBottomAnchor] = createSignal(false)
 
   const scrollGestureWindowMs = 250
 
@@ -984,10 +949,11 @@ export default function Page() {
   )
 
   const stopVcs = sdk().event.listen((evt) => {
-    if (evt.details.type !== "file.watcher.updated") return
+    const details = evt.details as { type: string; properties?: unknown }
+    if (details.type !== "file.watcher.updated" && details.type !== "filesystem.changed") return
     const props =
-      typeof evt.details.properties === "object" && evt.details.properties
-        ? (evt.details.properties as Record<string, unknown>)
+      typeof details.properties === "object" && details.properties
+        ? (details.properties as Record<string, unknown>)
         : undefined
     const file = typeof props?.file === "string" ? props.file : undefined
     if (!file || file.startsWith(".git/")) return
@@ -1502,44 +1468,6 @@ export default function Page() {
     requestAnimationFrame(() => attempt(0))
   })
 
-  createEffect(() => {
-    const id = params.id
-    if (!id) return
-
-    if (!wantsReview()) return
-    if (sync().data.session_diff[id] !== undefined) return
-    if (sync().status === "loading") return
-
-    void sync().session.diff(id)
-  })
-
-  createEffect(
-    on(
-      () => [sessionKey(), wantsReview()] as const,
-      ([key, wants]) => {
-        if (diffFrame !== undefined) cancelAnimationFrame(diffFrame)
-        if (diffTimer !== undefined) window.clearTimeout(diffTimer)
-        diffFrame = undefined
-        diffTimer = undefined
-        if (!wants) return
-
-        const id = params.id
-        if (!id) return
-        if (!untrack(() => sync().data.session_diff[id] !== undefined)) return
-
-        diffFrame = requestAnimationFrame(() => {
-          diffFrame = undefined
-          diffTimer = window.setTimeout(() => {
-            diffTimer = undefined
-            if (sessionKey() !== key) return
-            void sync().session.diff(id, { force: true })
-          }, 0)
-        })
-      },
-      { defer: true },
-    ),
-  )
-
   let treeDir: string | undefined
   createEffect(() => {
     const dir = sdk().directory
@@ -1577,7 +1505,6 @@ export default function Page() {
       (id, previous) => {
         if (!id || !previous || id === previous) return
         if (location.hash || store.messageId || ui.pendingMessage) return
-        setPendingTabBottomAnchor(true)
         autoScroll.resume()
       },
     ),
@@ -1589,18 +1516,9 @@ export default function Page() {
 
   const jumpThreshold = (el: HTMLDivElement) => Math.max(400, el.clientHeight)
 
-  const nearTimelineBottom = (el: HTMLDivElement, threshold = 80) => {
-    const max = el.scrollHeight - el.clientHeight
-    if (max <= 1) return true
-    return max - el.scrollTop <= threshold
-  }
-
   const updateScrollState = (el: HTMLDivElement) => {
-    setTimelineScrollTop(el.scrollTop)
     const max = el.scrollHeight - el.clientHeight
     const distance = max - el.scrollTop
-    if (distance <= 80) setPendingTabBottomAnchor(false)
-    if (autoScroll.userScrolled()) setPendingTabBottomAnchor(false)
     const overflow = max > 1
     const bottom = !overflow || distance <= 2
     const jump = overflow && distance > jumpThreshold(el)
@@ -1610,7 +1528,6 @@ export default function Page() {
   }
 
   const scheduleScrollState = (el: HTMLDivElement) => {
-    setTimelineScrollTop(el.scrollTop)
     scrollStateTarget = el
     if (scrollStateFrame !== undefined) return
 
@@ -1627,7 +1544,6 @@ export default function Page() {
 
   const resumeScroll = () => {
     setStore("messageId", undefined)
-    setPendingTabBottomAnchor(true)
     autoScroll.resume()
     scrollToEnd()
     clearMessageHash()
@@ -1787,20 +1703,8 @@ export default function Page() {
 
   const queuedFollowups = createMemo(() => {
     const id = params.id
-    if (!id) return emptyQueue
-    return sync().data.prompt_queue[id] ?? emptyQueue
-  })
-
-  createEffect(() => {
-    const sessionID = params.id
-    if (!sessionID || isChildSession()) return
-    void sdk()
-      .client.session.queue
-      .list({ sessionID })
-      .then((result) => {
-        if (result.data) sync().set("prompt_queue", sessionID, result.data)
-      })
-      .catch(() => {})
+    if (!id) return emptyFollowups
+    return followup.items[id] ?? emptyFollowups
   })
 
   const editingFollowup = createMemo(() => {
@@ -1812,21 +1716,26 @@ export default function Page() {
   const followupMutation = useMutation(() => ({
     mutationFn: async (input: { sessionID: string; id: string; manual?: boolean }) => {
       const owner = sessionOwnership.capture()
-      const item = queuedFollowups().find((entry) => entry.id === input.id)
+      const item = (followup.items[input.sessionID] ?? []).find((entry) => entry.id === input.id)
       if (!item) return
 
       if (input.manual) setFollowup("paused", input.sessionID, undefined)
       setFollowup("failed", input.sessionID, undefined)
 
-      await sdk().client.session.queue.send({ sessionID: input.sessionID, queueID: input.id, body: null }).catch((err) => {
+      const ok = await sendFollowupDraft({
+        api: sdk().api.session,
+        sync: sync(),
+        serverSync: serverSync(),
+        draft: item,
+        optimisticBusy: item.sessionDirectory === sdk().directory,
+      }).catch((err) => {
         setFollowup("failed", input.sessionID, input.id)
         fail(err)
-        throw err
+        return false
       })
+      if (!ok) return
 
-      resumeQueueDrain(input.sessionID)
-      sync().set("prompt_queue", input.sessionID, (items = emptyQueue) => removeQueuedFollowup(items, input.id))
-
+      setFollowup("items", input.sessionID, (items) => (items ?? []).filter((entry) => entry.id !== input.id))
       if (input.manual) owner.run(resumeScroll)
     },
   }))
@@ -1847,133 +1756,65 @@ export default function Page() {
     return settings.general.followup() === "queue" && busy(id) && !composer.blocked() && !isChildSession()
   })
 
-  const followupDock = createMemo(() => queuedFollowups())
+  const followupText = (item: FollowupDraft) => {
+    const text = item.prompt
+      .map((part) => {
+        if (part.type === "image") return `[image:${part.filename}]`
+        if (part.type === "file") return `[file:${part.path}]`
+        if (part.type === "agent") return `@${part.name}`
+        return part.content
+      })
+      .join("")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => !!line)
+
+    if (text) return text
+    return `[${language.t("common.attachment")}]`
+  }
 
   const queueFollowup = (draft: FollowupDraft) => {
-    const text = draft.prompt.map((part) => ("content" in part ? part.content : "")).join("")
-    const images = draft.prompt.filter((part) => part.type === "image")
-    const { requestParts } = buildRequestParts({
-      prompt: draft.prompt,
-      context: draft.context,
-      images,
-      text,
-      sessionID: draft.sessionID,
-      messageID: Identifier.ascending("message"),
-      sessionDirectory: draft.sessionDirectory,
-    })
-
-    const save = draft.queueID
-      ? sdk().client.session.queue.update({
-          sessionID: draft.sessionID,
-          queueID: draft.queueID,
-          body: {
-            agent: draft.agent,
-            model: draft.model,
-            variant: draft.variant,
-            parts: requestParts,
-          },
-        })
-      : sdk().client.session.queue.enqueue({
-          sessionID: draft.sessionID,
-          agent: draft.agent,
-          model: draft.model,
-          variant: draft.variant,
-          parts: requestParts,
-        })
-
-    void save
-      .then(() => {
-        applyQueueSaveSuccess({
-          sessionID: draft.sessionID,
-          queueID: draft.queueID,
-          clearFailed: () => setFollowup("failed", draft.sessionID, undefined),
-          clearPaused: () => setFollowup("paused", draft.sessionID, undefined),
-          clearEdit: clearFollowupEdit,
-          stopEditing: stopEditingQueueMessage,
-          resumeDrain: resumeQueueDrain,
-        })
-      })
-      .catch((err) => {
-        if (draft.queueID && editingQueueMessageID() === draft.queueID) {
-          stopEditingQueueMessage()
-          clearFollowupEdit()
-          prompt.reset()
-          resumeQueueDrain(draft.sessionID)
-        }
-        fail(err)
-      })
+    setFollowup("items", draft.sessionID, (items) => [
+      ...(items ?? []),
+      { id: Identifier.ascending("message"), ...draft },
+    ])
+    setFollowup("failed", draft.sessionID, undefined)
+    setFollowup("paused", draft.sessionID, undefined)
   }
+
+  const followupDock = createMemo(() => queuedFollowups().map((item) => ({ id: item.id, text: followupText(item) })))
 
   const sendFollowup = (sessionID: string, id: string, opts?: { manual?: boolean }) => {
     if (sync().session.get(sessionID)?.parentID) return Promise.resolve()
-    if (!queuedFollowups().find((entry) => entry.id === id)) return Promise.resolve()
+    const item = (followup.items[sessionID] ?? []).find((entry) => entry.id === id)
+    if (!item) return Promise.resolve()
     if (followupBusy(sessionID)) return Promise.resolve()
 
     return followupMutation.mutateAsync({ sessionID, id, manual: opts?.manual })
-  }
-
-  const removeFollowup = (id: string) => {
-    const sessionID = params.id
-    if (!sessionID) return
-    if (followupBusy(sessionID)) return
-    if (!queuedFollowups().find((entry) => entry.id === id)) return
-
-    void sdk()
-      .client.session.queue
-      .remove({ sessionID, queueID: id })
-      .then(() => {
-        sync().set("prompt_queue", sessionID, (items = emptyQueue) => removeQueuedFollowup(items, id))
-        setFollowup("failed", sessionID, (value) => (value === id ? undefined : value))
-        if (editingQueueMessageID() !== id) return
-        stopEditingQueueMessage()
-        clearFollowupEdit()
-        prompt.reset()
-        resumeQueueDrain(sessionID)
-      })
-      .catch(fail)
   }
 
   const editFollowup = (id: string) => {
     const sessionID = params.id
     if (!sessionID) return
     if (followupBusy(sessionID)) return
-    if (!queuedFollowups().find((entry) => entry.id === id)) return
 
-    const restoreDrain = () => {
-      if (editingQueueMessageID() !== id) return
-      stopEditingQueueMessage()
-      clearFollowupEdit()
-      resumeQueueDrain(sessionID)
-    }
+    const item = queuedFollowups().find((entry) => entry.id === id)
+    if (!item) return
 
-    pauseQueueDrain(sessionID)
-    setEditingQueueMessageID(id)
+    setFollowup("items", sessionID, (items) => (items ?? []).filter((entry) => entry.id !== id))
     setFollowup("failed", sessionID, (value) => (value === id ? undefined : value))
+    setFollowup("edit", sessionID, {
+      id: item.id,
+      prompt: item.prompt,
+      context: item.context,
+    })
+  }
 
-    void sdk()
-      .client.session.queue
-      .get({ sessionID, queueID: id })
-      .then((result) => {
-        if (editingQueueMessageID() !== id) return
-        if (!result.data || typeof result.data !== "object" || !("parts" in result.data)) {
-          restoreDrain()
-          return
-        }
-        const detail = result.data as { id: string; parts: Parameters<typeof partsFromQueueDetail>[0] }
-        const parts = partsFromQueueDetail(detail.parts, sessionID)
-        setFollowup("edit", sessionID, {
-          id: detail.id,
-          prompt: extractPromptFromParts(parts, {
-            directory: sdk().directory,
-            attachmentName: language.t("common.attachment"),
-          }),
-          context: [],
-        })
-      })
-      .catch((err) => {
-        restoreDrain()
-        fail(err)
-      })
+  const removeFollowup = (id: string) => {
+    const sessionID = params.id
+    if (!sessionID || followupBusy(sessionID)) return
+    setFollowup("items", sessionID, (items) => (items ?? []).filter((entry) => entry.id !== id))
+    setFollowup("failed", sessionID, (value) => (value === id ? undefined : value))
   }
 
   const clearFollowupEdit = () => {
@@ -1985,13 +1826,13 @@ export default function Page() {
   const halt = (sessionID: string) =>
     busy(sessionID)
       ? sdk()
-          .client.session.abort({ sessionID })
+          .api.session.interrupt({ sessionID })
           .catch(() => {})
       : Promise.resolve()
 
   const revertMutation = useMutation(() => ({
     mutationFn: async (input: { sessionID: string; messageID: string }) => {
-      const client = sdk().client
+      const session = sdk().api.session
       const target = sync()
       const last = target.session.get(input.sessionID)?.revert
       const value = draft(input.messageID)
@@ -2001,10 +1842,8 @@ export default function Page() {
           roll(input.sessionID, { messageID: input.messageID }, target)
           prompt.set(value)
         },
-        request: () => halt(input.sessionID).then(() => client.session.revert(input)),
-        complete: (result) => {
-          if (result.data) merge(result.data, target)
-        },
+        request: () => halt(input.sessionID).then(() => session.revert.stage(input)),
+        complete: () => undefined,
         rollback: () => roll(input.sessionID, last, target),
         fail,
       })
@@ -2016,7 +1855,7 @@ export default function Page() {
       const sessionID = params.id
       if (!sessionID) return
 
-      const client = sdk().client
+      const session = sdk().api.session
       const target = sync()
       const next = userMessages().find((item) => item.id > id)
       const last = target.session.get(sessionID)?.revert
@@ -2033,11 +1872,9 @@ export default function Page() {
         },
         request: () =>
           !next
-            ? halt(sessionID).then(() => client.session.unrevert({ sessionID }))
-            : halt(sessionID).then(() => client.session.revert({ sessionID, messageID: next.id })),
-        complete: (result) => {
-          if (result.data) merge(result.data, target)
-        },
+            ? halt(sessionID).then(() => session.revert.clear({ sessionID }))
+            : halt(sessionID).then(() => session.revert.stage({ sessionID, messageID: next.id }).then(() => undefined)),
+        complete: () => undefined,
         rollback: () => roll(sessionID, last, target),
         fail,
       })
@@ -2090,6 +1927,22 @@ export default function Page() {
 
   const actions = { revert, openAttachment }
 
+  createEffect(() => {
+    const sessionID = params.id
+    if (!sessionID) return
+
+    const item = queuedFollowups()[0]
+    if (!item) return
+    if (followupBusy(sessionID)) return
+    if (followup.failed[sessionID] === item.id) return
+    if (followup.paused[sessionID]) return
+    if (isChildSession()) return
+    if (composer.blocked()) return
+    if (busy(sessionID)) return
+
+    void sendFollowup(sessionID, item.id)
+  })
+
   createResizeObserver(
     () => promptDock,
     ({ height }) => {
@@ -2098,59 +1951,18 @@ export default function Page() {
       if (next === dockHeight) return
 
       const el = scroller
-      const savedScrollTop = Math.max(timelineScrollTop(), el?.scrollTop ?? 0)
       const delta = next - dockHeight
-      const distanceFromBottom = el ? el.scrollHeight - el.clientHeight - el.scrollTop : 0
-      const stick = el ? distanceFromBottom < 10 + Math.max(0, delta) : false
+      const stick = el
+        ? !autoScroll.userScrolled() || el.scrollHeight - el.clientHeight - el.scrollTop < 10 + Math.max(0, delta)
+        : false
 
       dockHeight = next
-      setComposerLayoutEpoch((value) => value + 1)
 
-      if (stick) {
-        scrollToEnd()
-      } else if (el && savedScrollTop !== undefined) {
-        const scrollTop = savedScrollTop
-        const restore = (attempt = 0) => {
-          const root = scroller
-          if (!root) return
-          if (Math.abs(root.scrollTop - scrollTop) > 1) root.scrollTop = scrollTop
-          scheduleScrollState(root)
-          if (attempt < 5 && Math.abs(root.scrollTop - scrollTop) > 1) {
-            requestAnimationFrame(() => restore(attempt + 1))
-          }
-        }
-        requestAnimationFrame(() => restore())
-      }
+      if (stick) scrollToEnd()
 
       if (el) scheduleScrollState(el)
       fill()
     },
-  )
-
-  createEffect(
-    on(
-      () =>
-        [
-          params.id,
-          local.model.current()?.providerID,
-          local.model.current()?.id,
-          local.model.variant.current(),
-          autoScroll.userScrolled(),
-        ] as const,
-      ([id, , , , scrolled], prev) => {
-        if (!id || !scrolled) return
-        if (!prev) return
-        const [, prevProvider, prevModel, prevVariant] = prev
-        const provider = local.model.current()?.providerID
-        const model = local.model.current()?.id
-        const variant = local.model.variant.current()
-        if (provider === prevProvider && model === prevModel && variant === prevVariant) return
-        const el = scroller
-        if (el) setTimelineScrollTop(el.scrollTop)
-        setComposerLayoutEpoch((value) => value + 1)
-      },
-      { defer: true },
-    ),
   )
 
   const { clearMessageHash, scrollToMessage } = useSessionHashScroll({
@@ -2193,8 +2005,6 @@ export default function Page() {
   })
 
   onCleanup(() => {
-    const sessionID = params.id
-    if (sessionID && editingQueueMessageID()) resumeQueueDrain(sessionID)
     if (reviewFrame !== undefined) cancelAnimationFrame(reviewFrame)
     if (todoFrame !== undefined) cancelAnimationFrame(todoFrame)
     if (todoTimer !== undefined) window.clearTimeout(todoTimer)
@@ -2205,90 +2015,6 @@ export default function Page() {
   })
 
   useUsageExceededDialogs()
-
-  const composerRegion = () => {
-    const controller = createSessionComposerRegionController({
-      state: composer,
-      sessionKey,
-      sessionID: () => params.id,
-      prompt,
-      ready: () => !store.deferRender && messagesReady(),
-      centered,
-      todo: {
-        collapsed: () => view().todoCollapsed.get(),
-        onToggle: () => view().todoCollapsed.set(!view().todoCollapsed.get()),
-      },
-      followup: () =>
-        params.id && !isChildSession()
-          ? {
-              items: followupDock(),
-              sending: sendingFollowup(),
-              editingMessageID: editingQueueMessageID(),
-              onSend: (id) => {
-                void sendFollowup(params.id!, id, { manual: true })
-              },
-              onEdit: editFollowup,
-              onRemove: removeFollowup,
-            }
-          : undefined,
-      revert: () =>
-        rolled().length > 0
-          ? {
-              items: rolled(),
-              restoring: restoring(),
-              disabled: reverting(),
-              onRestore: restore,
-            }
-          : undefined,
-      onResponseSubmit: resumeScroll,
-      openParent: () => {
-        const id = info()?.parentID
-        if (!id) return
-        navigate(
-          params.serverKey
-            ? sessionHref(requireServerKey(params.serverKey), id)
-            : legacySessionHref(sdk().directory, id),
-        )
-      },
-      setPromptRef: (el) => {
-        inputRef = el
-      },
-      setDockRef: (el) => {
-        promptDock = el
-      },
-    })
-    return (
-      <SessionComposerRegion
-        controller={controller}
-        promptInput={
-          <PromptInput
-            controls={inputController()}
-            ref={(el) => {
-              inputRef = el
-            }}
-            newSessionWorktree={newSessionWorktree()}
-            onNewSessionWorktreeReset={() => setStore("newSessionWorktree", "main")}
-            edit={editingFollowup()}
-            editingQueueID={editingQueueMessageID()}
-            onEditingQueueMessageID={setEditingQueueMessageID}
-            onEditLoaded={clearFollowupEdit}
-            onCancelQueueEdit={cancelQueueEdit}
-            onSubmit={() => {
-              comments.clear()
-              resumeScroll()
-            }}
-            shouldQueue={queueEnabled}
-            onQueue={queueFollowup}
-            onAbort={() => {
-              const id = params.id
-              if (!id) return
-              setFollowup("paused", id, true)
-            }}
-          />
-        }
-      />
-    )
-  }
 
   const mobileTabs = (compact = false, bottom = false) => (
     <Tabs value={store.mobileTab} class="h-auto">
@@ -2371,15 +2097,9 @@ export default function Page() {
                   onUserScroll={markUserScroll}
                   onHistoryScroll={onHistoryScroll}
                   onAutoScrollInteraction={autoScroll.handleInteraction}
-                  composerLayoutEpoch={composerLayoutEpoch()}
-                  preservedScrollTop={timelineScrollTop()}
-                  shouldAnchorBottom={() => {
-                    if (location.hash || store.messageId || ui.pendingMessage || autoScroll.userScrolled()) return false
-                    if (pendingTabBottomAnchor()) return true
-                    const el = scroller
-                    if (!el) return true
-                    return nearTimelineBottom(el)
-                  }}
+                  shouldAnchorBottom={() =>
+                    !location.hash && !store.messageId && !ui.pendingMessage && !autoScroll.userScrolled()
+                  }
                   centered={centered()}
                   setContentRef={(el) => {
                     content = el
@@ -2410,7 +2130,124 @@ export default function Page() {
         </Switch>
       </div>
 
-      <Show when={(params.id || !newSessionDesign()) && !mobileChanges()}>{(_) => composerRegion()}</Show>
+      <Show when={(params.id || !newSessionDesign()) && !mobileChanges()}>
+        {(_) => {
+          const controller = createSessionComposerRegionController({
+            state: composer,
+            sessionKey,
+            sessionID: () => params.id,
+            prompt,
+            ready: () => !store.deferRender && messagesReady(),
+            centered,
+            todo: {
+              collapsed: () => view().todoCollapsed.get(),
+              onToggle: () => view().todoCollapsed.set(!view().todoCollapsed.get()),
+            },
+            followup: () =>
+              params.id && !isChildSession()
+                ? {
+                    items: followupDock(),
+                    sending: sendingFollowup(),
+                    onSend: (id) => void sendFollowup(params.id!, id, { manual: true }),
+                    onEdit: editFollowup,
+                    onRemove: removeFollowup,
+                  }
+                : undefined,
+            revert: () =>
+              rolled().length > 0
+                ? {
+                    items: rolled(),
+                    restoring: restoring(),
+                    disabled: reverting(),
+                    onRestore: restore,
+                  }
+                : undefined,
+            onResponseSubmit: resumeScroll,
+            openParent: () => {
+              const id = info()?.parentID
+              if (!id) return
+              navigate(
+                params.serverKey
+                  ? sessionHref(requireServerKey(params.serverKey), id)
+                  : legacySessionHref(sdk().directory, id),
+              )
+            },
+            setPromptRef: (el) => {
+              inputRef = el
+            },
+            setDockRef: (el) => {
+              promptDock = el
+            },
+          })
+          return (
+            <SessionComposerRegion
+              controller={controller}
+              promptInput={
+                <Show
+                  when={newSessionDesign()}
+                  fallback={
+                    <PromptInput
+                      controls={inputController()}
+                      ref={(el) => {
+                        inputRef = el
+                      }}
+                      newSessionWorktree={newSessionWorktree()}
+                      onNewSessionWorktreeReset={() => setStore("newSessionWorktree", "main")}
+                      onSubmit={() => {
+                        comments.clear()
+                        resumeScroll()
+                      }}
+                      edit={editingFollowup()}
+                      onEditLoaded={clearFollowupEdit}
+                      shouldQueue={queueEnabled}
+                      onQueue={queueFollowup}
+                      onAbort={() => {
+                        const id = params.id
+                        if (!id) return
+                        setFollowup("paused", id, true)
+                      }}
+                    />
+                  }
+                >
+                  {(_) => {
+                    const controller = usePromptInputV2Controller({
+                      get controls() {
+                        return inputController()
+                      },
+                      ref: (el) => {
+                        inputRef = el
+                      },
+                      get newSessionWorktree() {
+                        return newSessionWorktree()
+                      },
+                      onNewSessionWorktreeReset: () => setStore("newSessionWorktree", "main"),
+                      onSubmit: () => {
+                        comments.clear()
+                        resumeScroll()
+                      },
+                      shouldQueue: queueEnabled,
+                      onQueue: queueFollowup,
+                      onAbort: () => {
+                        const id = params.id
+                        if (!id) return
+                        setFollowup("paused", id, true)
+                      },
+                    })
+                    return (
+                      <PromptInputV2Composer
+                        controller={controller}
+                        borderUnderlay
+                        edit={editingFollowup()}
+                        onEditLoaded={clearFollowupEdit}
+                      />
+                    )
+                  }}
+                </Show>
+              }
+            />
+          )
+        }}
+      </Show>
       <Show when={!!params.id && mobileTabsBottom()}>{mobileTabs(true, true)}</Show>
     </>
   )

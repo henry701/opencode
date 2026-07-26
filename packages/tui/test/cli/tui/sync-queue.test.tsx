@@ -5,14 +5,10 @@ import { onMount } from "solid-js"
 import type { Event, GlobalEvent } from "@opencode-ai/sdk/v2"
 import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
-import { ArgsProvider } from "../../../src/context/args"
-import { ExitProvider } from "../../../src/context/exit"
-import { KVProvider } from "../../../src/context/kv"
-import { PermissionProvider } from "../../../src/context/permission"
 import { ProjectProvider } from "../../../src/context/project"
 import { SDKProvider } from "../../../src/context/sdk"
-import { SyncProvider, useSync } from "../../../src/context/sync"
-import { createEventSource, createFetch, directory } from "../../fixture/tui-sdk"
+import { DataProvider, useData } from "../../../src/context/data"
+import { createEventSource, createFetch, directory, json } from "../../fixture/tui-sdk"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 
 async function wait(fn: () => boolean, timeout = 2000) {
@@ -27,60 +23,76 @@ function global(payload: Event): GlobalEvent {
   return { directory, project: "proj_test", payload }
 }
 
-test("TUI sync preserves queued prompts across rollback session updates", async () => {
+test("current TUI data preserves queued prompts across rollback session updates", async () => {
   const state = "/tmp/opencode/state"
   await mkdir(state, { recursive: true })
   await writeFile(path.join(state, "kv.json"), "{}")
 
   const events = createEventSource()
-  const calls = createFetch()
-  let sync!: ReturnType<typeof useSync>
+  const queued = [
+    {
+      id: "pqu_1",
+      sessionID: "ses_1",
+      position: 0,
+      timeCreated: 1,
+      payload: {
+        version: 1,
+        agent: "build",
+        model: { providerID: "openai", modelID: "gpt-5" },
+        parts: [{ type: "text", text: "stay queued after rollback" }],
+      },
+    },
+  ]
+  let queueRequests = 0
+  const calls = createFetch((url) => {
+    if (url.pathname === "/api/session/ses_1/queue") {
+      queueRequests++
+      return json({ data: queued })
+    }
+    return undefined
+  })
+  let data!: ReturnType<typeof useData>
   let ready!: () => void
   const mounted = new Promise<void>((resolve) => {
     ready = resolve
   })
 
   function Probe() {
-    sync = useSync()
+    data = useData()
     onMount(ready)
     return <box />
   }
 
   const app = await testRender(() => (
     <TestTuiContexts paths={{ state }}>
-      <ArgsProvider>
-        <KVProvider>
-          <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
-            <PermissionProvider>
-              <ProjectProvider>
-                <ExitProvider exit={() => {}}>
-                  <SyncProvider>
-                    <Probe />
-                  </SyncProvider>
-                </ExitProvider>
-              </ProjectProvider>
-            </PermissionProvider>
-          </SDKProvider>
-        </KVProvider>
-      </ArgsProvider>
+      <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </SDKProvider>
     </TestTuiContexts>
   ))
 
   try {
     await mounted
-    await wait(() => sync.ready)
+    await data.session.queue.refresh("ses_1")
+    expect(data.session.queue.list("ses_1")).toEqual([{ id: "pqu_1", text: "stay queued after rollback" }])
 
     events.emit(
       global({
         id: "evt_queue_1",
-        type: "session.queue.updated",
+        type: "session.next.prompt.admitted",
         properties: {
           sessionID: "ses_1",
-          items: [{ id: "pqu_1", text: "stay queued after rollback" }],
+          messageID: "pqu_1",
+          prompt: { text: "stay queued after rollback" },
+          delivery: "queue",
         },
       } as unknown as Event),
     )
-    await wait(() => sync.data.prompt_queue.ses_1?.length === 1)
+    await wait(() => queueRequests === 2)
 
     events.emit(
       global({
@@ -97,7 +109,7 @@ test("TUI sync preserves queued prompts across rollback session updates", async 
     )
 
     await Bun.sleep(25)
-    expect(sync.data.prompt_queue.ses_1).toEqual([{ id: "pqu_1", text: "stay queued after rollback" }])
+    expect(data.session.queue.list("ses_1")).toEqual([{ id: "pqu_1", text: "stay queued after rollback" }])
   } finally {
     app.renderer.destroy()
   }

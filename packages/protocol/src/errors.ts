@@ -52,6 +52,26 @@ export class ProviderNotFoundError extends Schema.TaggedErrorClass<ProviderNotFo
   { httpApiStatus: 404 },
 ) {}
 
+export class CommandNotFoundError extends Schema.TaggedErrorClass<CommandNotFoundError>()(
+  "CommandNotFoundError",
+  {
+    command: Schema.String,
+    available: Schema.Array(Schema.String),
+    message: Schema.String,
+  },
+  { httpApiStatus: 404 },
+) {}
+
+export class AgentNotFoundError extends Schema.TaggedErrorClass<AgentNotFoundError>()(
+  "AgentNotFoundError",
+  {
+    agent: Schema.String,
+    available: Schema.Array(Schema.String),
+    message: Schema.String,
+  },
+  { httpApiStatus: 404 },
+) {}
+
 export class SessionNotFoundError extends Schema.TaggedErrorClass<SessionNotFoundError>()(
   "SessionNotFoundError",
   {
@@ -63,6 +83,16 @@ export class SessionNotFoundError extends Schema.TaggedErrorClass<SessionNotFoun
 
 export class MessageNotFoundError extends Schema.TaggedErrorClass<MessageNotFoundError>()(
   "MessageNotFoundError",
+  {
+    sessionID: Schema.String,
+    messageID: Schema.String,
+    message: Schema.String,
+  },
+  { httpApiStatus: 404 },
+) {}
+
+export class QueueItemNotFoundError extends Schema.TaggedErrorClass<QueueItemNotFoundError>()(
+  "QueueItemNotFoundError",
   {
     sessionID: Schema.String,
     messageID: Schema.String,

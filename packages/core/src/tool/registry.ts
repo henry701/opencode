@@ -9,7 +9,15 @@ import { SessionSchema } from "../session/schema"
 import { ToolOutputStore } from "../tool-output-store"
 import { Wildcard } from "../util/wildcard"
 import { ApplicationTools } from "./application-tools"
-import { definition, permission, settle, validateName, type AnyTool, type RegistrationError } from "./tool"
+import {
+  definition,
+  permission,
+  settle,
+  validateName,
+  type AnyTool,
+  type Context as ToolContext,
+  type RegistrationError,
+} from "./tool"
 import { Tools } from "./tools"
 import { makeLocationNode } from "../effect/app-node"
 
@@ -18,6 +26,8 @@ export type ExecuteInput = {
   readonly agent: AgentV2.ID
   readonly assistantMessageID: SessionMessage.ID
   readonly call: ToolCall
+  readonly task?: ToolContext["task"]
+  readonly transition?: ToolContext["transition"]
 }
 
 export interface Interface {
@@ -64,6 +74,8 @@ const registryLayer = Layer.effect(
         agent: input.agent,
         assistantMessageID: input.assistantMessageID,
         toolCallID: input.call.id,
+        task: input.task,
+        transition: input.transition,
       }).pipe(
         Effect.map((output) => ({ output })),
         Effect.catchTag("LLM.ToolFailure", (failure) =>

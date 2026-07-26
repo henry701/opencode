@@ -9,7 +9,6 @@ import { Effect } from "effect"
 import { Session } from "@/session/session"
 
 import { SessionRevert } from "../../src/session/revert"
-import { SessionPromptQueue } from "../../src/session/prompt-queue"
 import { MessageV2 } from "../../src/session/message-v2"
 import { Snapshot } from "../../src/snapshot"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
@@ -23,7 +22,6 @@ const it = testEffect(
     LayerNode.group([
       Session.node,
       SessionRevert.node,
-      SessionPromptQueue.node,
       Snapshot.node,
       SessionProjector.node,
       CrossSpawnSpawner.node,
@@ -104,37 +102,6 @@ const tokens = {
 }
 
 describe("revert + compact workflow", () => {
-  it.live(
-    "preserves queued prompts after revert",
-    provideTmpdirInstance((dir) =>
-      Effect.gen(function* () {
-        const session = yield* Session.Service
-        const revert = yield* SessionRevert.Service
-        const promptQueue = yield* SessionPromptQueue.Service
-        const info = yield* session.create({})
-
-        const userMsg = yield* user(info.id)
-        yield* text(info.id, userMsg.id, "anchor")
-        const assistantMsg = yield* assistant(info.id, userMsg.id, dir)
-        yield* text(info.id, assistantMsg.id, "done")
-        yield* promptQueue.enqueue(info.id, {
-          version: 1,
-          agent: "build",
-          model: { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test-model") },
-          parts: [{ type: "text", text: "queued" }],
-        })
-        const before = yield* promptQueue.peek(info.id)
-        expect(before?.data.parts).toEqual([{ type: "text", text: "queued" }])
-
-        yield* revert.revert({ sessionID: info.id, messageID: userMsg.id })
-
-        const after = yield* promptQueue.peek(info.id)
-        expect(after?.id).toBe(before?.id)
-        expect(after?.data.parts).toEqual([{ type: "text", text: "queued" }])
-      }),
-    ),
-  )
-
   it.live(
     "should properly handle compact command after revert",
     provideTmpdirInstance(

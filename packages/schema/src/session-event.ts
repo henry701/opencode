@@ -12,6 +12,8 @@ import { SessionID } from "./session-id"
 import { Location } from "./location"
 import { SessionMessage } from "./session-message"
 import { Revert } from "./revert"
+import { FileDiff } from "./file-diff"
+import { SessionInputPayload } from "./session-input-payload"
 
 export { FileAttachment }
 
@@ -32,6 +34,7 @@ const PromptFields = {
   ...Base,
   messageID: SessionMessage.ID,
   prompt: Prompt,
+  payload: SessionInputPayload.Payload.pipe(optional),
   delivery: Delivery,
 }
 
@@ -50,6 +53,8 @@ const stepSettlementOptions = {
 
 export const UnknownError = SessionMessage.UnknownError
 export type UnknownError = SessionMessage.UnknownError
+export const StepError = SessionMessage.Error
+export type StepError = SessionMessage.Error
 
 export const AgentSwitched = Event.define({
   type: "session.next.agent.switched",
@@ -84,6 +89,27 @@ export const Moved = Event.define({
 })
 export type Moved = typeof Moved.Type
 
+export const InfoUpdated = Event.define({
+  type: "session.next.updated",
+  ...options,
+  schema: {
+    ...Base,
+    title: Schema.String.pipe(optional),
+  },
+})
+export type InfoUpdated = typeof InfoUpdated.Type
+
+export const MessageImported = Event.define({
+  type: "session.next.message.imported",
+  ...options,
+  schema: {
+    ...Base,
+    sourceSessionID: SessionID,
+    message: SessionMessage.Message,
+  },
+})
+export type MessageImported = typeof MessageImported.Type
+
 export const Prompted = Event.define({
   type: "session.next.prompted",
   ...options,
@@ -97,6 +123,40 @@ export const PromptAdmitted = Event.define({
   schema: PromptFields,
 })
 export type PromptAdmitted = typeof PromptAdmitted.Type
+
+export const PromptRevised = Event.define({
+  type: "session.next.prompt.revised",
+  ...options,
+  schema: {
+    ...Base,
+    messageID: SessionMessage.ID,
+    prompt: Prompt,
+    payload: SessionInputPayload.Payload,
+  },
+})
+export type PromptRevised = typeof PromptRevised.Type
+
+export const PromptDiscarded = Event.define({
+  type: "session.next.prompt.discarded",
+  ...options,
+  schema: {
+    ...Base,
+    messageID: SessionMessage.ID,
+  },
+})
+export type PromptDiscarded = typeof PromptDiscarded.Type
+
+export const PromptExpedited = Event.define({
+  type: "session.next.prompt.expedited",
+  ...options,
+  schema: {
+    ...Base,
+    messageID: SessionMessage.ID,
+    prompt: Prompt,
+    payload: SessionInputPayload.Payload,
+  },
+})
+export type PromptExpedited = typeof PromptExpedited.Type
 
 export const ContextUpdated = Event.define({
   type: "session.next.context.updated",
@@ -145,6 +205,20 @@ export namespace Shell {
   export type Ended = typeof Ended.Type
 }
 
+export namespace Command {
+  export const Executed = Event.define({
+    type: "session.next.command.executed",
+    ...options,
+    schema: {
+      ...Base,
+      messageID: SessionMessage.ID,
+      name: Schema.String,
+      arguments: Schema.String,
+    },
+  })
+  export type Executed = typeof Executed.Type
+}
+
 export namespace Step {
   export const Started = Event.define({
     type: "session.next.step.started",
@@ -154,6 +228,8 @@ export namespace Step {
       assistantMessageID: SessionMessage.ID,
       agent: Schema.String,
       model: Model.Ref,
+      systemPrompt: Schema.String.pipe(optional),
+      toolDefinitions: Schema.String.pipe(optional),
       snapshot: Schema.String.pipe(optional),
     },
   })
@@ -178,6 +254,7 @@ export namespace Step {
       }),
       snapshot: Schema.String.pipe(optional),
       files: Schema.Array(RelativePath).pipe(optional),
+      diffs: Schema.Array(FileDiff.Info).pipe(optional),
     },
   })
   export type Ended = typeof Ended.Type
@@ -188,7 +265,7 @@ export namespace Step {
     schema: {
       ...Base,
       assistantMessageID: SessionMessage.ID,
-      error: UnknownError,
+      error: StepError,
     },
   })
   export type Failed = typeof Failed.Type
@@ -449,12 +526,18 @@ export const DurableDefinitions = Event.inventory(
   AgentSwitched,
   ModelSwitched,
   Moved,
+  InfoUpdated,
+  MessageImported,
   Prompted,
   PromptAdmitted,
+  PromptRevised,
+  PromptDiscarded,
+  PromptExpedited,
   ContextUpdated,
   Synthetic,
   Shell.Started,
   Shell.Ended,
+  Command.Executed,
   Step.Started,
   Step.Ended,
   Step.Failed,
@@ -480,12 +563,18 @@ export const Definitions = Event.inventory(
   AgentSwitched,
   ModelSwitched,
   Moved,
+  InfoUpdated,
+  MessageImported,
   Prompted,
   PromptAdmitted,
+  PromptRevised,
+  PromptDiscarded,
+  PromptExpedited,
   ContextUpdated,
   Synthetic,
   Shell.Started,
   Shell.Ended,
+  Command.Executed,
   Step.Started,
   Step.Ended,
   Step.Failed,

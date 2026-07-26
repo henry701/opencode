@@ -3,7 +3,6 @@ import {
   assistantMessage,
   reasoningPart,
   setupTimeline,
-  status,
   textPart,
   toolPart,
   userMessage,
@@ -67,7 +66,7 @@ for (const profile of profiles) {
       messages: [userMessage(), assistantMessage(parts, { completed: false })],
       settings: { showReasoningSummaries: profile.summaries },
     })
-    await timeline.send(status("busy"), 150)
+    await timeline.sendStatus("busy", 150)
 
     await expect(page.locator('[data-timeline-row="Thinking"]')).toHaveCount(profile.thinking ? 1 : 0)
     await expect(page.locator(`[data-timeline-part-id="${reasoningID}"]`)).toHaveCount(profile.body ? 1 : 0)
@@ -85,7 +84,7 @@ test("does not infer reasoning visibility from provider identity", async ({ page
     ],
     settings: { showReasoningSummaries: true },
   })
-  await timeline.send(status("busy"), 150)
+  await timeline.sendStatus("busy", 150)
 
   await expect(page.locator('[data-timeline-row="Thinking"]')).toHaveCount(0)
   await expect(page.locator('[data-timeline-part-id*="reasoning"]')).toHaveCount(0)

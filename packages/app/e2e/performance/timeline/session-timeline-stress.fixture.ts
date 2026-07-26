@@ -28,9 +28,17 @@ const directory = "C:/OpenCode/SmokeProject"
 const projectID = "proj_smoke_timeline"
 const model = { providerID: "opencode", modelID: "claude-opus-4-6", variant: "max" }
 
-type MessageInfo = Record<string, unknown> & { id: string; role: "user" | "assistant" }
-type MessagePart = Record<string, unknown> & { id: string; type: string; text?: string; tool?: string }
-type Message = { info: MessageInfo; parts: MessagePart[] }
+type MessagePart = Record<string, unknown> & { id: string; type: string; text?: string; name?: string }
+type Message =
+  | { id: string; type: "user"; text: string; payload: Record<string, unknown>; time: { created: number } }
+  | {
+      id: string
+      type: "assistant"
+      content: MessagePart[]
+      time: { created: number; completed: number }
+      snapshot?: { diffs: unknown[] }
+      [key: string]: unknown
+    }
 
 function lorem(seed: number, length: number) {
   let out = ""
@@ -50,52 +58,35 @@ function id(prefix: string, value: number) {
 
 function userMessage(sessionID: string, index: number, textLength: number, diffs: unknown[] = []): Message {
   const messageID = id("msg_user", index)
+  const text = lorem(index, textLength)
   return {
-    info: {
-      id: messageID,
-      sessionID,
-      role: "user",
-      time: { created: 1700000000000 + index * 10_000 },
-      summary: { diffs },
+    id: messageID,
+    type: "user",
+    text,
+    files: [],
+    agents: [],
+    time: { created: 1700000000000 + index * 10_000 },
+    payload: {
+      version: 1,
       agent: "build",
       model,
+      parts: [{ id: id("prt_user_text", index), type: "text", text }],
     },
-    parts: [
-      {
-        id: id("prt_user_text", index),
-        sessionID,
-        messageID,
-        type: "text",
-        text: lorem(index, textLength),
-      },
-    ],
   }
 }
 
 function assistantMessage(sessionID: string, index: number, parentID: string, parts: MessagePart[]): Message {
   const messageID = id("msg_assistant", index)
   return {
-    info: {
-      id: messageID,
-      sessionID,
-      role: "assistant",
-      time: { created: 1700000000000 + index * 10_000 + 1_000, completed: 1700000000000 + index * 10_000 + 8_000 },
-      parentID,
-      modelID: model.modelID,
-      providerID: model.providerID,
-      mode: "build",
-      agent: "build",
-      path: { cwd: directory, root: directory },
-      cost: 0.01,
-      tokens: { input: 100, output: 200, reasoning: 0, cache: { read: 0, write: 0 } },
-      variant: "max",
-      finish: "stop",
-    },
-    parts: parts.map((part) => ({
-      ...part,
-      sessionID,
-      messageID,
-    })),
+    id: messageID,
+    type: "assistant",
+    time: { created: 1700000000000 + index * 10_000 + 1_000, completed: 1700000000000 + index * 10_000 + 8_000 },
+    agent: "build",
+    model: { providerID: model.providerID, id: model.modelID, variant: model.variant },
+    cost: 0.01,
+    tokens: { input: 100, output: 200, reasoning: 0, cache: { read: 0, write: 0 } },
+    finish: "stop",
+    content: parts,
   }
 }
 
@@ -117,7 +108,7 @@ function reasoningPart(index: number, partIndex: number, length: number): Messag
     id: id(`prt_reasoning_${partIndex}`, index),
     type: "reasoning",
     text: lorem(index * 19 + partIndex, length),
-    time: { start: 1700000000000 + index * 10_000, end: 1700000000000 + index * 10_000 + 500 },
+    time: { created: 1700000000000 + index * 10_000, completed: 1700000000000 + index * 10_000 + 500 },
   }
 }
 
@@ -145,15 +136,17 @@ function toolPart(
   return {
     id: id(`prt_tool_${tool}_${partIndex}`, index),
     type: "tool",
-    callID: id("call", index * 10 + partIndex),
-    tool,
+    name: tool,
+    time: { created: 1700000000000 + index * 10_000, completed: 1700000000000 + index * 10_000 + 400 },
     state: {
       status: "completed",
       input,
-      output: lorem(index * 23 + partIndex, outputLength),
-      title: tool === "bash" ? "Verify generated output" : input.filePath || input.path || input.pattern || "completed",
-      metadata,
-      time: { start: 1700000000000 + index * 10_000, end: 1700000000000 + index * 10_000 + 400 },
+      content: [{ type: "text", text: lorem(index * 23 + partIndex, outputLength) }],
+      result: lorem(index * 23 + partIndex, outputLength),
+      structured: {
+        ...metadata,
+        title: tool === "bash" ? "Verify generated output" : input.filePath || input.path || input.pattern || "completed",
+      },
     },
   }
 }
@@ -241,7 +234,9 @@ function turn(index: number): Message[] {
       ? [toolPart(index, 12, "task", { description: "Inspect generated fixture", subagent_type: "explore" }, 160)]
       : []),
   ]
-  return [user, assistantMessage(targetID, index, user.info.id, parts)]
+  const assistant = assistantMessage(targetID, index, user.id, parts)
+  if (assistant.type === "assistant" && diff.length) assistant.snapshot = { diffs: diff }
+  return [user, assistant]
 }
 
 const targetMessages = Array.from({ length: 72 }, (_, index) => turn(index)).flat()
@@ -269,14 +264,15 @@ const childMessages = Array.from({ length: 4 }, (_, index) => [
 ]).flat()
 
 function renderable(part: MessagePart) {
-  if (part.type === "tool" && part.tool === "todowrite") return false
+  if (part.type === "tool" && part.name === "todowrite") return false
   if (part.type === "text") return !!part.text.trim()
   if (part.type === "reasoning") return !!part.text.trim()
   return part.type !== "step-start" && part.type !== "step-finish" && part.type !== "patch"
 }
 
 function orderedParts(message: Message) {
-  return message.parts.slice().sort((a, b) => a.id.localeCompare(b.id))
+  if (message.type === "user") return [{ id: message.id, type: "user" }]
+  return message.content.slice().sort((a, b) => a.id.localeCompare(b.id))
 }
 
 export const fixture = {
@@ -339,12 +335,12 @@ export const fixture = {
     targetTitle: "Example Game: sample jump movement & sample physics analysis",
     childTitle: "Inspect child navigation",
     sourceMessageIDs: sourceMessages
-      .filter((message) => message.info.role === "user")
-      .map((message) => message.info.id),
+      .filter((message) => message.type === "user")
+      .map((message) => message.id),
     targetMessageIDs: targetMessages
-      .filter((message) => message.info.role === "user")
-      .map((message) => message.info.id),
-    childMessageIDs: childMessages.filter((message) => message.info.role === "user").map((message) => message.info.id),
+      .filter((message) => message.type === "user")
+      .map((message) => message.id),
+    childMessageIDs: childMessages.filter((message) => message.type === "user").map((message) => message.id),
     targetPartIDs: targetMessages.flatMap((message) =>
       orderedParts(message)
         .filter(renderable)
@@ -353,17 +349,18 @@ export const fixture = {
   },
 }
 
-export function pageMessages(sessionID: string, limit: number, before?: string) {
+export function currentPageMessages(sessionID: string, limit: number, cursor?: string) {
   const messages = fixture.messages[sessionID as keyof typeof fixture.messages] ?? []
-  const end = before
+  const end = cursor
     ? Math.max(
         0,
-        messages.findIndex((message) => message.info.id === before),
+        messages.findIndex((message) => message.id === cursor),
       )
     : messages.length
   const start = Math.max(0, end - limit)
   return {
-    items: messages.slice(start, end),
-    cursor: start > 0 ? messages[start]!.info.id : undefined,
+    items: messages.slice(start, end).toReversed(),
+    cursor: start > 0 ? { next: messages[start]!.id } : undefined,
+    throughSeq: 0,
   }
 }

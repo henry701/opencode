@@ -11,6 +11,26 @@ export interface Context {
   readonly agent: AgentV2.ID
   readonly assistantMessageID: SessionMessage.ID
   readonly toolCallID: string
+  readonly task?: (input: TaskInput) => Effect.Effect<TaskResult, ToolFailure>
+  readonly transition?: (input: TransitionInput) => Effect.Effect<void, ToolFailure>
+}
+
+export type TransitionInput = {
+  readonly agent: AgentV2.ID
+  readonly text: string
+}
+
+export type TaskInput = {
+  readonly description: string
+  readonly prompt: string
+  readonly subagentType: string
+  readonly taskID?: string
+  readonly command?: string
+}
+
+export type TaskResult = {
+  readonly sessionID: SessionSchema.ID
+  readonly result: string
 }
 
 export type SchemaType<A> = Schema.Codec<A, any, never, never>
@@ -44,6 +64,7 @@ type Config<
 > = {
   readonly description: string
   readonly input: Input
+  readonly inputJsonSchema?: JsonSchema.JsonSchema
   readonly output: Output
   readonly structured?: Structured
   readonly toStructuredOutput?: (input: {
@@ -82,7 +103,7 @@ export function make<
       const definition = new ToolDefinition({
         name,
         description: config.description,
-        inputSchema: toJsonSchema(config.input),
+        inputSchema: config.inputJsonSchema ?? toJsonSchema(config.input),
         outputSchema: toJsonSchema(config.structured ?? config.output),
       })
       definitions.set(name, definition)

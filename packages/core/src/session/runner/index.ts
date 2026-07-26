@@ -22,6 +22,11 @@ export interface Interface {
   readonly run: (input: {
     readonly sessionID: SessionSchema.ID
     readonly force: boolean
+    readonly execution: {
+      readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, RunError>
+      readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+      readonly queueDrainPaused: (sessionID: SessionSchema.ID) => Effect.Effect<boolean>
+    }
   }) => Effect.Effect<void, RunError>
 }
 

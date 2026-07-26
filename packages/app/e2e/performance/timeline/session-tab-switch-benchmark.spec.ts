@@ -77,8 +77,8 @@ async function trial(
     await waitForStableTimeline(page, fixture.expected.sourceMessageIDs.at(-1)!)
   }
 
-  const destinationIDs = fixture.messages[fixture.targetID].map((message) => message.info.id)
-  const sourceIDs = fixture.messages[fixture.sourceID].map((message) => message.info.id)
+  const destinationIDs = fixture.messages[fixture.targetID].map((message) => message.id)
+  const sourceIDs = fixture.messages[fixture.sourceID].map((message) => message.id)
   const lastID = fixture.expected.targetMessageIDs.at(-1)!
   const href = stressSessionHref(fixture.targetID)
   const result = await measureSessionSwitch(page, {

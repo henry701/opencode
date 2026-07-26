@@ -102,6 +102,7 @@ export const dict = {
   "dialog.provider.empty": "Провайдерів не знайдено",
   "dialog.provider.group.popular": "Популярні",
   "dialog.provider.group.other": "Інші",
+  "dialog.provider.custom.label": "Власний OpenAI-сумісний провайдер",
   "dialog.provider.tag.recommended": "Рекомендовані",
   "dialog.provider.opencode.note": "Відібрані моделі, включаючи Claude, GPT, Gemini та інші",
   "dialog.provider.opencode.tagline": "Надійні оптимізовані моделі",
@@ -122,6 +123,7 @@ export const dict = {
 
   "dialog.model.unpaid.freeModels.title": "Безкоштовні моделі від OpenCode",
   "dialog.model.unpaid.addMore.title": "Додати більше моделей від популярних провайдерів",
+  "dialog.model.unpaid.viewMoreProviders": "Переглянути ще понад 70 провайдерів",
 
   "dialog.provider.viewAll": "Показати більше провайдерів",
 
@@ -703,6 +705,7 @@ export const dict = {
   "session.new.workspace.triggerLocal": "Локально",
   "session.new.workspace.local": "Локальний репозиторій",
   "session.new.workspace.existing": "Робоча область…",
+  "session.new.git.none": "Немає Git",
   "session.new.lastModified": "Востаннє змінено",
 
   "session.header.search.placeholder": "Пошук {{project}}",

@@ -68,10 +68,10 @@ const controls = {
   },
   session: {
     id: "story-session",
+    working: () => false,
     tabs: { active: () => undefined, all: () => [], open: () => {}, setActive: () => {} },
     reviewPanel: { opened: () => false, open: () => {} },
   },
-  newLayoutDesigns: true,
 }
 
 const css = `

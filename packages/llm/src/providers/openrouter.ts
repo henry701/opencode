@@ -49,6 +49,7 @@ export const protocol = Protocol.make({
             }) as OpenRouterBody,
         ),
       ),
+    context: OpenAIChat.protocol.body.context,
   },
   stream: OpenAIChat.protocol.stream,
 })

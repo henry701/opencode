@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Scope } from "effect"
 import { mkdir, readFile } from "node:fs/promises"
 import path from "node:path"
+import stripAnsi from "strip-ansi"
 import { cliIt, testModelID } from "../../lib/cli-process"
 import { pollWithTimeout } from "../../lib/effect"
 
@@ -44,26 +45,45 @@ describe("prompt queue TUI smoke (serve + script)", () => {
         yield* llm.text("queue-2-done")
         yield* llm.text("queue-3-done")
 
-        const serve = yield* opencode.serve({ readyTimeoutMs: 30_000 })
+        yield* Effect.tryPromise(() =>
+          Bun.write(
+            path.join(home, "opencode.json"),
+            JSON.stringify({
+              providers: {
+                test: {
+                  name: "Test",
+                  env: [],
+                  api: {
+                    type: "aisdk",
+                    package: "@ai-sdk/openai-compatible",
+                    url: llm.url,
+                  },
+                  request: { body: { apiKey: "test-key" } },
+                  models: {
+                    "test-model": {
+                      api: { id: "test-model" },
+                      capabilities: {
+                        tools: true,
+                        input: ["text"],
+                        output: ["text"],
+                      },
+                      limit: { context: 100_000, output: 10_000 },
+                    },
+                  },
+                },
+              },
+            }),
+          ),
+        )
+        const serve = yield* opencode.serve({
+          readyTimeoutMs: 30_000,
+          env: { OPENCODE_PRINT_LOGS: "1" },
+        })
         const artifactDir = path.join(home, "queue-tui-smoke")
         yield* Effect.tryPromise(() => mkdir(artifactDir, { recursive: true }))
 
         const sessionRes = yield* Effect.tryPromise(() =>
-          fetch(`${serve.url}/session`, {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              "x-opencode-directory": home,
-            },
-            body: JSON.stringify({ title: "prompt-queue-tui-smoke" }),
-          }),
-        )
-        expect(sessionRes.ok).toBe(true)
-        const session = (yield* Effect.tryPromise(() => sessionRes.json())) as { id: string }
-        const sessionID = session.id
-
-        yield* Effect.tryPromise(() =>
-          fetch(`${serve.url}/session/${sessionID}/prompt_async`, {
+          fetch(`${serve.url}/api/session`, {
             method: "POST",
             headers: {
               "content-type": "application/json",
@@ -71,11 +91,33 @@ describe("prompt queue TUI smoke (serve + script)", () => {
             },
             body: JSON.stringify({
               agent: "build",
-              model: { providerID: "test", modelID: testModelID.split("/")[1] },
-              parts: [{ type: "text", text: "open turn" }],
+              model: { providerID: "test", id: testModelID.split("/")[1] },
+              location: { directory: home },
             }),
           }),
         )
+        expect(sessionRes.ok).toBe(true)
+        const session = (yield* Effect.tryPromise(() => sessionRes.json())) as { data: { id: string } }
+        const sessionID = session.data.id
+
+        const opened = yield* Effect.tryPromise(() =>
+          fetch(`${serve.url}/api/session/${sessionID}/prompt`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-opencode-directory": home,
+            },
+            body: JSON.stringify({
+              payload: {
+                version: 1,
+                agent: "build",
+                model: { providerID: "test", modelID: testModelID.split("/")[1] },
+                parts: [{ type: "text", text: "open turn" }],
+              },
+            }),
+          }),
+        )
+        if (!opened.ok) throw new Error(`failed to open current turn: ${opened.status} ${yield* Effect.promise(() => opened.text())}`)
 
         yield* Effect.sleep("150 millis")
 
@@ -102,16 +144,43 @@ describe("prompt queue TUI smoke (serve + script)", () => {
           ])
           return { exitCode, stdout, stderr }
         })
-        if (script.exitCode !== 0) throw new Error(`queue smoke failed\n${script.stderr}\n${script.stdout}`)
+        yield* Deferred.succeed(gate, void 0)
+        if (script.exitCode !== 0) {
+          const capture = yield* Effect.promise(() =>
+            readFile(path.join(artifactDir, "tui-attach.txt"), "utf8").catch(() => "attach capture unavailable"),
+          )
+          throw new Error(
+            `queue smoke failed\nstderr=${script.stderr}\nstdout=${script.stdout}\nserver=${serve.stderr()}\nattach=${stripAnsi(capture).slice(-4_000)}`,
+          )
+        }
         expect(script.exitCode).toBe(0)
 
-        yield* Deferred.succeed(gate, void 0)
-
-        yield* pollWithTimeout(
+        const drained = yield* pollWithTimeout(
           llm.calls.pipe(Effect.map((n) => (n >= 4 ? true : undefined))),
           "timed out waiting for four mocked LLM calls",
           30_000,
+        ).pipe(
+          Effect.map(() => undefined),
+          Effect.catch((error) => Effect.succeed(error)),
         )
+        if (drained instanceof Error) {
+          const calls = yield* llm.calls
+          const queue = yield* Effect.tryPromise(() =>
+            fetch(`${serve.url}/api/session/${sessionID}/queue`).then((response) => response.text()),
+          )
+          const active = yield* Effect.tryPromise(() =>
+            fetch(`${serve.url}/api/session/active`).then((response) => response.text()),
+          )
+          const context = yield* Effect.tryPromise(() =>
+            fetch(`${serve.url}/api/session/${sessionID}/context`).then((response) => response.text()),
+          )
+          const history = yield* Effect.tryPromise(() =>
+            fetch(`${serve.url}/api/session/${sessionID}/history`).then((response) => response.text()),
+          )
+          throw new Error(
+            `${drained.message}; calls=${calls}; queue=${queue}; active=${active}; context=${context}; history=${history}; stderr=${serve.stderr()}`,
+          )
+        }
 
         const inputs = yield* llm.inputs
         expect(inputs).toHaveLength(4)

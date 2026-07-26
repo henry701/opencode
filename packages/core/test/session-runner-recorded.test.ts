@@ -88,14 +88,30 @@ const execution = Layer.effect(
   SessionExecution.Service,
   Effect.gen(function* () {
     const sessionRunner = yield* SessionRunner.Service
+    let resume: SessionExecution.Interface["resume"]
+    let interrupt: SessionExecution.Interface["interrupt"]
     const coordinator = yield* SessionRunCoordinator.make<SessionV2.ID, SessionRunner.RunError>({
-      drain: (sessionID, force) => sessionRunner.run({ sessionID, force }),
+      drain: (sessionID, force) =>
+        sessionRunner.run({
+          sessionID,
+          force,
+          execution: {
+            resume,
+            interrupt,
+            queueDrainPaused: () => Effect.succeed(false),
+          },
+        }),
     })
+    resume = coordinator.run
+    interrupt = coordinator.interrupt
     return SessionExecution.Service.of({
       active: coordinator.active,
-      resume: coordinator.run,
+      resume,
       wake: coordinator.wake,
-      interrupt: coordinator.interrupt,
+      interrupt,
+      pauseQueueDrain: () => Effect.void,
+      resumeQueueDrain: () => Effect.void,
+      queueDrainPaused: () => Effect.succeed(false),
     })
   }),
 ).pipe(Layer.provide(runnerLayer))

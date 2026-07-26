@@ -9,6 +9,7 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Location } from "@opencode-ai/core/location"
 import { LocationMutation } from "@opencode-ai/core/location-mutation"
+import { LSP } from "@opencode-ai/core/lsp"
 import { PermissionV2 } from "@opencode-ai/core/permission"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
@@ -81,6 +82,7 @@ const withTool = <A, E, R>(directory: string, body: (registry: ToolRegistry.Inte
           [FSUtil.node, filesystem],
           [Location.node, activeLocation],
           [PermissionV2.node, permission],
+          [LSP.node, Layer.succeed(LSP.Service, LSP.inert)],
           [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
         ],
       ),
@@ -298,7 +300,6 @@ test("keeps the locked write schema, semantics docstring, and deferred UX TODOs 
     "Add formatter integration after V2 formatter runtime exists.",
     "Publish watcher/file-edit events after V2 watcher integration exists.",
     "Add snapshots / undo after design exists.",
-    "Add LSP notification and diagnostics after V2 LSP runtime exists.",
   ]) {
     expect(source).toContain(`TODO: ${todo}`)
   }

@@ -8,6 +8,7 @@ import { FileMutation } from "@opencode-ai/core/file-mutation"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Location } from "@opencode-ai/core/location"
 import { LocationMutation } from "@opencode-ai/core/location-mutation"
+import { LSP } from "@opencode-ai/core/lsp"
 import { PermissionV2 } from "@opencode-ai/core/permission"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
@@ -107,6 +108,7 @@ const withTool = <A, E, R>(directory: string, body: (registry: ToolRegistry.Inte
           [FSUtil.node, filesystem],
           [Location.node, activeLocation],
           [PermissionV2.node, permission],
+          [LSP.node, Layer.succeed(LSP.Service, LSP.inert)],
           [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
         ],
       ),

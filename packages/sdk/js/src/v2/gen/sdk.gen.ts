@@ -10,7 +10,7 @@ import type {
   AppLogResponses,
   AppSkillsErrors,
   AppSkillsResponses,
-  Auth as Auth3,
+  Auth as Auth4,
   AuthRemoveErrors,
   AuthRemoveResponses,
   AuthSetErrors,
@@ -142,7 +142,7 @@ import type {
   ProjectListResponses,
   ProjectUpdateErrors,
   ProjectUpdateResponses,
-  PromptInput,
+  Prompt,
   ProviderAuthErrors,
   ProviderAuthResponses,
   ProviderListErrors,
@@ -195,6 +195,7 @@ import type {
   SessionGetResponses,
   SessionInitErrors,
   SessionInitResponses,
+  SessionInputPayload,
   SessionListErrors,
   SessionListResponses,
   SessionMessageErrors,
@@ -205,22 +206,6 @@ import type {
   SessionPromptAsyncResponses,
   SessionPromptErrors,
   SessionPromptResponses,
-  SessionQueueDrainPauseErrors,
-  SessionQueueDrainPauseResponses,
-  SessionQueueDrainResumeErrors,
-  SessionQueueDrainResumeResponses,
-  SessionQueueEnqueueErrors,
-  SessionQueueEnqueueResponses,
-  SessionQueueGetErrors,
-  SessionQueueGetResponses,
-  SessionQueueListErrors,
-  SessionQueueListResponses,
-  SessionQueueRemoveErrors,
-  SessionQueueRemoveResponses,
-  SessionQueueSendErrors,
-  SessionQueueSendResponses,
-  SessionQueueUpdateErrors,
-  SessionQueueUpdateResponses,
   SessionRevertErrors,
   SessionRevertResponses,
   SessionShareErrors,
@@ -313,6 +298,26 @@ import type {
   V2IntegrationListResponses,
   V2LocationGetErrors,
   V2LocationGetResponses,
+  V2McpAddErrors,
+  V2McpAddResponses,
+  V2McpAuthCallbackErrors,
+  V2McpAuthCallbackResponses,
+  V2McpAuthRemoveErrors,
+  V2McpAuthRemoveResponses,
+  V2McpAuthStartErrors,
+  V2McpAuthStartResponses,
+  V2McpConnectErrors,
+  V2McpConnectResponses,
+  V2McpDisconnectErrors,
+  V2McpDisconnectResponses,
+  V2McpResourceReadErrors,
+  V2McpResourceReadResponses,
+  V2McpResourcesErrors,
+  V2McpResourcesResponses,
+  V2McpResourceTemplatesErrors,
+  V2McpResourceTemplatesResponses,
+  V2McpStatusErrors,
+  V2McpStatusResponses,
   V2ModelListErrors,
   V2ModelListResponses,
   V2PermissionRequestListErrors,
@@ -351,6 +356,8 @@ import type {
   V2ReferenceListResponses,
   V2SessionActiveErrors,
   V2SessionActiveResponses,
+  V2SessionCommandErrors,
+  V2SessionCommandResponses,
   V2SessionCompactErrors,
   V2SessionCompactResponses,
   V2SessionContextErrors,
@@ -359,6 +366,8 @@ import type {
   V2SessionCreateResponses,
   V2SessionEventsErrors,
   V2SessionEventsResponses,
+  V2SessionForkErrors,
+  V2SessionForkResponses,
   V2SessionGetErrors,
   V2SessionGetResponses,
   V2SessionHistoryErrors,
@@ -387,16 +396,40 @@ import type {
   V2SessionQuestionRejectResponses,
   V2SessionQuestionReplyErrors,
   V2SessionQuestionReplyResponses,
+  V2SessionQueueDrainPauseErrors,
+  V2SessionQueueDrainPauseResponses,
+  V2SessionQueueDrainResumeErrors,
+  V2SessionQueueDrainResumeResponses,
+  V2SessionQueueEnqueueErrors,
+  V2SessionQueueEnqueueResponses,
+  V2SessionQueueGetErrors,
+  V2SessionQueueGetResponses,
+  V2SessionQueueListErrors,
+  V2SessionQueueListResponses,
+  V2SessionQueueRemoveErrors,
+  V2SessionQueueRemoveResponses,
+  V2SessionQueueSendErrors,
+  V2SessionQueueSendResponses,
+  V2SessionQueueUpdateErrors,
+  V2SessionQueueUpdateResponses,
   V2SessionRevertClearErrors,
   V2SessionRevertClearResponses,
   V2SessionRevertCommitErrors,
   V2SessionRevertCommitResponses,
   V2SessionRevertStageErrors,
   V2SessionRevertStageResponses,
+  V2SessionShareErrors,
+  V2SessionShareResponses,
+  V2SessionShellErrors,
+  V2SessionShellResponses,
   V2SessionSwitchAgentErrors,
   V2SessionSwitchAgentResponses,
   V2SessionSwitchModelErrors,
   V2SessionSwitchModelResponses,
+  V2SessionUnshareErrors,
+  V2SessionUnshareResponses,
+  V2SessionUpdateErrors,
+  V2SessionUpdateResponses,
   V2SessionWaitErrors,
   V2SessionWaitResponses,
   V2SkillListErrors,
@@ -495,7 +528,7 @@ export class Auth extends HeyApiClient {
   public set<ThrowOnError extends boolean = false>(
     parameters: {
       providerID: string
-      auth?: Auth3
+      auth?: Auth4
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -3375,319 +3408,6 @@ export class Provider extends HeyApiClient {
   }
 }
 
-export class Drain extends HeyApiClient {
-  /**
-   * Pause automatic FIFO dequeue while editing queued prompts. Explicit send-now and normal submits still run.
-   */
-  public pause<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<
-      SessionQueueDrainPauseResponses,
-      SessionQueueDrainPauseErrors,
-      ThrowOnError
-    >({
-      url: "/session/{sessionID}/queue/drain-pause",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Resume automatic FIFO dequeue after queue edit is cancelled or abandoned.
-   */
-  public resume<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<
-      SessionQueueDrainResumeResponses,
-      SessionQueueDrainResumeErrors,
-      ThrowOnError
-    >({
-      url: "/session/{sessionID}/queue/drain-resume",
-      ...options,
-      ...params,
-    })
-  }
-}
-
-export class Queue extends HeyApiClient {
-  /**
-   * List prompts waiting in the session queue.
-   */
-  public list<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<SessionQueueListResponses, SessionQueueListErrors, ThrowOnError>({
-      url: "/session/{sessionID}/queue",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Enqueue a prompt for the session (FIFO). Does not appear in the transcript until dequeued.
-   */
-  public enqueue<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      directory?: string
-      workspace?: string
-      messageID?: string
-      model?: {
-        providerID: string
-        modelID: string
-      }
-      agent?: string
-      noReply?: boolean
-      tools?: {
-        [key: string]: boolean
-      }
-      format?: OutputFormat
-      system?: string
-      variant?: string
-      delivery?: "immediate" | "deferred" | "queue" | "steer"
-      parts?: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "body", key: "messageID" },
-            { in: "body", key: "model" },
-            { in: "body", key: "agent" },
-            { in: "body", key: "noReply" },
-            { in: "body", key: "tools" },
-            { in: "body", key: "format" },
-            { in: "body", key: "system" },
-            { in: "body", key: "variant" },
-            { in: "body", key: "delivery" },
-            { in: "body", key: "parts" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<SessionQueueEnqueueResponses, SessionQueueEnqueueErrors, ThrowOnError>(
-      {
-        url: "/session/{sessionID}/queue",
-        ...options,
-        ...params,
-        headers: {
-          "Content-Type": "application/json",
-          ...options?.headers,
-          ...params.headers,
-        },
-      },
-    )
-  }
-
-  /**
-   * Remove a prompt from the session queue.
-   */
-  public remove<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      queueID: string
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "path", key: "queueID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).delete<SessionQueueRemoveResponses, SessionQueueRemoveErrors, ThrowOnError>(
-      {
-        url: "/session/{sessionID}/queue/{queueID}",
-        ...options,
-        ...params,
-      },
-    )
-  }
-
-  /**
-   * Load a queued prompt with full parts for editing.
-   */
-  public get<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      queueID: string
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "path", key: "queueID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<SessionQueueGetResponses, SessionQueueGetErrors, ThrowOnError>({
-      url: "/session/{sessionID}/queue/{queueID}",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Update a prompt waiting in the session queue.
-   */
-  public update<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      queueID: string
-      directory?: string
-      workspace?: string
-      body?: unknown
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "path", key: "queueID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { key: "body", map: "body" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).patch<SessionQueueUpdateResponses, SessionQueueUpdateErrors, ThrowOnError>({
-      url: "/session/{sessionID}/queue/{queueID}",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * Persist and run a queued prompt immediately.
-   */
-  public send<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      queueID: string
-      directory?: string
-      workspace?: string
-      body?: unknown
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "path", key: "queueID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { key: "body", map: "body" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<SessionQueueSendResponses, SessionQueueSendErrors, ThrowOnError>({
-      url: "/session/{sessionID}/queue/{queueID}/send",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  private _drain?: Drain
-  get drain(): Drain {
-    return (this._drain ??= new Drain({ client: this.client }))
-  }
-}
-
 export class Session2 extends HeyApiClient {
   /**
    * List sessions
@@ -4086,7 +3806,6 @@ export class Session2 extends HeyApiClient {
       format?: OutputFormat
       system?: string
       variant?: string
-      delivery?: "immediate" | "deferred" | "queue" | "steer"
       parts?: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
     },
     options?: Options<never, ThrowOnError>,
@@ -4107,7 +3826,6 @@ export class Session2 extends HeyApiClient {
             { in: "body", key: "format" },
             { in: "body", key: "system" },
             { in: "body", key: "variant" },
-            { in: "body", key: "delivery" },
             { in: "body", key: "parts" },
           ],
         },
@@ -4441,7 +4159,6 @@ export class Session2 extends HeyApiClient {
       format?: OutputFormat
       system?: string
       variant?: string
-      delivery?: "immediate" | "deferred" | "queue" | "steer"
       parts?: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
     },
     options?: Options<never, ThrowOnError>,
@@ -4462,7 +4179,6 @@ export class Session2 extends HeyApiClient {
             { in: "body", key: "format" },
             { in: "body", key: "system" },
             { in: "body", key: "variant" },
-            { in: "body", key: "delivery" },
             { in: "body", key: "parts" },
           ],
         },
@@ -4657,11 +4373,6 @@ export class Session2 extends HeyApiClient {
       ...options,
       ...params,
     })
-  }
-
-  private _queue?: Queue
-  get queue(): Queue {
-    return (this._queue ??= new Queue({ client: this.client }))
   }
 }
 
@@ -5421,6 +5132,253 @@ export class Agent extends HeyApiClient {
   }
 }
 
+export class Drain extends HeyApiClient {
+  /**
+   * Pause queue drain
+   */
+  public pause<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
+    return (options?.client ?? this.client).post<
+      V2SessionQueueDrainPauseResponses,
+      V2SessionQueueDrainPauseErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/queue/drain-pause",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Resume queue drain
+   */
+  public resume<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
+    return (options?.client ?? this.client).post<
+      V2SessionQueueDrainResumeResponses,
+      V2SessionQueueDrainResumeErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/queue/drain-resume",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class Queue extends HeyApiClient {
+  /**
+   * List queued inputs
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
+    return (options?.client ?? this.client).get<V2SessionQueueListResponses, V2SessionQueueListErrors, ThrowOnError>({
+      url: "/api/session/{sessionID}/queue",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Enqueue input
+   *
+   * Durably enqueue an input without starting an idle drain unless resume is true.
+   */
+  public enqueue<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      id?: string
+      payload?: SessionInputPayload
+      resume?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "id" },
+            { in: "body", key: "payload" },
+            { in: "body", key: "resume" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2SessionQueueEnqueueResponses,
+      V2SessionQueueEnqueueErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/queue",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Remove queued input
+   */
+  public remove<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      messageID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "messageID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<
+      V2SessionQueueRemoveResponses,
+      V2SessionQueueRemoveErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/queue/{messageID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get queued input
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      messageID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "messageID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<V2SessionQueueGetResponses, V2SessionQueueGetErrors, ThrowOnError>({
+      url: "/api/session/{sessionID}/queue/{messageID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Update queued input
+   */
+  public update<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      messageID: string
+      payload?: SessionInputPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "messageID" },
+            { in: "body", key: "payload" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<
+      V2SessionQueueUpdateResponses,
+      V2SessionQueueUpdateErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/queue/{messageID}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Send queued input now
+   *
+   * Atomically expedite a queued input into steer delivery and wake execution.
+   */
+  public send<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      messageID: string
+      payload?: SessionInputPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "messageID" },
+            { in: "body", key: "payload" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<V2SessionQueueSendResponses, V2SessionQueueSendErrors, ThrowOnError>({
+      url: "/api/session/{sessionID}/queue/{messageID}/send",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  private _drain?: Drain
+  get drain(): Drain {
+    return (this._drain ??= new Drain({ client: this.client }))
+  }
+}
+
 export class Revert extends HeyApiClient {
   /**
    * Stage session revert
@@ -5875,6 +5833,106 @@ export class Session3 extends HeyApiClient {
   }
 
   /**
+   * Update session
+   */
+  public update<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      title?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "title" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<V2SessionUpdateResponses, V2SessionUpdateErrors, ThrowOnError>({
+      url: "/api/session/{sessionID}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Fork session
+   */
+  public fork<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      messageID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "messageID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<V2SessionForkResponses, V2SessionForkErrors, ThrowOnError>({
+      url: "/api/session/{sessionID}/fork",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Unshare session
+   */
+  public unshare<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
+    return (options?.client ?? this.client).delete<V2SessionUnshareResponses, V2SessionUnshareErrors, ThrowOnError>({
+      url: "/api/session/{sessionID}/share",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Share session
+   */
+  public share<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
+    return (options?.client ?? this.client).post<V2SessionShareResponses, V2SessionShareErrors, ThrowOnError>({
+      url: "/api/session/{sessionID}/share",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
    * Switch session agent
    *
    * Switch the agent used by subsequent provider turns.
@@ -5961,7 +6019,8 @@ export class Session3 extends HeyApiClient {
     parameters: {
       sessionID: string
       id?: string
-      prompt?: PromptInput
+      prompt?: Prompt
+      payload?: SessionInputPayload
       delivery?: "steer" | "queue"
       resume?: boolean
     },
@@ -5975,6 +6034,7 @@ export class Session3 extends HeyApiClient {
             { in: "path", key: "sessionID" },
             { in: "body", key: "id" },
             { in: "body", key: "prompt" },
+            { in: "body", key: "payload" },
             { in: "body", key: "delivery" },
             { in: "body", key: "resume" },
           ],
@@ -5983,6 +6043,86 @@ export class Session3 extends HeyApiClient {
     )
     return (options?.client ?? this.client).post<V2SessionPromptResponses, V2SessionPromptErrors, ThrowOnError>({
       url: "/api/session/{sessionID}/prompt",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Run session command
+   *
+   * Expand a configured command into one durable current-session input and schedule execution.
+   */
+  public command<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      id?: string
+      name?: string
+      arguments?: string
+      payload?: SessionInputPayload
+      delivery?: "steer" | "queue"
+      resume?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "id" },
+            { in: "body", key: "name" },
+            { in: "body", key: "arguments" },
+            { in: "body", key: "payload" },
+            { in: "body", key: "delivery" },
+            { in: "body", key: "resume" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<V2SessionCommandResponses, V2SessionCommandErrors, ThrowOnError>({
+      url: "/api/session/{sessionID}/command",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Run a session shell command
+   *
+   * Run a shell command at the Session location and record its output in current Session history.
+   */
+  public shell<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      command?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "command" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<V2SessionShellResponses, V2SessionShellErrors, ThrowOnError>({
+      url: "/api/session/{sessionID}/shell",
       ...options,
       ...params,
       headers: {
@@ -6164,7 +6304,7 @@ export class Session3 extends HeyApiClient {
   /**
    * Get session messages
    *
-   * Retrieve projected messages for a session. Items keep the requested order across pages; use cursor.next or cursor.previous to move through the ordered timeline.
+   * Retrieve projected messages for a session. throughSeq is an atomic replay boundary for a subsequent event subscription. Items keep the requested order across pages; use cursor.next or cursor.previous to move through the ordered timeline.
    */
   public messages<ThrowOnError extends boolean = false>(
     parameters: {
@@ -6193,6 +6333,11 @@ export class Session3 extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  private _queue?: Queue
+  get queue(): Queue {
+    return (this._queue ??= new Queue({ client: this.client }))
   }
 
   private _revert?: Revert
@@ -7325,6 +7470,373 @@ export class ProjectCopy2 extends HeyApiClient {
   }
 }
 
+export class Auth3 extends HeyApiClient {
+  /**
+   * Remove MCP OAuth
+   */
+  public remove<ThrowOnError extends boolean = false>(
+    parameters: {
+      name: string
+      location?: {
+        directory?: string
+        workspace?: string
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "name" },
+            { in: "query", key: "location" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<V2McpAuthRemoveResponses, V2McpAuthRemoveErrors, ThrowOnError>({
+      url: "/api/mcp/{name}/auth",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Start MCP OAuth
+   */
+  public start<ThrowOnError extends boolean = false>(
+    parameters: {
+      name: string
+      location?: {
+        directory?: string
+        workspace?: string
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "name" },
+            { in: "query", key: "location" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<V2McpAuthStartResponses, V2McpAuthStartErrors, ThrowOnError>({
+      url: "/api/mcp/{name}/auth",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Complete MCP OAuth
+   */
+  public callback<ThrowOnError extends boolean = false>(
+    parameters: {
+      name: string
+      location?: {
+        directory?: string
+        workspace?: string
+      }
+      code?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "name" },
+            { in: "query", key: "location" },
+            { in: "body", key: "code" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<V2McpAuthCallbackResponses, V2McpAuthCallbackErrors, ThrowOnError>({
+      url: "/api/mcp/{name}/auth/callback",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Mcp2 extends HeyApiClient {
+  /**
+   * Get MCP server status
+   */
+  public status<ThrowOnError extends boolean = false>(
+    parameters?: {
+      location?: {
+        directory?: string
+        workspace?: string
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "location" }] }])
+    return (options?.client ?? this.client).get<V2McpStatusResponses, V2McpStatusErrors, ThrowOnError>({
+      url: "/api/mcp",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Add an MCP server
+   */
+  public add<ThrowOnError extends boolean = false>(
+    parameters?: {
+      location?: {
+        directory?: string
+        workspace?: string
+      }
+      name?: string
+      server?:
+        | {
+            type: "local"
+            command: Array<string>
+            cwd?: string
+            environment?: {
+              [key: string]: string
+            }
+            disabled?: boolean
+            timeout?: {
+              startup?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              request?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            }
+          }
+        | {
+            type: "remote"
+            url: string
+            headers?: {
+              [key: string]: string
+            }
+            oauth?:
+              | {
+                  client_id?: string
+                  client_secret?: string
+                  scope?: string
+                  callback_port?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                  redirect_uri?: string
+                }
+              | false
+            disabled?: boolean
+            timeout?: {
+              startup?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              request?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            }
+          }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "location" },
+            { in: "body", key: "name" },
+            { in: "body", key: "server" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<V2McpAddResponses, V2McpAddErrors, ThrowOnError>({
+      url: "/api/mcp",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Connect an MCP server
+   */
+  public connect<ThrowOnError extends boolean = false>(
+    parameters: {
+      name: string
+      location?: {
+        directory?: string
+        workspace?: string
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "name" },
+            { in: "query", key: "location" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<V2McpConnectResponses, V2McpConnectErrors, ThrowOnError>({
+      url: "/api/mcp/{name}/connect",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Disconnect an MCP server
+   */
+  public disconnect<ThrowOnError extends boolean = false>(
+    parameters: {
+      name: string
+      location?: {
+        directory?: string
+        workspace?: string
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "name" },
+            { in: "query", key: "location" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<V2McpDisconnectResponses, V2McpDisconnectErrors, ThrowOnError>({
+      url: "/api/mcp/{name}/disconnect",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * List MCP resources
+   */
+  public resources<ThrowOnError extends boolean = false>(
+    parameters?: {
+      location?: {
+        directory?: string
+        workspace?: string
+      }
+      server?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "location" },
+            { in: "query", key: "server" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<V2McpResourcesResponses, V2McpResourcesErrors, ThrowOnError>({
+      url: "/api/mcp/resource",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * List MCP resource templates
+   */
+  public resourceTemplates<ThrowOnError extends boolean = false>(
+    parameters?: {
+      location?: {
+        directory?: string
+        workspace?: string
+      }
+      server?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "location" },
+            { in: "query", key: "server" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      V2McpResourceTemplatesResponses,
+      V2McpResourceTemplatesErrors,
+      ThrowOnError
+    >({
+      url: "/api/mcp/resource-template",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Read an MCP resource
+   */
+  public resourceRead<ThrowOnError extends boolean = false>(
+    parameters?: {
+      location?: {
+        directory?: string
+        workspace?: string
+      }
+      server?: string
+      uri?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "location" },
+            { in: "body", key: "server" },
+            { in: "body", key: "uri" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<V2McpResourceReadResponses, V2McpResourceReadErrors, ThrowOnError>({
+      url: "/api/mcp/resource/read",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  private _auth?: Auth3
+  get auth(): Auth3 {
+    return (this._auth ??= new Auth3({ client: this.client }))
+  }
+}
+
 export class V2 extends HeyApiClient {
   private _health?: Health
   get health(): Health {
@@ -7409,6 +7921,11 @@ export class V2 extends HeyApiClient {
   private _projectCopy?: ProjectCopy2
   get projectCopy(): ProjectCopy2 {
     return (this._projectCopy ??= new ProjectCopy2({ client: this.client }))
+  }
+
+  private _mcp?: Mcp2
+  get mcp(): Mcp2 {
+    return (this._mcp ??= new Mcp2({ client: this.client }))
   }
 }
 

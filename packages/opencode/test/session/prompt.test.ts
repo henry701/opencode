@@ -35,7 +35,6 @@ import { SessionSummary } from "../../src/session/summary"
 import { Instruction } from "../../src/session/instruction"
 import { SessionProcessor } from "../../src/session/processor"
 import { SessionPrompt } from "../../src/session/prompt"
-import { SessionPromptQueue } from "../../src/session/prompt-queue"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
@@ -189,7 +188,6 @@ const promptRoot = LayerNode.group([
   BackgroundJob.node,
   SessionStatus.node,
   SessionRunState.node,
-  SessionPromptQueue.node,
   Database.node,
   EventV2Bridge.node,
   Question.node,
@@ -204,7 +202,6 @@ const promptRoot = LayerNode.group([
   Image.node,
   SessionCompaction.node,
   SessionRevert.node,
-  SessionPromptQueue.node,
   Instruction.node,
   SystemPrompt.node,
   CrossSpawnSpawner.node,

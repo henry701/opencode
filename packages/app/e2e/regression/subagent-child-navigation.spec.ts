@@ -1,6 +1,6 @@
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import { expect, test, type Page } from "@playwright/test"
-import { mockOpenCodeServer } from "../utils/mock-server"
+import { currentSession, mockOpenCodeServer } from "../utils/mock-server"
 import { expectSessionTitle } from "../utils/waits"
 
 const directory = "C:/OpenCode/SubagentNavigation"
@@ -68,20 +68,26 @@ async function setup(page: Page, events?: () => EventPayload[]) {
       default: { providerID: "opencode", modelID: "claude-opus-4-6" },
     },
     sessions: [session(parentID, parentTitle, 1700000000000), childSession()],
-    pageMessages: (sessionID) => ({ items: sessionID === parentID ? parentMessages() : [] }),
+    currentPageMessages: (sessionID) => ({
+      items: sessionID === parentID ? parentMessages().toReversed() : [],
+      throughSeq: 0,
+    }),
     events,
     eventRetry: events ? 16 : undefined,
   })
-  // The child session resolves via /session/:id but is absent from the /session list,
+  // The child session resolves by ID but is absent from the session list,
   // matching a subagent session that has not been loaded into the list cache yet.
   await page.route(
-    (url) => url.pathname === "/session" && url.port === (process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"),
+    (url) => url.pathname === "/api/session" && url.port === (process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"),
     (route) =>
       route.fulfill({
         status: 200,
         contentType: "application/json",
         headers: { "access-control-allow-origin": "*" },
-        body: JSON.stringify([session(parentID, parentTitle, 1700000000000)]),
+        body: JSON.stringify({
+          data: [currentSession(session(parentID, parentTitle, 1700000000000))],
+          cursor: {},
+        }),
       }),
   )
   await configurePage(page)
@@ -120,55 +126,40 @@ function parentMessages() {
   const assistantID = "msg_assistant_0001"
   return [
     {
-      info: {
-        id: userID,
-        sessionID: parentID,
-        role: "user",
-        time: { created: 1700000000000 },
+      id: userID,
+      type: "user" as const,
+      text: "Delegate work to a subagent",
+      files: [],
+      agents: [],
+      time: { created: 1700000000000 },
+      payload: {
+        version: 1 as const,
         agent: "build",
         model: { providerID: "opencode", modelID: "claude-opus-4-6" },
+        parts: [{ id: "prt_user_text_0001", type: "text" as const, text: "Delegate work to a subagent" }],
       },
-      parts: [
-        {
-          id: "prt_user_text_0001",
-          sessionID: parentID,
-          messageID: userID,
-          type: "text",
-          text: "Delegate work to a subagent",
-        },
-      ],
     },
     {
-      info: {
-        id: assistantID,
-        sessionID: parentID,
-        role: "assistant",
-        time: { created: 1700000001000, completed: 1700000002000 },
-        parentID: userID,
-        modelID: "claude-opus-4-6",
-        providerID: "opencode",
-        mode: "build",
-        agent: "build",
-        path: { cwd: directory, root: directory },
-        cost: 0.01,
-        tokens: { input: 100, output: 200, reasoning: 0, cache: { read: 0, write: 0 } },
-        finish: "stop",
-      },
-      parts: [
+      id: assistantID,
+      type: "assistant" as const,
+      time: { created: 1700000001000, completed: 1700000002000 },
+      model: { id: "claude-opus-4-6", providerID: "opencode" },
+      agent: "build",
+      cost: 0.01,
+      tokens: { input: 100, output: 200, reasoning: 0, cache: { read: 0, write: 0 } },
+      finish: "stop",
+      content: [
         {
           id: "prt_tool_task_0001",
-          sessionID: parentID,
-          messageID: assistantID,
-          type: "tool",
-          callID: "call_task_0001",
-          tool: "task",
+          type: "tool" as const,
+          name: "task",
+          time: { created: 1700000001000, completed: 1700000002000 },
           state: {
-            status: "completed",
+            status: "completed" as const,
             input: { description: taskDescription, subagent_type: "explore" },
-            output: "Subagent finished",
-            title: taskDescription,
-            metadata: { sessionId: childID },
-            time: { start: 1700000001000, end: 1700000002000 },
+            content: [{ type: "text" as const, text: "Subagent finished" }],
+            result: "Subagent finished",
+            structured: { title: taskDescription, sessionID: childID },
           },
         },
       ],

@@ -80,6 +80,7 @@ describe("Bedrock Converse route", () => {
         messages: [{ role: "user", content: [{ text: "Say hello." }] }],
         inferenceConfig: { maxTokens: 64, temperature: 0 },
       })
+      expect(prepared.metadata?.systemPrompt).toBe("You are concise.")
     }),
   )
 

@@ -2,9 +2,9 @@
 """
 Ad-hoc QA smoke for unified prompt queue via opencode-local.
 
-Runs in order:
-  1. `opencode-local run --interactive` (demo + mocked LLM)
-  2. `opencode-local` full TUI attach (mocked serve + queue API)
+Runs the current interactive surfaces:
+  1. `opencode-local` full TUI with a mocked LLM
+  2. `opencode-local attach` with a mocked server and queued API data
 
 Optional live Nemotron when OPENCODE_QA_LIVE=1 (often slow; may time out).
 
@@ -42,14 +42,14 @@ OPENCODE_LOCAL = os.environ.get("OPENCODE_QA_BIN", shutil.which("opencode-local"
 
 
 def cli_argv() -> list[str]:
-    """Prefer opencode-local; fall back to repo source when the binary lacks /queue routes."""
+    """Prefer opencode-local; fall back to repo source when the binary lacks current queue routes."""
     if os.environ.get("OPENCODE_QA_FORCE_SOURCE") == "1":
         return SOURCE_CLI
     if os.environ.get("OPENCODE_QA_BIN"):
         return [OPENCODE_LOCAL]
     if has_queue_routes(OPENCODE_LOCAL):
         return [OPENCODE_LOCAL]
-    print(f"  NOTE  {OPENCODE_LOCAL} lacks POST /session/:id/queue; using repo source CLI")
+    print(f"  NOTE  {OPENCODE_LOCAL} lacks POST /api/session/:id/queue; using repo source CLI")
     return SOURCE_CLI
 
 
@@ -93,19 +93,22 @@ def has_queue_routes(binary: str) -> bool:
                     break
             if not base_url:
                 return False
-            session = curl_json("POST", f"{base_url}/session", str(ws), {"title": "probe"})
-            sid = session.get("id")
+            session = response_data(
+                curl_json(
+                    "POST",
+                    f"{base_url}/api/session",
+                    str(ws),
+                    current_session_payload(ws),
+                )
+            )
+            sid = session.get("id") if isinstance(session, dict) else None
             if not sid:
                 return False
             curl_json(
                 "POST",
-                f"{base_url}/session/{sid}/queue",
+                f"{base_url}/api/session/{sid}/queue",
                 str(ws),
-                {
-                    "agent": "build",
-                    "model": {"providerID": "test", "modelID": "test-model"},
-                    "parts": [{"type": "text", "text": "probe"}],
-                },
+                current_queue_payload("probe"),
             )
             return True
         finally:
@@ -130,27 +133,27 @@ def test_provider_config(llm_url: str) -> str:
         {
             "formatter": False,
             "lsp": False,
-            "provider": {
+            "providers": {
                 "test": {
                     "name": "Test",
-                    "id": "test",
                     "env": [],
-                    "npm": "@ai-sdk/openai-compatible",
+                    "api": {
+                        "type": "aisdk",
+                        "package": "@ai-sdk/openai-compatible",
+                        "url": llm_url,
+                    },
+                    "request": {"body": {"apiKey": "test-key"}},
                     "models": {
                         "test-model": {
-                            "id": "test-model",
-                            "name": "Test Model",
-                            "attachment": False,
-                            "reasoning": False,
-                            "temperature": False,
-                            "tool_call": True,
-                            "release_date": "2025-01-01",
+                            "api": {"id": "test-model"},
+                            "capabilities": {
+                                "tools": True,
+                                "input": ["text"],
+                                "output": ["text"],
+                            },
                             "limit": {"context": 100_000, "output": 10_000},
-                            "cost": {"input": 0, "output": 0},
-                            "options": {},
                         }
                     },
-                    "options": {"apiKey": "test-key", "baseURL": llm_url},
                 }
             },
         }
@@ -355,6 +358,50 @@ def curl_json(method: str, url: str, directory: str, body: dict | None = None) -
         raise RuntimeError(f"curl {method} {url} returned non-JSON: {out[:200]!r}") from exc
 
 
+def response_data(response: object) -> object:
+    if isinstance(response, dict) and "data" in response:
+        return response["data"]
+    raise RuntimeError(f"current API response is missing data: {response!r}")
+
+
+def current_session_payload(directory: Path) -> dict:
+    return {
+        "agent": "build",
+        "model": {"providerID": "test", "id": "test-model"},
+        "location": {"directory": str(directory)},
+    }
+
+
+def current_queue_payload(text: str) -> dict:
+    return {
+        "payload": {
+            "version": 1,
+            "agent": "build",
+            "model": {"providerID": "test", "modelID": "test-model"},
+            "parts": [{"type": "text", "text": text}],
+        }
+    }
+
+
+def queued_text(item: object) -> str:
+    if not isinstance(item, dict):
+        return ""
+    payload = item.get("payload")
+    if not isinstance(payload, dict):
+        return ""
+    parts = payload.get("parts")
+    if not isinstance(parts, list):
+        return ""
+    return "\n".join(
+        part["text"]
+        for part in parts
+        if isinstance(part, dict)
+        and part.get("type") == "text"
+        and part.get("synthetic") is not True
+        and isinstance(part.get("text"), str)
+    )
+
+
 def start_serve(ws: Path, env: dict[str, str], cli: list[str]) -> tuple[subprocess.Popen[str], str]:
     port = 41000 + (os.getpid() % 1000)
     serve = subprocess.Popen(
@@ -493,27 +540,27 @@ def test_run_interactive_api_queue(report: QaReport, ws: Path, llm_url: str, cli
     try:
         serve, base_url = start_serve(ws, env, cli)
 
-        session = curl_json(
-            "POST",
-            f"{base_url}/session",
-            str(ws),
-            {"title": "qa-run-api-queue"},
+        session = response_data(
+            curl_json(
+                "POST",
+                f"{base_url}/api/session",
+                str(ws),
+                current_session_payload(ws),
+            )
         )
+        if not isinstance(session, dict) or not isinstance(session.get("id"), str):
+            raise RuntimeError(f"current session create returned invalid data: {session!r}")
         sid = session["id"]
 
         for text in ("queue-one", "queue-two", "queue-three"):
             curl_json(
                 "POST",
-                f"{base_url}/session/{sid}/queue",
+                f"{base_url}/api/session/{sid}/queue",
                 str(ws),
-                {
-                    "agent": "build",
-                    "model": {"providerID": "test", "modelID": "test-model"},
-                    "parts": [{"type": "text", "text": text}],
-                },
+                current_queue_payload(text),
             )
 
-        listed = curl_json("GET", f"{base_url}/session/{sid}/queue", str(ws))
+        listed = response_data(curl_json("GET", f"{base_url}/api/session/{sid}/queue", str(ws)))
         if not isinstance(listed, list) or len(listed) != 3:
             raise RuntimeError(f"expected 3 queued items via GET, got {listed!r}")
         report.ok("HTTP queue API holds 3 items before run attach")
@@ -626,22 +673,27 @@ def test_tui_attach_queue(
     try:
         serve, base_url = start_serve(ws, env, cli)
 
-        session = curl_json("POST", f"{base_url}/session", str(ws), {"title": "qa-tui-queue"})
+        session = response_data(
+            curl_json(
+                "POST",
+                f"{base_url}/api/session",
+                str(ws),
+                current_session_payload(ws),
+            )
+        )
+        if not isinstance(session, dict) or not isinstance(session.get("id"), str):
+            raise RuntimeError(f"current session create returned invalid data: {session!r}")
         sid = session["id"]
 
         for text in ("tui-q1", "tui-q2", "tui-q3"):
             curl_json(
                 "POST",
-                f"{base_url}/session/{sid}/queue",
+                f"{base_url}/api/session/{sid}/queue",
                 str(ws),
-                {
-                    "agent": "build",
-                    "model": {"providerID": "test", "modelID": "test-model"},
-                    "parts": [{"type": "text", "text": text}],
-                },
+                current_queue_payload(text),
             )
 
-        listed = curl_json("GET", f"{base_url}/session/{sid}/queue", str(ws))
+        listed = response_data(curl_json("GET", f"{base_url}/api/session/{sid}/queue", str(ws)))
         if not isinstance(listed, list) or len(listed) != 3:
             raise RuntimeError(f"expected 3 queued items via GET, got {listed!r}")
         report.ok("TUI attach path: HTTP queue API holds 3 items")
@@ -668,8 +720,8 @@ def test_tui_attach_queue(
             send_submit(child)
             time.sleep(0.8)
 
-            edited = curl_json("GET", f"{base_url}/session/{sid}/queue", str(ws))
-            if not isinstance(edited, list) or len(edited) != 3 or "-edited" not in edited[0].get("text", ""):
+            edited = response_data(curl_json("GET", f"{base_url}/api/session/{sid}/queue", str(ws)))
+            if not isinstance(edited, list) or len(edited) != 3 or "-edited" not in queued_text(edited[0]):
                 raise RuntimeError(f"Enter did not save queued edit in place: {edited!r}")
             report.ok("TUI Enter saves queued edit without sending it")
         except Exception as exc:

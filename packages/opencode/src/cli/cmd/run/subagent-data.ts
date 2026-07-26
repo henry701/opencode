@@ -3,6 +3,7 @@ import * as Locale from "@/util/locale"
 import {
   bootstrapSessionData,
   createSessionData,
+  currentPermissionRequest,
   formatError,
   reduceSessionData,
   type SessionData,
@@ -677,7 +678,9 @@ export function listSubagentTabs(data: SubagentData) {
 
 function snapshotQueues(data: SubagentData) {
   return {
-    permissions: listSubagentPermissions(data).sort((a, b) => a.id.localeCompare(b.id)),
+    permissions: listSubagentPermissions(data)
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map(currentPermissionRequest),
     questions: listSubagentQuestions(data).sort((a, b) => a.id.localeCompare(b.id)),
   }
 }

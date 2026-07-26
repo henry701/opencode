@@ -177,35 +177,6 @@ test("hydration does not clear text streamed before it starts", async () => {
   }
 })
 
-test("session hydration includes queued prompts already on the server", async () => {
-  const previous = Global.Path.state
-  await using tmp = await tmpdir()
-  Global.Path.state = tmp.path
-  await Bun.write(`${tmp.path}/kv.json`, "{}")
-
-  const queued = [
-    { id: "q_1", text: "first queued prompt" },
-    { id: "q_2", text: "second queued prompt" },
-    { id: "q_3", text: "third queued prompt" },
-    { id: "q_4", text: "fourth queued prompt" },
-  ]
-  const { app, sync } = await mount((url) => {
-    if (url.pathname === `/session/${sessionID}`) return json(session)
-    if (url.pathname === `/session/${sessionID}/message`) return json([])
-    if (url.pathname === `/session/${sessionID}/todo` || url.pathname === `/session/${sessionID}/diff`) return json([])
-    if (url.pathname === `/session/${sessionID}/queue`) return json(queued)
-    return undefined
-  })
-
-  try {
-    await sync.session.sync(sessionID)
-    expect(sync.data.prompt_queue[sessionID]).toEqual(queued)
-  } finally {
-    app.renderer.destroy()
-    Global.Path.state = previous
-  }
-})
-
 test("live messages merged during hydration retain the 100 message window", async () => {
   await using tmp = await tmpdir()
   await Bun.write(`${tmp.path}/kv.json`, "{}")

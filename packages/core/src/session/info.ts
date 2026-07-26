@@ -16,6 +16,7 @@ export function fromRow(row: typeof SessionTable.$inferSelect): SessionSchema.In
     id: SessionSchema.ID.make(row.id),
     projectID: ProjectV2.ID.make(row.project_id),
     title: row.title,
+    share: row.share_url ? { url: row.share_url } : undefined,
     parentID: row.parent_id ? SessionSchema.ID.make(row.parent_id) : undefined,
     agent: row.agent ? AgentV2.ID.make(row.agent) : undefined,
     model: row.model
@@ -41,6 +42,18 @@ export function fromRow(row: typeof SessionTable.$inferSelect): SessionSchema.In
     }),
     subpath: row.path ? RelativePath.make(row.path) : undefined,
     revert: row.revert ? { ...row.revert, messageID: SessionMessage.ID.make(row.revert.messageID) } : undefined,
+    summary:
+      row.summary_additions === null ||
+      row.summary_deletions === null ||
+      row.summary_files === null ||
+      row.summary_diffs === null
+        ? undefined
+        : {
+            additions: row.summary_additions,
+            deletions: row.summary_deletions,
+            files: row.summary_files,
+            diffs: row.summary_diffs,
+          },
     time: {
       created: DateTime.makeUnsafe(row.time_created),
       updated: DateTime.makeUnsafe(row.time_updated),

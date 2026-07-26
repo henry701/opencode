@@ -27,7 +27,7 @@ test("uses the latest message model instead of a stale saved default until the p
 
   page.on("request", (request) => {
     const url = new URL(request.url())
-    if (url.pathname === `/session/${sessionID}/prompt_async` && request.method() === "POST") {
+    if (url.pathname === `/api/session/${sessionID}/prompt` && request.method() === "POST") {
       promptRequests.push(request.postData() ?? "")
     }
   })
@@ -82,35 +82,29 @@ test("uses the latest message model instead of a stale saved default until the p
       default: { opencode: "big-pickle" },
     },
     sessions: [session],
-    pageMessages: () => ({
+    currentPageMessages: () => ({
       items: [
         {
-          info: {
-            id: "msg_user_model_history",
-            sessionID,
-            role: "user",
-            time: { created: 1700000000000 },
+          id: "msg_user_model_history",
+          type: "user",
+          text: "history selected another model",
+          payload: {
+            version: 1,
             agent: "build",
             model: historyModel,
+            parts: [{ id: "prt_user_model_history", type: "text", text: "history selected another model" }],
           },
-          parts: [
-            {
-              id: "prt_user_model_history",
-              sessionID,
-              messageID: "msg_user_model_history",
-              type: "text",
-              text: "history selected another model",
-            },
-          ],
+          time: { created: 1700000000000 },
         },
       ],
+      throughSeq: 0,
     }),
   })
 
   await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
   await expectSessionTitle(page, session.title)
 
-  const composer = page.locator('[data-component="session-composer"]')
+  const composer = page.locator('[data-component="session-prompt-dock"]')
   await expectAppVisible(composer)
   await expect(composer.locator('[data-action="prompt-model"]')).toContainText("Claude Sonnet 4")
 
@@ -142,7 +136,6 @@ test("keeps a manually selected model when submitting a brand-new web session", 
   }
   const sessions: Array<typeof session> = []
   const promptRequests: unknown[] = []
-  const events: Array<{ directory: string; payload: Record<string, unknown> }> = []
   let selectedModelUnavailable = false
 
   await page.addInitScript(
@@ -211,38 +204,14 @@ test("keeps a manually selected model when submitting a brand-new web session", 
       sessions.push(created)
       return created
     },
-    onPromptAsync: ({ body }) => {
-      promptRequests.push(body)
-      const request = body as {
-        messageID?: string
-        agent?: string
-        model?: { providerID: string; modelID: string }
-      }
-      events.push({
-        directory,
-        payload: {
-          type: "message.updated",
-          properties: {
-            info: {
-              id: request.messageID ?? "msg_new_session_model_selection",
-              sessionID: createdSessionID,
-              role: "user",
-              time: { created: 1700000000001 },
-              agent: request.agent ?? "Sisyphus - ultraworker",
-              model: request.model ?? { providerID: "opencode", modelID: "deepseek-v4-flash-free" },
-            },
-          },
-        },
-      })
+    onPrompt: ({ body }) => {
+      promptRequests.push((body as { payload?: unknown }).payload)
     },
-    pageMessages: () => ({ items: [] }),
-    events: () => events.splice(0, 1),
-    eventRetry: 16,
   })
 
   await page.goto(`/new-session?draftId=${draftID}`)
 
-  const draftComposer = page.locator('[data-component="session-new-composer"]')
+  const draftComposer = page.getByRole("main")
   const draftInput = draftComposer.locator('[data-component="prompt-input"]')
   await expectAppVisible(draftComposer)
   await expect(draftComposer.locator('[data-action="prompt-model"]')).toContainText("Big Pickle")
@@ -257,10 +226,13 @@ test("keeps a manually selected model when submitting a brand-new web session", 
   await draftComposer.locator('[data-action="prompt-submit"]').click()
 
   await expect.poll(() => promptRequests.length).toBe(1)
-  expect(promptRequests[0]).toMatchObject({ model: { providerID: "opencode", modelID: "deepseek-v4-flash-free" } })
+  expect(promptRequests[0]).toMatchObject({
+    agent: "build",
+    model: { providerID: "opencode", modelID: "deepseek-v4-flash-free" },
+  })
 
   await expectSessionTitle(page, "New session model selection regression")
-  const sessionComposer = page.locator('[data-component="session-composer"]')
+  const sessionComposer = page.locator('[data-component="session-prompt-dock"]')
   await expect(sessionComposer.locator('[data-action="prompt-model"]')).toContainText("DeepSeek V4 Flash Free")
   await page.waitForTimeout(750)
   await expect(sessionComposer.locator('[data-action="prompt-model"]')).toContainText("DeepSeek V4 Flash Free")
@@ -270,7 +242,10 @@ test("keeps a manually selected model when submitting a brand-new web session", 
   await sessionComposer.locator('[data-action="prompt-submit"]').click()
 
   await expect.poll(() => promptRequests.length).toBe(2)
-  expect(promptRequests[1]).toMatchObject({ model: { providerID: "opencode", modelID: "deepseek-v4-flash-free" } })
+  expect(promptRequests[1]).toMatchObject({
+    agent: "build",
+    model: { providerID: "opencode", modelID: "deepseek-v4-flash-free" },
+  })
   await expect(sessionComposer.locator('[data-action="prompt-model"]')).toContainText("DeepSeek V4 Flash Free")
 })
 
@@ -280,7 +255,7 @@ test("keeps a manually selected model when submitting with Enter on a Sisyphus s
 
   page.on("request", (request) => {
     const url = new URL(request.url())
-    if (url.pathname === `/session/${sessionID}/prompt_async` && request.method() === "POST") {
+    if (url.pathname === `/api/session/${sessionID}/prompt` && request.method() === "POST") {
       promptRequests.push(request.postData() ?? "")
     }
   })
@@ -343,13 +318,12 @@ test("keeps a manually selected model when submitting with Enter on a Sisyphus s
       },
     ],
     sessions: [session],
-    pageMessages: () => ({ items: [] }),
   })
 
   await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
   await expectSessionTitle(page, session.title)
 
-  const composer = page.locator('[data-component="session-composer"]')
+  const composer = page.locator('[data-component="session-prompt-dock"]')
   await expectAppVisible(composer)
   await expect(composer.locator('[data-action="prompt-model"]')).toContainText("Big Pickle")
 

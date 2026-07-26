@@ -2,9 +2,9 @@ export * as Database from "./database"
 
 import { EffectDrizzleSqlite } from "@opencode-ai/effect-drizzle-sqlite"
 import { layer as sqliteLayer } from "#sqlite"
-import { Context, Effect, Layer } from "effect"
+import { Config, Context, Effect, Layer } from "effect"
 import { Global } from "../global"
-import { Flag } from "../flag/flag"
+import { truthyConfig } from "../flag/flag"
 import { isAbsolute, join } from "path"
 import { DatabaseMigration } from "./migration"
 import { InstallationChannel } from "../installation/version"
@@ -40,18 +40,22 @@ export function layerFromPath(filename: string) {
   return layer.pipe(Layer.provide(sqliteLayer({ filename })))
 }
 
-export function path() {
-  if (Flag.OPENCODE_DB) {
-    if (Flag.OPENCODE_DB === ":memory:" || isAbsolute(Flag.OPENCODE_DB)) return Flag.OPENCODE_DB
-    return join(Global.Path.data, Flag.OPENCODE_DB)
+function resolvePath(input: { readonly file: string | undefined; readonly disableChannelDb: boolean }) {
+  if (input.file) {
+    if (input.file === ":memory:" || isAbsolute(input.file)) return input.file
+    return join(Global.Path.data, input.file)
   }
-  if (
-    ["latest", "beta", "prod"].includes(InstallationChannel) ||
-    process.env.OPENCODE_DISABLE_CHANNEL_DB === "1" ||
-    process.env.OPENCODE_DISABLE_CHANNEL_DB === "true"
-  )
+  if (["latest", "beta", "prod"].includes(InstallationChannel) || input.disableChannelDb)
     return join(Global.Path.data, "opencode.db")
   return join(Global.Path.data, `opencode-${InstallationChannel.replace(/[^a-zA-Z0-9._-]/g, "-")}.db`)
 }
 
-export const node = makeGlobalNode({ service: Service, layer: layerFromPath(path()), deps: [] })
+export const path = Effect.gen(function* () {
+  const file = yield* Config.string("OPENCODE_DB").pipe(Config.withDefault(undefined))
+  const disableChannelDb = yield* truthyConfig("OPENCODE_DISABLE_CHANNEL_DB")
+  return resolvePath({ file, disableChannelDb })
+}).pipe(Effect.orDie)
+
+const configuredLayer = Layer.unwrap(Effect.map(path, layerFromPath))
+
+export const node = makeGlobalNode({ service: Service, layer: configuredLayer, deps: [] })

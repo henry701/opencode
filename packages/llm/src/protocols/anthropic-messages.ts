@@ -24,6 +24,7 @@ import * as Cache from "./utils/cache"
 import { Lifecycle } from "./utils/lifecycle"
 import { ToolSchemaProjection } from "./utils/tool-schema"
 import { ToolStream } from "./utils/tool-stream"
+import { PreparedContext } from "./utils/prepared-context"
 
 const ADAPTER = "anthropic-messages"
 export const DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
@@ -834,6 +835,15 @@ export const protocol = Protocol.make({
   body: {
     schema: AnthropicMessagesBody,
     from: fromRequest,
+    context: (body) =>
+      PreparedContext.make(
+        (body.system ?? []).flatMap((part) => ("text" in part ? [part.text] : [])),
+        (body.tools ?? []).map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.input_schema,
+        })),
+      ),
   },
   stream: {
     event: Protocol.jsonEvent(AnthropicEvent),

@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { Effect, Schema, Stream } from "effect"
 import { HttpClientRequest } from "effect/unstable/http"
-import { LLM, LLMError, LLMEvent, Message, Model, ToolCallPart, Usage } from "../../src"
+import { LLM, LLMError, LLMEvent, Message, Model, PreparedRequest, ToolCallPart, Usage } from "../../src"
 import * as Azure from "../../src/providers/azure"
 import * as OpenAI from "../../src/providers/openai"
 import * as OpenAIChat from "../../src/protocols/openai-chat"
@@ -47,6 +47,40 @@ describe("OpenAI Chat route", () => {
         stream_options: { include_usage: true },
         max_tokens: 20,
         temperature: 0,
+      })
+    }),
+  )
+
+  it.effect("reports the exact provider body before streaming it", () =>
+    Effect.gen(function* () {
+      let prepared: PreparedRequest | undefined
+      let providerBody: unknown
+      const input = LLM.updateRequest(request, {
+        tools: [{ name: "lookup", description: "Lookup data", inputSchema: { type: "object" } }],
+      })
+      yield* LLMClient.stream(input, {
+        onPrepared: (value) =>
+          Effect.sync(() => {
+            prepared = value
+          }),
+      }).pipe(
+        Stream.runDrain,
+        Effect.provide(
+          dynamicResponse((request) =>
+            Effect.sync(() => {
+              providerBody = decodeJson(request.text)
+              return request.respond(sseEvents(deltaChunk({}, "stop")), {
+                headers: { "content-type": "text/event-stream" },
+              })
+            }),
+          ),
+        ),
+      )
+
+      expect(prepared?.body).toEqual(providerBody)
+      expect(prepared?.metadata?.systemPrompt).toBe("You are concise.")
+      expect(JSON.parse(String(prepared?.metadata?.toolDefinitions))).toEqual({
+        lookup: { description: "Lookup data", inputSchema: { type: "object" } },
       })
     }),
   )

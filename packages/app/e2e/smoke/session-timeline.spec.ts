@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test"
 import { base64Encode } from "@opencode-ai/core/util/encode"
-import { fixture, pageMessages } from "./session-timeline.fixture"
+import { currentPageMessages, fixture } from "./session-timeline.fixture"
 import { trackPageErrors, expectNoSmokeErrors } from "../utils/errors"
 import { mockOpenCodeServer } from "../utils/mock-server"
 import { APP_READY_TIMEOUT, expectAppVisible, expectSessionTitle } from "../utils/waits"
@@ -38,7 +38,7 @@ test.describe("smoke: session timeline", () => {
       provider: fixture.provider,
       directory: fixture.directory,
       project: fixture.project,
-      pageMessages,
+      currentPageMessages,
       messageDelay: 3_000,
       onMessages: (input) => requests.push({ before: input.before, phase: input.phase, at: performance.now() }),
     })
@@ -96,7 +96,7 @@ test.describe("smoke: session timeline", () => {
       provider: fixture.provider,
       directory: fixture.directory,
       project: fixture.project,
-      pageMessages,
+      currentPageMessages,
     })
     await configureSmokePage(page, fixture.directory)
 
@@ -118,7 +118,10 @@ test.describe("smoke: session timeline", () => {
       provider: fixture.provider,
       directory: fixture.directory,
       project: fixture.project,
-      pageMessages: (sessionID) => ({ items: fixture.messages[sessionID as keyof typeof fixture.messages] ?? [] }),
+      currentPageMessages: (sessionID) => ({
+        items: (fixture.messages[sessionID as keyof typeof fixture.messages] ?? []).toReversed(),
+        throughSeq: 0,
+      }),
     })
     await configureSmokePage(page, fixture.directory)
     await page.addInitScript(
@@ -140,9 +143,10 @@ test.describe("smoke: session timeline", () => {
 
     await page.goto(`/${base64Encode(fixture.directory)}/session/${fixture.targetID}`)
     await expectSessionTitle(page, fixture.expected.targetTitle)
+    await waitForTimelineStable(page)
     await switchTitlebarSession(page, fixture.sourceID, fixture.expected.sourceTitle)
 
-    const destination = fixture.messages[fixture.targetID].map((message) => message.info.id)
+    const destination = fixture.messages[fixture.targetID].map((message) => message.id)
     const last = fixture.expected.targetMessageIDs.at(-1)!
     await page.evaluate(
       ({ destination, last }) => {
@@ -244,7 +248,10 @@ test.describe("smoke: session timeline", () => {
       provider: fixture.provider,
       directory: fixture.directory,
       project: fixture.project,
-      pageMessages: (sessionID) => ({ items: fixture.messages[sessionID as keyof typeof fixture.messages] ?? [] }),
+      currentPageMessages: (sessionID) => ({
+        items: (fixture.messages[sessionID as keyof typeof fixture.messages] ?? []).toReversed(),
+        throughSeq: 0,
+      }),
     })
     await configureSmokePage(page, fixture.directory)
     await page.addInitScript(
@@ -266,7 +273,7 @@ test.describe("smoke: session timeline", () => {
     await page.goto(`/${base64Encode(fixture.directory)}/session/${fixture.sourceID}`)
     await expectSessionTitle(page, fixture.expected.sourceTitle)
     const last = fixture.expected.targetMessageIDs.at(-1)!
-    const destination = fixture.messages[fixture.targetID].map((message) => message.info.id)
+    const destination = fixture.messages[fixture.targetID].map((message) => message.id)
     await page.evaluate(
       ({ destination, last }) => {
         const ids = new Set(destination)
@@ -335,7 +342,7 @@ test.describe("smoke: session timeline", () => {
       provider: fixture.provider,
       directory: fixture.directory,
       project: fixture.project,
-      pageMessages,
+      currentPageMessages,
     })
     await configureSmokePage(page, fixture.directory)
 
@@ -584,7 +591,7 @@ async function scrollTimelineUp(page: Page, before: SmokeState) {
           return
         }
 
-        scroller.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -1, deltaMode: 0 }))
+        scroller.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -120, deltaMode: 0 }))
         scroller.scrollTop = Math.max(0, scroller.scrollTop - Math.max(80, Math.round(scroller.clientHeight * 0.45)))
 
         const read = () => (window as SmokeWindow).__timelineSmokeState?.().signature ?? ""
@@ -745,5 +752,5 @@ async function switchTitlebarSession(page: Page, sessionID: string, title: strin
 }
 
 async function expectSessionReady(page: Page) {
-  await expectAppVisible(page.getByRole("textbox", { name: /Ask anything/i }))
+  await expectAppVisible(page.getByRole("textbox", { name: "Prompt" }))
 }

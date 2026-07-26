@@ -218,7 +218,7 @@ function out(data: SessionData, commits: SessionCommit[], footer?: FooterOutput)
 
 export function pickBlockerView(input: { permission?: PermissionRequest; question?: QuestionRequest }): FooterView {
   if (input.permission) {
-    return { type: "permission", request: input.permission }
+    return { type: "permission", request: currentPermissionRequest(input.permission) }
   }
 
   if (input.question) {
@@ -226,6 +226,20 @@ export function pickBlockerView(input: { permission?: PermissionRequest; questio
   }
 
   return { type: "prompt" }
+}
+
+export function currentPermissionRequest(
+  request: PermissionRequest,
+): Extract<FooterView, { type: "permission" }>["request"] {
+  return {
+    id: request.id,
+    sessionID: request.sessionID,
+    action: request.permission,
+    resources: request.patterns,
+    save: request.always,
+    metadata: request.metadata,
+    source: request.tool ? { type: "tool", ...request.tool } : undefined,
+  }
 }
 
 export function blockerStatus(view: FooterView) {

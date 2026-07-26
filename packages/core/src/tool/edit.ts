@@ -14,6 +14,7 @@ import { makeLocationNode } from "../effect/app-node"
 import { FileMutation } from "../file-mutation"
 import { FSUtil } from "../fs-util"
 import { LocationMutation } from "../location-mutation"
+import { LSP } from "../lsp"
 import { PermissionV2 } from "../permission"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
@@ -36,6 +37,7 @@ export const Input = Schema.Struct({
 export const Output = Schema.Struct({
   files: Schema.Array(FileDiff.Info),
   replacements: Schema.Number,
+  diagnostics: Schema.optional(Schema.String),
 })
 export type Output = typeof Output.Type
 
@@ -63,6 +65,74 @@ const countOccurrences = (content: string, search: string) => {
   return count
 }
 
+const normalizeWhitespace = (text: string) => text.replace(/\s+/g, " ").trim()
+
+const levenshtein = (left: string, right: string) => {
+  if (left === "" || right === "") return Math.max(left.length, right.length)
+  const previous = Array.from({ length: right.length + 1 }, (_, index) => index)
+  for (let row = 1; row <= left.length; row++) {
+    let diagonal = previous[0]
+    previous[0] = row
+    for (let column = 1; column <= right.length; column++) {
+      const above = previous[column]
+      previous[column] = Math.min(
+        previous[column] + 1,
+        previous[column - 1] + 1,
+        diagonal + (left[row - 1] === right[column - 1] ? 0 : 1),
+      )
+      diagonal = above
+    }
+  }
+  return previous[right.length]
+}
+
+const correctedMatches = (content: string, search: string) => {
+  const wanted = search.endsWith("\n") ? search.slice(0, -1) : search
+  const wantedLines = wanted.split("\n")
+  const contentLines = content.split("\n")
+  const offsets = Array.from(content.matchAll(/^/gm), (match) => match.index)
+  const candidates = contentLines
+    .slice(0, Math.max(0, contentLines.length - wantedLines.length + 1))
+    .map((_, index) => {
+      const lines = contentLines.slice(index, index + wantedLines.length)
+      const text = content.slice(offsets[index], offsets[index] + lines.join("\n").length)
+      return { lines, text }
+    })
+
+  const direct = candidates.filter((candidate) =>
+    candidate.lines.every((line, index) => line.trim() === wantedLines[index]?.trim()),
+  )
+  if (direct.length > 0) return direct.map((candidate) => candidate.text)
+
+  const whitespace = candidates.filter(
+    (candidate) => normalizeWhitespace(candidate.text) === normalizeWhitespace(wanted),
+  )
+  if (whitespace.length > 0) return whitespace.map((candidate) => candidate.text)
+  if (wantedLines.length < 3) return []
+
+  const anchored = candidates
+    .filter(
+      (candidate) =>
+        candidate.lines[0]?.trim() === wantedLines[0]?.trim() &&
+        candidate.lines.at(-1)?.trim() === wantedLines.at(-1)?.trim(),
+    )
+    .map((candidate) => {
+      const middle = candidate.lines.slice(1, -1)
+      const similarity =
+        middle.reduce((total, line, index) => {
+          const expected = wantedLines[index + 1]?.trim() ?? ""
+          const actual = line.trim()
+          const length = Math.max(actual.length, expected.length)
+          return total + (length === 0 ? 1 : 1 - levenshtein(actual, expected) / length)
+        }, 0) / Math.max(1, middle.length)
+      return { ...candidate, similarity }
+    })
+    .filter((candidate) => candidate.similarity >= 0.65)
+    .toSorted((left, right) => right.similarity - left.similarity)
+  if (anchored.length === 0 || anchored[0]?.similarity === anchored[1]?.similarity) return []
+  return [anchored[0].text]
+}
+
 const previewLines = (value: string, prefix: "+" | "-") => {
   const lines = normalizeLineEndings(value).split("\n")
   const shown = lines.slice(0, 6).map((line) => `${prefix}${line.length > 240 ? `${line.slice(0, 240)}...` : line}`)
@@ -78,15 +148,13 @@ export const toModelOutput = (output: Output, oldString: string, newString: stri
     ...previewLines(oldString, "-"),
     ...previewLines(newString, "+"),
     "```",
+    ...(output.diagnostics ? [`\nLSP errors detected in this file, please fix:\n${output.diagnostics}`] : []),
   ].join("\n")
 
 /** Deferred V2 edit behavior and UX integrations remain visible at the model-facing seam. */
-// TODO: Port V1 fuzzy correction strategies only after exact-edit behavior is established: line-trimmed matching, block-anchor fallback, indentation correction, and similarity-threshold review.
 // TODO: Add formatter integration after V2 formatter runtime exists.
 // TODO: Publish watcher/file-edit events after V2 watcher integration exists.
 // TODO: Add snapshots / undo after design exists.
-// TODO: Add LSP notification and diagnostics after V2 LSP runtime exists.
-
 const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const tools = yield* Tools.Service
@@ -94,6 +162,7 @@ const layer = Layer.effectDiscard(
     const files = yield* FileMutation.Service
     const fs = yield* FSUtil.Service
     const permission = yield* PermissionV2.Service
+    const lsp = yield* LSP.Service
 
     yield* tools
       .register({
@@ -162,7 +231,15 @@ const layer = Layer.effectDiscard(
                 const ending = detectLineEnding(source.text)
                 const oldString = convertToLineEnding(input.oldString, ending)
                 const newString = convertToLineEnding(input.newString, ending)
-                const replacements = countOccurrences(source.text, oldString)
+                const corrected = source.text.includes(oldString) ? [oldString] : correctedMatches(source.text, oldString)
+                const matches = [...new Set(corrected)]
+                if (matches.length > 1) {
+                  return yield* new ToolFailure({
+                    message: "Found multiple corrected matches for oldString. Provide more surrounding context.",
+                  })
+                }
+                const search = matches[0] ?? oldString
+                const replacements = countOccurrences(source.text, search)
                 if (replacements === 0) {
                   return yield* new ToolFailure({
                     message:
@@ -177,9 +254,7 @@ const layer = Layer.effectDiscard(
                 }
 
                 const replaced =
-                  input.replaceAll === true
-                    ? source.text.replaceAll(oldString, newString)
-                    : source.text.replace(oldString, newString)
+                  input.replaceAll === true ? source.text.replaceAll(search, newString) : source.text.replace(search, newString)
                 const counts = diffLines(source.text, replaced).reduce(
                   (result, item) => ({
                     additions: result.additions + (item.added ? (item.count ?? 0) : 0),
@@ -195,6 +270,8 @@ const layer = Layer.effectDiscard(
                     content: joinBom(next.text, source.bom || next.bom),
                   }),
                 )
+                yield* lsp.touchFile(target.canonical, "document")
+                const diagnostics = LSP.report(target.canonical, (yield* lsp.diagnostics())[target.canonical] ?? [])
                 return {
                   files: [
                     {
@@ -205,6 +282,7 @@ const layer = Layer.effectDiscard(
                     },
                   ],
                   replacements,
+                  ...(diagnostics ? { diagnostics } : {}),
                 } satisfies Output
               })
             },
@@ -219,5 +297,5 @@ const layer = Layer.effectDiscard(
 export const node = makeLocationNode({
   name: "tool/edit",
   layer,
-  deps: [ToolRegistry.node, LocationMutation.node, FileMutation.node, FSUtil.node, PermissionV2.node],
+  deps: [ToolRegistry.node, LocationMutation.node, FileMutation.node, FSUtil.node, PermissionV2.node, LSP.node],
 })

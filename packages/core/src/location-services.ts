@@ -7,6 +7,7 @@ import { Config } from "./config"
 import { LayerNode } from "./effect/layer-node"
 import { Node } from "./effect/app-node"
 import { FileMutation } from "./file-mutation"
+import { FeatureFlag } from "./feature-flag"
 import { FileSystem } from "./filesystem"
 import { FileSystemSearch } from "./filesystem/search"
 import { Watcher } from "./filesystem/watcher"
@@ -14,7 +15,9 @@ import { Image } from "./image"
 import { Integration } from "./integration"
 import { Location } from "./location"
 import { LocationMutation } from "./location-mutation"
+import { LSP } from "./lsp"
 import { LocationServiceMap } from "./location-service-map"
+import { MCP } from "./mcp"
 import { PermissionV2 } from "./permission"
 import { PluginV2 } from "./plugin"
 import { PluginInternal } from "./plugin/internal"
@@ -33,6 +36,7 @@ import { Snapshot } from "./snapshot"
 import { SystemContextBuiltIns } from "./system-context/builtins"
 import { SystemContextRegistry } from "./system-context/registry"
 import { BuiltInTools } from "./tool/builtins"
+import { MCPTools } from "./tool/mcp"
 import { ReadToolFileSystem } from "./tool/read-filesystem"
 import { ToolRegistry } from "./tool/registry"
 import { ToolOutputStore } from "./tool-output-store"
@@ -43,6 +47,7 @@ export const locationServices = LayerNode.group([
   Location.node,
   Policy.node,
   Config.node,
+  MCP.node,
   AgentV2.node,
   CommandV2.node,
   Reference.node,
@@ -61,7 +66,9 @@ export const locationServices = LayerNode.group([
   SystemContextRegistry.node,
   SystemContextBuiltIns.node,
   LocationMutation.node,
+  LSP.node,
   FileMutation.node,
+  FeatureFlag.node,
   PermissionV2.node,
   ToolOutputStore.node,
   ToolRegistry.node,
@@ -73,6 +80,7 @@ export const locationServices = LayerNode.group([
   QuestionV2.node,
   ReadToolFileSystem.node,
   BuiltInTools.node,
+  MCPTools.node,
   SessionRunnerModel.node,
   Snapshot.node,
   SessionRunnerLLM.node,

@@ -1,5 +1,5 @@
 import { test } from "@playwright/test"
-import { fixture, pageMessages } from "../smoke/session-timeline.fixture"
+import { currentPageMessages, fixture } from "../smoke/session-timeline.fixture"
 import { mockOpenCodeServer } from "../utils/mock-server"
 import { expectAppVisible } from "../utils/waits"
 
@@ -9,15 +9,15 @@ test("shows loaded sessions before the directory path request resolves", async (
     provider: fixture.provider,
     directory: fixture.directory,
     project: fixture.project,
-    pageMessages,
+    currentPageMessages,
   })
 
   let releasePath!: () => void
   const pathBlocked = new Promise<void>((resolve) => {
     releasePath = resolve
   })
-  await page.route("**/path?*", async (route) => {
-    if (!new URL(route.request().url()).searchParams.has("directory")) return route.fallback()
+  await page.route("**/api/path?*", async (route) => {
+    if (!new URL(route.request().url()).searchParams.has("location[directory]")) return route.fallback()
     await pathBlocked
     return route.fallback()
   })

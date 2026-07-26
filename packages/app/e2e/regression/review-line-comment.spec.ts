@@ -84,6 +84,7 @@ test("stages a submitted line comment in the prompt context", async ({ page }) =
 async function openReview(page: Page) {
   await page.setViewportSize({ width: 700, height: 900 })
   await mockOpenCodeServer(page, {
+    protocol: "v2",
     directory,
     project: {
       id: "proj_review_line_comment_regression",
@@ -115,37 +116,32 @@ async function openReview(page: Page) {
           "diff --git a/src/review.ts b/src/review.ts\n--- a/src/review.ts\n+++ b/src/review.ts\n@@ -1,3 +1,3 @@\n export const first = 1\n-export const value = 'before'\n+export const value = 'after'\n export const last = 3\n",
       },
     ],
-    pageMessages: () => ({
+    currentPageMessages: () => ({
       items: [
         {
-          info: {
-            id: "msg_review_line_comment_regression",
-            sessionID,
-            role: "user",
-            time: { created: 1700000000000 },
-            summary: { diffs: [] },
+          id: "msg_review_line_comment_regression",
+          type: "user",
+          text: "Review this change.",
+          files: [],
+          agents: [],
+          time: { created: 1700000000000 },
+          payload: {
+            version: 1,
             agent: "build",
             model: { providerID: "opencode", modelID: "test" },
+            parts: [{ id: "prt_review_line_comment_regression", type: "text", text: "Review this change." }],
           },
-          parts: [
-            {
-              id: "prt_review_line_comment_regression",
-              sessionID,
-              messageID: "msg_review_line_comment_regression",
-              type: "text",
-              text: "Review this change.",
-            },
-          ],
         },
       ],
+      throughSeq: 0,
     }),
   })
 
   await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
   await expectSessionTitle(page, title)
-  const diffResponse = page.waitForResponse((response) => new URL(response.url()).pathname === "/vcs/diff")
+  const diffResponse = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/vcs/diff")
   await page.getByRole("tab", { name: "Changes" }).click()
-  expect(await (await diffResponse).json()).toHaveLength(1)
+  expect((await (await diffResponse).json()).data).toHaveLength(1)
 
   const review = page.locator('[data-component="session-review"]')
   await expectAppVisible(review)
