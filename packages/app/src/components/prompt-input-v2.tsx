@@ -6,7 +6,7 @@ import { Icon } from "@opencode-ai/ui/v2/icon"
 import { KeybindV2 } from "@opencode-ai/ui/v2/keybind-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import type { ReferenceInfo } from "@opencode-ai/sdk/v2/client"
-import { createEffect, createMemo, on, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, on, Show } from "solid-js"
 import { ModelSelectorPopoverV2 } from "@/components/dialog-select-model"
 import { DialogSelectModelUnpaidV2 } from "@/components/dialog-select-model-unpaid-v2"
 import type { PromptInputProps } from "@/components/prompt-input/contracts"
@@ -192,6 +192,7 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
     if (!id) return permission.isAutoAcceptingDirectory(sdk().directory)
     return permission.isAutoAccepting(id, sdk().directory)
   })
+  const [queueMode, setQueueMode] = createSignal(false)
   const submission = createPromptSubmit({
     prompt,
     info,
@@ -212,6 +213,11 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
     newSessionWorktree: () => props.newSessionWorktree,
     onNewSessionWorktreeReset: props.onNewSessionWorktreeReset,
     shouldQueue: props.shouldQueue,
+    queueMode,
+    resetQueueMode: () => setQueueMode(false),
+    editingQueueID: props.editingQueueID,
+    editingQueuePayload: props.editingQueuePayload,
+    resetEditingQueueID: props.resetEditingQueueID,
     onQueue: props.onQueue,
     onAbort: props.onAbort,
     onSubmit: props.onSubmit,
@@ -401,6 +407,19 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
         working,
         onSubmit: () => void submission.handleSubmit(new Event("submit")),
         onStop: () => void submission.abort(),
+        label: () => (props.editingQueueID?.() ? language.t("common.save") : language.t("prompt.action.send")),
+        queue: {
+          visible: () =>
+            !!props.onQueue && !!props.controls.session.id && !props.editingQueueID?.() && mode() === "normal",
+          active: queueMode,
+          label: () => (queueMode() ? language.t("prompt.action.sendDirect") : language.t("prompt.action.queue")),
+          keybind: ["Alt", "Enter"],
+          onToggle: () => setQueueMode((value) => !value),
+          onSubmit: () => {
+            setQueueMode(true)
+            void submission.handleSubmit(new Event("submit")).finally(() => setQueueMode(false))
+          },
+        },
       },
     },
   })

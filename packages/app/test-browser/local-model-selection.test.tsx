@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
+import { createMemoryHistory, MemoryRouter, Route } from "@solidjs/router"
 import { createContext, createSignal, useContext, type ParentProps } from "solid-js"
 import { createComponent, render } from "solid-js/web"
 import type { Component } from "solid-js"
@@ -30,6 +31,9 @@ const sameProviderSelectedModel = {
 
 beforeAll(async () => {
   mock.module("@solidjs/router", () => ({
+    createMemoryHistory,
+    MemoryRouter,
+    Route,
     useParams: () => params,
     useLocation: () => ({}),
     useNavigate: () => () => undefined,

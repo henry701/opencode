@@ -132,7 +132,15 @@ describe("bootstrapDirectory", () => {
 
     expect(store.status).toBe("partial")
 
-    await new Promise((resolve) => setTimeout(resolve, 80))
+    await new Promise<void>((resolve, reject) => {
+      const deadline = Date.now() + 1_000
+      const check = () => {
+        if (store.status === "complete" && mcpReads.length === 3) return resolve()
+        if (Date.now() >= deadline) return reject(new Error("bootstrap did not complete"))
+        setTimeout(check, 10)
+      }
+      check()
+    })
 
     expect(store.status).toBe("complete")
     expect(mcpReads.sort()).toEqual(["command", "resource", "status"])

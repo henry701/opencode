@@ -1197,6 +1197,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     if (!id) return permission.isAutoAcceptingDirectory(sdk().directory)
     return permission.isAutoAccepting(id, sdk().directory)
   })
+  const [queueMode, setQueueMode] = createSignal(false)
 
   const { abort, handleSubmit } =
     props.submission ??
@@ -1223,11 +1224,21 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       newSessionWorktree: () => props.newSessionWorktree,
       onNewSessionWorktreeReset: props.onNewSessionWorktreeReset,
       shouldQueue: props.shouldQueue,
+      queueMode,
+      resetQueueMode: () => setQueueMode(false),
+      editingQueueID: props.editingQueueID,
+      editingQueuePayload: props.editingQueuePayload,
+      resetEditingQueueID: props.resetEditingQueueID,
       onQueue: props.onQueue,
       onAbort: props.onAbort,
       onSubmit: props.onSubmit,
       model: props.controls.model.selection,
     })
+
+  const queue = (event: Event) => {
+    setQueueMode(true)
+    void Promise.resolve(handleSubmit(event)).finally(() => setQueueMode(false))
+  }
 
   const handleKeyDown = (event: KeyboardEvent) => {
     if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "u") {
@@ -1388,6 +1399,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         imageAttachments().length === 0 &&
         commentCount() === 0
       ) {
+        return
+      }
+      if (event.altKey && store.mode === "normal" && props.controls.session.id && props.onQueue && !props.editingQueueID?.()) {
+        queue(event)
         return
       }
       void handleSubmit(event)
@@ -1574,16 +1589,54 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
             />
 
             <div class="flex items-center gap-1 pointer-events-auto">
+              <Show when={store.mode === "normal" && props.controls.session.id && props.onQueue && !props.editingQueueID?.()}>
+                <TooltipV2
+                  placement="top"
+                  value={
+                    <>
+                      {queueMode() ? language.t("prompt.action.sendDirect") : language.t("prompt.action.queue")}
+                      <Show when={!queueMode()}>
+                        <KeybindV2 keys={["Alt", "Enter"]} variant="neutral" />
+                      </Show>
+                    </>
+                  }
+                >
+                  <IconButton
+                    data-action="prompt-queue-toggle"
+                    type="button"
+                    icon="bullet-list"
+                    variant={queueMode() ? "secondary" : "ghost"}
+                    class="size-8"
+                    aria-pressed={queueMode()}
+                    aria-label={queueMode() ? language.t("prompt.action.sendDirect") : language.t("prompt.action.queue")}
+                    onClick={() => setQueueMode((value) => !value)}
+                  />
+                </TooltipV2>
+              </Show>
               <Tooltip placement="top" inactive={!working() && blank()} value={tip()}>
                 <IconButton
                   data-action="prompt-submit"
                   type="submit"
                   disabled={!working() && blank()}
                   tabIndex={store.mode === "normal" ? undefined : -1}
-                  icon={stopping() ? "stop" : store.mode === "shell" ? "arrow-undo-down" : "arrow-up"}
+                  icon={
+                    stopping()
+                      ? "stop"
+                      : queueMode() && store.mode === "normal"
+                        ? "bullet-list"
+                        : store.mode === "shell"
+                          ? "arrow-undo-down"
+                          : "arrow-up"
+                  }
                   variant="primary"
                   class="size-8"
-                  aria-label={stopping() ? language.t("prompt.action.stop") : language.t("prompt.action.send")}
+                  aria-label={
+                    stopping()
+                      ? language.t("prompt.action.stop")
+                      : props.editingQueueID?.()
+                        ? language.t("common.save")
+                        : language.t("prompt.action.send")
+                  }
                 />
               </Tooltip>
             </div>

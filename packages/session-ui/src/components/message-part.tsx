@@ -1819,7 +1819,6 @@ function currentToolOutput(part: CurrentAssistantTool) {
 export function CurrentToolPart(props: CurrentToolPartProps) {
   const data = useData()
   const i18n = useI18n()
-  const location = useLocation()
   const input = createMemo(() => currentToolInput(props.part))
   const metadata = createMemo(() => currentToolMetadata(props.part))
   const render = createMemo(() => ToolRegistry.render(props.part.name))
@@ -1837,7 +1836,7 @@ export function CurrentToolPart(props: CurrentToolPartProps) {
     const value = metadata().sessionId
     if (typeof value === "string" && value) return value
   })
-  const taskHref = createMemo(() => sessionLink(taskID(), location.pathname, data.sessionHref))
+  const taskHref = createMemo(() => sessionLink(taskID(), data.sessionHref))
   const taskSubtitle = createMemo(() => {
     if (props.part.name !== "task") return
     const value = input().description

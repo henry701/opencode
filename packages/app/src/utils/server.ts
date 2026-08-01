@@ -69,4 +69,5 @@ export function createApiForServer(input: {
   })
 }
 
+export { createCurrentClientForServer } from "./current-client"
 export type ServerApi = OpenCodeClient

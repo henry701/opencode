@@ -172,6 +172,10 @@ export function PromptInputV2(props: PromptInputV2Props) {
               if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
                 event.preventDefault()
                 if (event.repeat) return
+                if (event.altKey && view.submit.queue?.visible()) {
+                  view.submit.queue.onSubmit()
+                  return
+                }
                 props.controller.submit()
               }
             }}
@@ -246,11 +250,35 @@ export function PromptInputV2(props: PromptInputV2Props) {
               )}
             </Show>
           </div>
+          <Show when={view.submit.queue?.visible() ? view.submit.queue : undefined}>
+            {(queue) => (
+              <TooltipV2
+                placement="top"
+                value={
+                  <>
+                    {queue().label()}
+                    <KeybindV2 keys={queue().keybind} variant="neutral" />
+                  </>
+                }
+              >
+                <ButtonV2
+                  type="button"
+                  variant="ghost-muted"
+                  size="normal"
+                  aria-pressed={queue().active()}
+                  aria-label={queue().label()}
+                  onClick={queue().onToggle}
+                >
+                  {queue().label()}
+                </ButtonV2>
+              </TooltipV2>
+            )}
+          </Show>
           <PromptInputV2SubmitButton
             mode={state.mode}
             stopping={view.submit.stopping()}
             disabled={!props.controller.canSubmit()}
-            sendLabel="Send"
+            sendLabel={view.submit.label?.() ?? "Send"}
             stopLabel="Stop"
             onSubmit={props.controller.submit}
             onStop={props.controller.stop}

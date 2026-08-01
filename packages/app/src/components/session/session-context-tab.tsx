@@ -92,7 +92,10 @@ function RawMessage(props: {
 
 const emptyMessages: readonly SessionMessage.Message[] = []
 
-export function SessionContextTab(props: { messages?: readonly SessionMessage.Message[]; session?: Session.Info }) {
+export function SessionContextTab(props: {
+  messages?: readonly SessionMessage.Message[]
+  session?: Session.Info
+}) {
   const language = useLanguage()
   const sdk = useSDK()
   const providers = useProviders(() => sdk().directory)

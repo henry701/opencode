@@ -39,6 +39,15 @@ export type PromptInputV2ViewConfig = {
     working?: Accessor<boolean>
     onSubmit: () => void
     onStop: () => void
+    label?: Accessor<string>
+    queue?: {
+      visible: Accessor<boolean>
+      active: Accessor<boolean>
+      label: Accessor<string>
+      keybind: string[]
+      onToggle: () => void
+      onSubmit: () => void
+    }
   }
   shell?: {
     onOpen: () => void

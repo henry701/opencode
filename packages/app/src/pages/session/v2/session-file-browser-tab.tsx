@@ -1,4 +1,4 @@
-import { createMemo, createSignal, createUniqueId, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, Show } from "solid-js"
 import { createQuery } from "@tanstack/solid-query"
 import { Icon } from "@opencode-ai/ui/icon"
 import { SessionFilePanelV2, SessionFilePanelV2Empty } from "@opencode-ai/session-ui/v2/session-file-panel-v2"
@@ -47,6 +47,8 @@ export function SessionFileBrowserTab(props: {
   const resultsID = `session-file-browser-results-${createUniqueId()}`
   const [filter, setFilter] = createSignal("")
   const [explicitHighlight, setExplicitHighlight] = createSignal<string>()
+  let sidebarViewport: HTMLDivElement | undefined
+  let sidebarScrollTop = 0
   const sidebarOpened = () => props.placeholder || props.state.sidebarOpened()
   const query = createMemo(() => filter().trim())
   const search = createQuery(() => {
@@ -81,6 +83,26 @@ export function SessionFileBrowserTab(props: {
   const title = createMemo(() => displayName(project() ?? { worktree: sdk().directory }))
   const optionID = (path: string) => `${resultsID}-option-${files().indexOf(path)}`
 
+  const setSidebarViewport = (element: HTMLDivElement) => {
+    sidebarViewport = element
+    const update = () => (sidebarScrollTop = element.scrollTop)
+    element.addEventListener("scroll", update)
+    onCleanup(() => element.removeEventListener("scroll", update))
+  }
+
+  createEffect(
+    on(
+      () => props.tab,
+      (_, previous) => {
+        if (previous === undefined) return
+        const scrollTop = sidebarScrollTop
+        requestAnimationFrame(() => {
+          if (sidebarViewport) sidebarViewport.scrollTop = scrollTop
+        })
+      },
+    ),
+  )
+
   const onFilterKeyDown = (event: KeyboardEvent & { currentTarget: HTMLInputElement }) => {
     if (event.key === "Escape" && query()) {
       event.preventDefault()
@@ -114,6 +136,7 @@ export function SessionFileBrowserTab(props: {
           filterExpanded={query().length > 0 && files().length > 0}
           width={props.state.sidebarWidth()}
           onWidthChange={props.state.resizeSidebar}
+          viewportRef={setSidebarViewport}
         >
           <Show
             when={query()}
