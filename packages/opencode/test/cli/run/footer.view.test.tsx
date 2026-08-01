@@ -741,6 +741,28 @@ test("direct footer keeps leader variant binding inactive when leader is disable
   }
 })
 
+test("direct footer queues the draft through the configured queue binding", async () => {
+  const submits: RunPrompt[] = []
+  const app = await renderFooter({
+    tuiConfig: createTuiResolvedConfig({ keybinds: { input_queue: "ctrl+shift+enter" } }),
+    onSubmit(prompt) {
+      submits.push(prompt)
+      return true
+    },
+  })
+
+  try {
+    await app.renderOnce()
+    "queued draft".split("").forEach((key) => app.mockInput.pressKey(key))
+    app.mockInput.pressKey("RETURN", { ctrl: true, shift: true })
+    await app.renderOnce()
+
+    expect(submits).toEqual([{ text: "queued draft", parts: [], queued: true }])
+  } finally {
+    app.cleanup()
+  }
+})
+
 test("direct footer submits slash autocomplete selections without dispatching shell completions", async () => {
   const submits: RunPrompt[] = []
   const app = await renderFooter({

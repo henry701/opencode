@@ -96,7 +96,7 @@ type RunLocalInput = {
   directory: string
   fetch: typeof globalThis.fetch
   resolveAgent: () => Promise<string | undefined>
-  session: (sdk: RunInput["sdk"]) => Promise<{ id: string; title?: string } | undefined>
+  session: (sdk: RunInput["sdk"], agent?: string) => Promise<{ id: string; title?: string } | undefined>
   share: (sdk: RunInput["sdk"], sessionID: string) => Promise<void>
   agent: RunInput["agent"]
   model: RunInput["model"]
@@ -935,7 +935,8 @@ export async function runInteractiveLocalMode(input: RunLocalInput): Promise<voi
         return session
       }
 
-      session = Promise.all([input.resolveAgent(), input.session(sdk)]).then(([agent, next]) => {
+      session = input.resolveAgent().then(async (agent) => {
+        const next = await input.session(sdk, agent)
         if (!next?.id) {
           throw new Error("Session not found")
         }

@@ -115,6 +115,37 @@ describe("Config", () => {
     }),
   )
 
+  it.effect("migrates a legacy custom provider into a usable v2 model", () =>
+    Effect.sync(() => {
+      const input = {
+        formatter: false,
+        lsp: false,
+        provider: {
+          test: {
+            name: "Test",
+            env: [],
+            npm: "@ai-sdk/openai-compatible",
+            models: {
+              "test-model": {
+                id: "test-model",
+                name: "Test Model",
+                tool_call: true,
+                limit: { context: 100_000, output: 10_000 },
+                cost: { input: 0, output: 0 },
+              },
+            },
+            options: { apiKey: "test-key", baseURL: "http://127.0.0.1:1/v1" },
+          },
+        },
+      }
+      const legacy = Schema.decodeUnknownSync(ConfigV1.Info)(input)
+      const migrated = Schema.decodeUnknownSync(Config.Info)(ConfigMigrateV1.migrate(legacy))
+
+      expect(migrated.providers?.test?.models?.["test-model"]?.api).toMatchObject({ id: "test-model" })
+      expect(migrated.providers?.test?.api?.settings).toEqual({ apiKey: "test-key" })
+    }),
+  )
+
   it.effect("migrates v1 command configuration", () =>
     Effect.sync(() => {
       expect(

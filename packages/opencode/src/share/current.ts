@@ -1,6 +1,8 @@
 export * as SessionSharingCurrent from "./current"
 
 import { Config } from "@/config/config"
+import { InstanceRef } from "@/effect/instance-ref"
+import { InstanceStore } from "@/project/instance-store"
 import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -30,15 +32,19 @@ const layer = Layer.effect(
     const { db } = yield* Database.Service
     const events = yield* EventV2.Service
     const sessions = yield* SessionV2.Service
+    const instances = yield* InstanceStore.Service
     const transport = yield* ShareTransport.Service
 
     const sync = Effect.fn("SessionSharingCurrent.sync")(function* (sessionID: SessionV2.ID) {
       const info = yield* sessions.get(sessionID)
       const messages = yield* sessions.messages({ sessionID, order: "asc" })
-      yield* transport.sync(sessionID, [
-        { type: "session", data: encodeInfo(info) },
-        ...messages.map((message) => ({ type: "message" as const, data: shareMessage(message) })),
-      ])
+      const instance = (yield* InstanceRef) ?? (yield* instances.load({ directory: info.location.directory }))
+      yield* transport
+        .sync(sessionID, [
+          { type: "session", data: encodeInfo(info) },
+          ...messages.map((message) => ({ type: "message" as const, data: shareMessage(message) })),
+        ])
+        .pipe(Effect.provideService(InstanceRef, instance))
     })
 
     const unsubscribe = yield* events.listen((event) => {
@@ -90,5 +96,5 @@ const layer = Layer.effect(
 export const node = LayerNode.make({
   service: SessionSharing.Service,
   layer,
-  deps: [Config.node, Database.node, EventV2.node, ShareTransport.node, SessionV2.node],
+  deps: [Config.node, Database.node, EventV2.node, ShareTransport.node, SessionV2.node, InstanceStore.node],
 })
