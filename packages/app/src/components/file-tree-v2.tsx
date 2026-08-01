@@ -168,27 +168,6 @@ export default function FileTreeV2(props: {
     void file.tree.list("")
   })
 
-  // Only scroll when the active path changes (or first appears in the tree).
-  // Do not re-scroll when expand/collapse reshuffles `rows()`.
-  let scrolledActive: string | undefined
-  createEffect(() => {
-    const path = active()
-    if (!path) {
-      scrolledActive = undefined
-      return
-    }
-    const index = rows().findIndex((row) => row.node.path === path)
-    if (index < 0) return
-    if (scrolledActive === path) return
-    scrolledActive = path
-    queueMicrotask(() => {
-      const next = rows().findIndex((row) => row.node.path === path)
-      if (next < 0) return
-      if (virtualizer.range && next >= virtualizer.range.startIndex && next <= virtualizer.range.endIndex) return
-      virtualizer.scrollToIndex(next, { align: "auto" })
-    })
-  })
-
   const selectFile = (node: FileTreeV2Node, action?: (file: FileNode) => void) => {
     action?.({
       ...node,

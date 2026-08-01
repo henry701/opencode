@@ -12,14 +12,33 @@ export interface MockServerConfig {
   directory: string
   project: unknown
   sessions: ({ id: string } & Record<string, unknown>)[]
-  pageMessages: (sessionId: string, limit: number, before?: string) => { items: unknown[]; cursor?: string }
+  createSession?: () => { id: string } & Record<string, unknown>
+  onPrompt?: (input: { sessionID: string; body: unknown }) => void
+  onPromptAsync?: (input: { sessionID: string; body: unknown }) => void
+  agents?: unknown[]
+  pageMessages?: (sessionId: string, limit: number, before?: string) => { items: unknown[]; cursor?: string }
+  currentPageMessages?: (
+    sessionID: string,
+    limit: number,
+    cursor?: string,
+  ) => {
+    items: unknown[]
+    cursor?: { previous?: string; next?: string }
+    throughSeq: number
+  }
   vcsDiff?: unknown[]
+  status?: Record<string, unknown>
+  queue?: Record<string, { id: string; text: string }[]>
+  queueDetails?: Record<string, Record<string, unknown>>
+  onQueueSend?: (input: { sessionID: string; queueID: string; raw: string | null; body: unknown }) => void
+  onQueueUpdate?: (input: { sessionID: string; queueID: string; raw: string | null; body: unknown }) => void
   messageDelay?: number
   beforeMessagesResponse?: (input: { sessionID: string; before?: string }) => Promise<void>
   onMessages?: (input: { sessionID: string; before?: string; phase: "start" | "end" }) => void
   message?: (sessionID: string, messageID: string) => unknown
   onMessage?: (input: { sessionID: string; messageID: string }) => void
   events?: () => unknown[]
+  currentEvents?: (input: { sessionID: string; after?: number }) => unknown[]
   eventRetry?: number
   todos?: (sessionID: string) => unknown[]
   permissions?: unknown[] | (() => unknown[])
@@ -43,7 +62,7 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
     },
     "/project": [config.project],
     "/project/current": config.project,
-    "/agent": [{ name: "build", mode: "primary" }],
+    "/agent": config.agents ?? [{ name: "build", mode: "primary" }],
     "/vcs": { branch: "main", default_branch: "main" },
     "/session": config.sessions,
   }
@@ -76,6 +95,10 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
       return config.protocol === "v2" ? json(route, {}, undefined, 404) : json(route, { healthy: true })
     if (path === "/api/health" && config.protocol === "v2")
       return json(route, { healthy: true, version: "2.0.0", pid: 1 })
+    if (path === "/api/session" && route.request().method() === "POST") {
+      const created = config.createSession?.()
+      if (created) return json(route, { data: currentSession(created, config.directory) })
+    }
     if (path === "/experimental/capabilities") return json(route, { backgroundSubagents: true })
     if (path === "/provider")
       return json(route, typeof config.provider === "function" ? config.provider() : config.provider)
@@ -120,6 +143,32 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
         },
         data: [],
       })
+    if (path === "/api/provider") return json(route, { location: location(config), data: currentCatalog(config).providers })
+    if (path === "/api/model") return json(route, { location: location(config), data: currentCatalog(config).models })
+    if (path === "/api/model/default") return json(route, { location: location(config), data: currentCatalog(config).default })
+    if (path === "/api/fs/list" && config.fileList) {
+      const files = await config.fileList(url.searchParams.get("path") ?? "")
+      return json(route, {
+        location: location(config),
+        data: files instanceof Array
+          ? files.map((entry) => {
+              const item = entry as { path: string; type: "file" | "directory" }
+              return { path: item.path, type: item.type }
+            })
+          : [],
+      })
+    }
+    if (path === "/api/fs/find" && config.findFiles) {
+      const files = await config.findFiles({
+        query: url.searchParams.get("query") ?? "",
+        dirs: url.searchParams.get("type") === "directory" ? "true" : "false",
+        limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
+      })
+      return json(route, {
+        location: location(config),
+        data: files instanceof Array ? files.map((path) => ({ path, type: "file" })) : [],
+      })
+    }
     if (path === "/api/agent")
       return json(route, {
         location: location(config),
@@ -208,7 +257,7 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
       })
     }
     if (path === "/api/session/active") {
-      const statuses = (config.sessionStatus ?? {}) as Record<string, { type?: string }>
+      const statuses = (config.sessionStatus ?? config.status ?? {}) as Record<string, { type?: string }>
       return json(route, {
         data: Object.fromEntries(
           Object.entries(statuses).flatMap(([id, status]) =>
@@ -216,6 +265,42 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
           ),
         ),
       })
+    }
+    const queueMatch = path.match(/^\/api\/session\/([^/]+)\/queue$/)
+    if (queueMatch && route.request().method() === "GET")
+      return json(route, {
+        data: (config.queue?.[queueMatch[1]] ?? []).map((item, position) => queuedInput(queueMatch[1]!, item, position)),
+      })
+    if (queueMatch && route.request().method() === "POST") return json(route, { data: { id: "msg_queue_mock" } })
+    const queueSendMatch = path.match(/^\/api\/session\/([^/]+)\/queue\/([^/]+)\/send$/)
+    if (queueSendMatch && route.request().method() === "POST") {
+      const raw = route.request().postData()
+      config.onQueueSend?.({
+        sessionID: queueSendMatch[1]!,
+        queueID: queueSendMatch[2]!,
+        raw,
+        body: raw ? JSON.parse(raw) : undefined,
+      })
+      return json(route, true)
+    }
+    const queueItemMatch = path.match(/^\/api\/session\/([^/]+)\/queue\/([^/]+)$/)
+    if (queueItemMatch && route.request().method() === "GET") {
+      const item = config.queue?.[queueItemMatch[1]!]?.find((entry) => entry.id === queueItemMatch[2])
+      return json(route, {
+        data:
+          config.queueDetails?.[queueItemMatch[1]!]?.[queueItemMatch[2]!] ??
+          queuedInput(queueItemMatch[1]!, item ?? { id: queueItemMatch[2]!, text: "" }, 0),
+      })
+    }
+    if (queueItemMatch && route.request().method() === "PATCH") {
+      const raw = route.request().postData()
+      config.onQueueUpdate?.({
+        sessionID: queueItemMatch[1]!,
+        queueID: queueItemMatch[2]!,
+        raw,
+        body: raw ? JSON.parse(raw) : undefined,
+      })
+      return json(route, true)
     }
     if (/^\/api\/session\/[^/]+\/shell$/.test(path) && route.request().method() === "POST") {
       return route.fulfill({ status: 204, headers: { "access-control-allow-origin": "*" } })
@@ -252,6 +337,13 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
       })
     }
 
+    const currentPromptMatch = path.match(/^\/api\/session\/([^/]+)\/prompt$/)
+    if (currentPromptMatch && route.request().method() === "POST") {
+      const body = route.request().postDataJSON()
+      config.onPrompt?.({ sessionID: currentPromptMatch[1]!, body })
+      return json(route, { data: { id: "msg_prompt_mock", sessionID: currentPromptMatch[1] } })
+    }
+
     const sessionMatch = path.match(/^\/session\/([^/]+)$/)
     if (sessionMatch) {
       const session = config.sessions.find((s) => s.id === sessionMatch[1])
@@ -277,13 +369,27 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
     const currentMessagesMatch = path.match(/^\/api\/session\/([^/]+)\/message$/)
     if (currentMessagesMatch) {
       const token = url.searchParams.get("cursor") ?? undefined
+      if (config.currentPageMessages) {
+        config.onMessages?.({ sessionID: currentMessagesMatch[1]!, before: token, phase: "start" })
+        await config.beforeMessagesResponse?.({ sessionID: currentMessagesMatch[1]!, before: token })
+        if (config.messageDelay !== undefined) await new Promise((resolve) => setTimeout(resolve, config.messageDelay))
+        const pageData = config.currentPageMessages?.(
+          currentMessagesMatch[1]!,
+          Number(url.searchParams.get("limit") ?? 100),
+          token,
+        ) ?? { items: [], throughSeq: 0 }
+        config.onMessages?.({ sessionID: currentMessagesMatch[1]!, before: token, phase: "end" })
+        return json(route, { data: pageData.items, throughSeq: pageData.throughSeq, cursor: pageData.cursor ?? {} })
+      }
       const before = token ? cursors.get(token) : undefined
       if (token && !before) return json(route, { error: "Invalid cursor" }, undefined, 400)
       config.onMessages?.({ sessionID: currentMessagesMatch[1], before, phase: "start" })
       await config.beforeMessagesResponse?.({ sessionID: currentMessagesMatch[1]!, before })
       if (config.messageDelay !== undefined) await new Promise((resolve) => setTimeout(resolve, config.messageDelay))
-      const pageData = config.pageMessages(currentMessagesMatch[1], Number(url.searchParams.get("limit") ?? 50), before)
       config.onMessages?.({ sessionID: currentMessagesMatch[1], before, phase: "end" })
+      const pageData = config.pageMessages?.(currentMessagesMatch[1], Number(url.searchParams.get("limit") ?? 50), before) ?? {
+        items: [],
+      }
       const cursor = pageData.cursor ? `cursor_${++nextCursor}` : undefined
       if (cursor) cursors.set(cursor, pageData.cursor!)
       return json(route, {
@@ -291,6 +397,17 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
         cursor: { next: cursor },
       })
     }
+
+    const currentEventsMatch = path.match(/^\/api\/session\/([^/]+)\/event$/)
+    if (currentEventsMatch)
+      return sse(
+        route,
+        config.currentEvents?.({
+          sessionID: currentEventsMatch[1]!,
+          after: url.searchParams.has("after") ? Number(url.searchParams.get("after")) : undefined,
+        }),
+        config.eventRetry,
+      )
 
     const messagesMatch = path.match(/^\/session\/([^/]+)\/message$/)
     if (messagesMatch) {
@@ -301,12 +418,19 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
       await config.beforeMessagesResponse?.({ sessionID: messagesMatch[1]!, before })
       if (config.messageDelay !== undefined) await new Promise((resolve) => setTimeout(resolve, config.messageDelay))
       const limit = Number(url.searchParams.get("limit") ?? 80)
-      const pageData = config.pageMessages(messagesMatch[1], limit, before)
+      const pageData = config.pageMessages?.(messagesMatch[1], limit, before) ?? { items: [] }
       config.onMessages?.({ sessionID: messagesMatch[1], before, phase: "end" })
       if (!pageData.cursor) return json(route, pageData.items)
       const cursor = `cursor_${++nextCursor}`
       cursors.set(cursor, pageData.cursor)
       return json(route, pageData.items, { "x-next-cursor": cursor })
+    }
+
+    const promptAsyncMatch = path.match(/^\/session\/([^/]+)\/prompt_async$/)
+    if (promptAsyncMatch && route.request().method() === "POST") {
+      const raw = route.request().postData()
+      config.onPromptAsync?.({ sessionID: promptAsyncMatch[1]!, body: raw ? JSON.parse(raw) : undefined })
+      return json(route, true)
     }
 
     if (url.port === targetPort && targetPort !== appPort) return json(route, {})
@@ -318,6 +442,43 @@ function location(config: MockServerConfig) {
   return {
     directory: config.directory,
     project: { id: (config.project as { id?: string }).id, directory: config.directory },
+  }
+}
+
+function currentCatalog(config: MockServerConfig) {
+  const value = typeof config.provider === "function" ? config.provider() : config.provider
+  if (!value || typeof value !== "object") return { providers: [], models: [], default: null }
+  const catalog = value as {
+    all?: { id?: string; name?: string; package?: string; models?: Record<string, { id?: string; name?: string; limit?: unknown }> }[]
+    default?: { providerID?: string; modelID?: string }
+  }
+  const providers = catalog.all ?? []
+  const models = providers.flatMap((provider) =>
+    Object.entries(provider.models ?? {}).map(([id, model]) => ({
+      id: model.id ?? id,
+      modelID: model.id ?? id,
+      providerID: provider.id ?? "",
+      name: model.name ?? model.id ?? id,
+      package: provider.package ?? "",
+      capabilities: { tools: true, input: ["text"], output: ["text"] },
+      variants: [],
+      time: { released: 0 },
+      cost: [],
+      status: "active" as const,
+      enabled: true,
+      limit: { context: 0, output: 0, ...(model.limit as Record<string, number> | undefined) },
+    })),
+  )
+  return {
+    providers: providers.map((provider) => ({
+      id: provider.id ?? "",
+      name: provider.name ?? provider.id ?? "",
+      package: provider.package ?? "",
+    })),
+    models,
+    default: models.find(
+      (model) => model.providerID === catalog.default?.providerID && model.id === catalog.default.modelID,
+    ) ?? null,
   }
 }
 
@@ -389,7 +550,8 @@ function currentMessage(value: unknown) {
     tokens: item.info.tokens,
     error: item.info.error,
     content: item.parts.flatMap<unknown>((part) => {
-      if (part.type === "text" || part.type === "reasoning") return [{ type: part.type, text: part.text ?? "" }]
+      if (part.type === "text" || part.type === "reasoning")
+        return [{ id: part.id ?? `${item.info.id}_${part.type}`, type: part.type, text: part.text ?? "" }]
       if (part.type !== "tool") return []
       const state = part.state as Record<string, unknown>
       return [
@@ -420,6 +582,21 @@ function currentMessage(value: unknown) {
         },
       ]
     }),
+  }
+}
+
+function queuedInput(sessionID: string, item: { id: string; text: string }, position: number) {
+  return {
+    id: item.id,
+    sessionID,
+    position,
+    timeCreated: position,
+    payload: {
+      version: 1,
+      agent: "build",
+      model: { providerID: "opencode", modelID: "test-model" },
+      parts: [{ type: "text", text: item.text }],
+    },
   }
 }
 

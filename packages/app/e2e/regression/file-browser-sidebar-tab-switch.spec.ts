@@ -35,13 +35,16 @@ test("keeps the file-browser sidebar mounted when switching file tabs", async ({
   await expect(panel.getByText("contents:file-00.ts", { exact: true })).toBeVisible()
 
   const viewport = panel.locator('[data-slot="session-review-v2-sidebar-tree"] .scroll-view__viewport')
-  await viewport.hover()
-  await page.mouse.wheel(0, 100_000)
+  await viewport.evaluate((element) => {
+    element.scrollTop = element.scrollHeight
+    element.dispatchEvent(new Event("scroll"))
+  })
   await expect
     .poll(() => viewport.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop))
     .toBeLessThanOrEqual(1)
   const scrolled = await viewport.evaluate((element) => element.scrollTop)
   expect(scrolled).toBeGreaterThan(0)
+  await expect(panel.getByRole("button", { name: "file-79.ts" })).toBeVisible()
   await writeProbe(page)
 
   await panel.getByRole("button", { name: "file-79.ts" }).click()

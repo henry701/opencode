@@ -1,19 +1,20 @@
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import { expect, test } from "@playwright/test"
 import { mockOpenCodeServer } from "../utils/mock-server"
-import { expectSessionTitle } from "../utils/waits"
 
 const directory = "C:/OpenCode/ReviewOpenFile"
 const projectID = "proj_review_open_file"
 const sessionID = "ses_review_open_file"
 const title = "Review open file"
 const server = `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`
+const sessionKey = `local\u0000${base64Encode(directory)}/${sessionID}`
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
 test("opens and searches project files inline", async ({ page }) => {
   const searches: { query: string; dirs?: string; limit?: number }[] = []
   await mockOpenCodeServer(page, {
+    protocol: "v2",
     directory,
     project: {
       id: projectID,
@@ -58,10 +59,32 @@ test("opens and searches project files inline", async ({ page }) => {
       searches.push(input)
       return input.query === "nested" ? ["src/nested.ts"] : []
     },
-    currentPageMessages: () => ({ items: [], throughSeq: 0 }),
+    pageMessages: () => ({
+      items: [],
+    }),
+    currentPageMessages: () => ({
+      items: [
+        {
+          id: "msg_context_user",
+          type: "user",
+          time: { created: 1700000000000 },
+          text: "Show context usage",
+        },
+        {
+          id: "msg_context_assistant",
+          type: "assistant",
+          agent: "build",
+          model: { providerID: "opencode", id: "test" },
+          time: { created: 1700000001000 },
+          tokens: { input: 120, output: 30, reasoning: 10, cache: { read: 20, write: 5 } },
+          content: [{ id: "prt_context_assistant", type: "text", text: "Context usage is available." }],
+        },
+      ],
+      throughSeq: 2,
+    }),
   })
   await page.addInitScript(
-    ({ directory, server, sessionID }) => {
+    ({ directory, server, sessionID, sessionKey }) => {
       localStorage.setItem("settings.v3", JSON.stringify({ general: { newLayoutDesigns: true } }))
       localStorage.setItem(
         "opencode.global.dat:server",
@@ -72,7 +95,10 @@ test("opens and searches project files inline", async ({ page }) => {
       )
       localStorage.setItem(
         "opencode.global.dat:layout",
-        JSON.stringify({ review: { diffStyle: "split", panelOpened: true } }),
+        JSON.stringify({
+          review: { diffStyle: "split", panelOpened: true },
+          sessionTabs: { [sessionKey]: { all: ["context"], active: "context" } },
+        }),
       )
       localStorage.setItem(
         "opencode.global.dat:review-panel-v2",
@@ -83,23 +109,23 @@ test("opens and searches project files inline", async ({ page }) => {
         JSON.stringify([{ type: "session", server, sessionId: sessionID }]),
       )
     },
-    { directory, server, sessionID },
+    { directory, server, sessionID, sessionKey },
   )
 
   await page.goto(`/server/${base64Encode(server)}/session/${sessionID}`)
-  await expectSessionTitle(page, title)
+  await expect(page.getByRole("link", { name: title }).first()).toBeVisible()
 
   const panel = page.locator("#review-panel")
   const sidebar = panel.locator('[data-slot="session-review-v2-sidebar"]')
   const sidebarToggle = panel.getByRole("button", { name: "Toggle file tree" })
-  const contextButton = page.getByRole("button", { name: "View context usage" })
-  await contextButton.click()
   await expect(panel.getByRole("tab", { name: "Context" })).toHaveAttribute("data-selected", "")
+  await expect(panel.getByText("assistant • msg_context_assistant", { exact: true })).toBeVisible()
+  await expect(panel.getByText("185", { exact: true })).toBeVisible()
   await panel.getByRole("button", { name: "Open file" }).click()
   await expect(panel.getByRole("tab", { name: "Open file" })).toHaveAttribute("data-selected", "")
   await expect(sidebarToggle).toBeDisabled()
   await expect(sidebar).toBeVisible()
-  await contextButton.click()
+  await panel.getByRole("tab", { name: "Context" }).click()
   await expect(panel.getByRole("tab", { name: "Context" })).toHaveAttribute("data-selected", "")
   await expect(sidebar).toBeHidden()
   await panel.getByRole("button", { name: "Open file" }).click()

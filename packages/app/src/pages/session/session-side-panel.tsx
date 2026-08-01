@@ -25,6 +25,8 @@ import { KeybindV2 } from "@opencode-ai/ui/v2/keybind-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import type { SnapshotFileDiff, VcsFileDiff } from "@opencode-ai/sdk/v2"
 import type { FileDiffInfo } from "@opencode-ai/client/promise"
+import type { SessionMessage } from "@opencode-ai/schema/session-message"
+import type { Session } from "@opencode-ai/schema/session"
 import { ConstrainDragYAxis, getDraggableId } from "@/utils/solid-dnd"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 
@@ -80,6 +82,8 @@ export function SessionSidePanel(props: {
   reviewSnap: boolean
   size: Sizing
   stacked?: boolean
+  contextMessages: () => readonly SessionMessage.Message[]
+  contextSession: () => Session.Info | undefined
 }) {
   const layout = useLayout()
   const settings = useSettings()
@@ -384,7 +388,11 @@ export function SessionSidePanel(props: {
                                   onMiddleClick={() => tabs().close("context")}
                                 >
                                   <div class="flex items-center gap-2">
-                                    <SessionContextUsage variant="indicator" />
+                                    <SessionContextUsage
+                                      variant="indicator"
+                                      messages={props.contextMessages}
+                                      session={props.contextSession}
+                                    />
                                     <div>{language.t("session.tab.context")}</div>
                                   </div>
                                 </Tabs.Trigger>
@@ -491,7 +499,7 @@ export function SessionSidePanel(props: {
                           <Show when={activeTab() === "context"}>
                             <Tabs.Content value="context" class="flex flex-col h-full overflow-hidden contain-strict">
                               <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
-                                <SessionContextTab />
+                                <SessionContextTab messages={props.contextMessages()} session={props.contextSession()} />
                               </div>
                             </Tabs.Content>
                           </Show>
@@ -598,7 +606,11 @@ export function SessionSidePanel(props: {
                                 onMiddleClick={() => tabs().close("context")}
                               >
                                 <div class="flex items-center gap-2">
-                                  <SessionContextUsage variant="indicator" />
+                                  <SessionContextUsage
+                                    variant="indicator"
+                                    messages={props.contextMessages}
+                                    session={props.contextSession}
+                                  />
                                   <div>{language.t("session.tab.context")}</div>
                                 </div>
                               </Tabs.Trigger>
@@ -719,7 +731,7 @@ export function SessionSidePanel(props: {
                         <Show when={activeTab() === "context"}>
                           <Tabs.Content value="context" class="flex flex-col h-full overflow-hidden contain-strict">
                             <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
-                              <SessionContextTab />
+                              <SessionContextTab messages={props.contextMessages()} session={props.contextSession()} />
                             </div>
                           </Tabs.Content>
                         </Show>

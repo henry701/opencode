@@ -3,7 +3,7 @@ import type { Page } from "@playwright/test"
 export type SseConnectionRecord = {
   id: number
   url: string
-  path: "/global/event" | "/event" | "/api/event"
+  path: string
   headers: Record<string, string>
   openedAt: number
   endedAt?: number
@@ -57,11 +57,11 @@ type BrowserTransport = Window & {
 
 export async function installSseTransport<T>(
   page: Page,
-  options: { server: string; retry?: number },
+  options: { server: string; path?: string; retry?: number },
 ): Promise<SseTransport<T>> {
   const server = new URL(options.server).origin
   await page.addInitScript(
-    ({ server, retry }) => {
+    ({ server, path, retry }) => {
       type Connection = SseConnectionRecord & { controller: ReadableStreamDefaultController<Uint8Array> }
       type ProbeWindow = Window & {
         __visualStabilityProbe?: { startedAt: number; markers: { at: number; label: string }[] }
@@ -176,7 +176,9 @@ export async function installSseTransport<T>(
         const url = new URL(request.url)
         if (
           url.origin !== server ||
-          (url.pathname !== "/global/event" && url.pathname !== "/event" && url.pathname !== "/api/event")
+          (path
+            ? url.pathname !== path
+            : url.pathname !== "/global/event" && url.pathname !== "/event" && url.pathname !== "/api/event")
         )
           return originalFetch(request)
 
@@ -234,7 +236,7 @@ export async function installSseTransport<T>(
       }
       Object.defineProperty(window, "fetch", { configurable: true, writable: true, value: fetch })
     },
-    { server, retry: options.retry },
+    { server, path: options.path, retry: options.retry },
   )
 
   const command = <Result>(input: BrowserCommand<T>) =>
