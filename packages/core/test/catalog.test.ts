@@ -101,6 +101,24 @@ describe("CatalogV2", () => {
     }).pipe(Effect.provide(localCatalogLayer))
   })
 
+  it.effect("derives availability from an AISDK provider API key", () =>
+    Effect.gen(function* () {
+      const catalog = yield* Catalog.Service
+      const providerID = ProviderV2.ID.make("test")
+      yield* catalog.transform((editor) =>
+        editor.provider.update(providerID, (provider) => {
+          provider.api = {
+            type: "aisdk",
+            package: "@ai-sdk/openai-compatible",
+            settings: { apiKey: "test-key" },
+          }
+        }),
+      )
+
+      expect((yield* catalog.provider.available()).map((provider) => provider.id)).toContain(providerID)
+    }),
+  )
+
   it.effect("projects environment connections without a catalog plugin", () =>
     Effect.acquireUseRelease(
       Effect.sync(() => {

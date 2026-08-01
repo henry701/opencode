@@ -252,6 +252,15 @@ describe("current interactive session presentation", () => {
       thinking: true,
       limits: () => ({}),
       footer: ui.api,
+      listQueue: async () => [{ id: "msg_queued", text: "queued before attach" }],
+    })
+    const history = requests.find((item) => new URL(item.url).pathname.endsWith("/history"))
+    expect(history).toBeDefined()
+    expect(new URL(history!.url).searchParams.get("limit")).toBe("100")
+    expect(ui.events).toContainEqual({
+      type: "queue",
+      queue: 1,
+      queued: [{ id: "msg_queued", text: "queued before attach" }],
     })
     const prompt = {
       text: "hello",

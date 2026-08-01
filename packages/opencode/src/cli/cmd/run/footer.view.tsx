@@ -548,6 +548,20 @@ export function RunFooterView(props: RunFooterViewProps) {
 
   useBindings(() => ({
     mode: OPENCODE_BASE_MODE,
+    enabled: active().type === "prompt" && route().type === "composer" && !composer.visible(),
+    commands: [
+      {
+        name: "input.queue",
+        title: "Queue prompt",
+        category: "Prompt",
+        run: composer.onQueue,
+      },
+    ],
+    bindings: props.tuiConfig.keybinds.get("input.queue"),
+  }))
+
+  useBindings(() => ({
+    mode: OPENCODE_BASE_MODE,
     enabled: active().type === "prompt" && route().type === "composer" && foregroundSubagents(),
     priority: 1,
     commands: [

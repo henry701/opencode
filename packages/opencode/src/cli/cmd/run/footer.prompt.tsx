@@ -90,6 +90,7 @@ export type PromptState = {
   rows: Accessor<number>
   requestExit: () => boolean
   onSubmit: () => void
+  onQueue: () => void
   submitText: (text: string) => void
   openEditor: (input?: { value?: string }) => Promise<void>
   onKeyDown: (event: KeyEvent) => void
@@ -1222,6 +1223,11 @@ export function createPromptState(input: PromptInput): PromptState {
     submitPrompt(clonePrompt(draft))
   }
 
+  const onQueue = () => {
+    syncDraft()
+    submitPrompt({ ...clonePrompt(draft), queued: true })
+  }
+
   const submitText = (text: string) => {
     submitPrompt({ text, parts: [] })
   }
@@ -1291,6 +1297,7 @@ export function createPromptState(input: PromptInput): PromptState {
     rows: menu.rows,
     requestExit,
     onSubmit,
+    onQueue,
     submitText,
     openEditor,
     onKeyDown,

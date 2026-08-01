@@ -19,6 +19,8 @@ import { SessionSharing } from "@opencode-ai/core/session/share"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { DateTime, Effect, Layer } from "effect"
 import { Config } from "@/config/config"
+import { InstanceBootstrap } from "@/project/bootstrap"
+import { InstanceStore } from "@/project/instance-store"
 import { SessionSharingCurrent } from "@/share/current"
 import { ShareTransport } from "@/share/transport"
 import { resetDatabase } from "../fixture/db"
@@ -68,6 +70,7 @@ const projects = Layer.succeed(
     commit: () => Effect.void,
   }),
 )
+const bootstrap = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
 const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
@@ -83,6 +86,7 @@ const it = testEffect(
       [ProjectV2.node, projects],
       [SessionExecution.node, SessionExecution.noopLayer],
       [ShareTransport.node, transport],
+      [InstanceStore.bootstrapNode, bootstrap],
     ],
   ),
 )

@@ -420,7 +420,7 @@ function currentEventKey(event: SessionsEventsOutput) {
 async function latestSequence(client: CurrentClient, sessionID: string) {
   let after: number | undefined
   while (true) {
-    const page = await client.sessions.history({ sessionID, after, limit: 1000 })
+    const page = await client.sessions.history({ sessionID, after, limit: 100 })
     const next = page.data.at(-1)?.durable?.seq
     if (!page.hasMore || next === undefined) return next
     after = next
@@ -528,6 +528,8 @@ export async function createCurrentSessionTransport(input: StreamInput): Promise
     await publish(event)
   }
   const active = await input.client.sessions.active()
+  const queued = await input.listQueue?.().catch(() => undefined)
+  if (queued) input.footer.event({ type: "queue", queue: queued.length, queued })
   input.footer.event({
     type: "stream.patch",
     patch: {

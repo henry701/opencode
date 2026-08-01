@@ -34,6 +34,10 @@ import {
 
 type ModelInput = Parameters<OpencodeClient["session"]["prompt"]>[0]["model"]
 
+export function isInteractiveRun(input: { mini?: boolean; interactive?: boolean }) {
+  return input.mini || input.interactive
+}
+
 function pick(value: string | undefined): ModelInput | undefined {
   if (!value) return undefined
   const [providerID, ...rest] = value.split("/")
@@ -276,7 +280,7 @@ export const RunCommand = effectCmd({
     const localInstance = yield* InstanceRef
     yield* Effect.promise(async () => {
       const rawMessage = [...args.message, ...(args["--"] || [])].join(" ")
-      const interactive = args.mini
+      const interactive = isInteractiveRun(args)
       const auto = args.auto || args.yolo || args["dangerously-skip-permissions"]
       const thinking = interactive ? (args.thinking ?? true) : (args.thinking ?? false)
       const die = (message: string): never => {
@@ -299,7 +303,7 @@ export const RunCommand = effectCmd({
         die("--mini cannot be used with --command")
       }
 
-      if (interactive && args._?.[0] !== "mini") {
+      if (args.mini && args._?.[0] !== "mini") {
         die("--mini must be used without the run subcommand")
       }
 
@@ -459,7 +463,7 @@ export const RunCommand = effectCmd({
         return message.slice(0, 50) + (message.length > 50 ? "..." : "")
       }
 
-      async function session(sdk: OpencodeClient): Promise<SessionInfo | undefined> {
+      async function session(sdk: OpencodeClient, agent?: string): Promise<SessionInfo | undefined> {
         if (args.session) {
           const current = await sdk.session
             .get({
@@ -522,9 +526,16 @@ export const RunCommand = effectCmd({
         }
 
         const name = title()
+        const model = pick(args.model)
         const result = await sdk.session.create({
           title: name,
           permission: [...rules],
+          agent,
+          model: model && {
+            providerID: model.providerID,
+            id: model.modelID,
+            ...(args.variant === undefined ? {} : { variant: args.variant }),
+          },
         })
         const id = result.data?.id
         if (!id) {
@@ -577,7 +588,9 @@ export const RunCommand = effectCmd({
       }
 
       async function localAgent() {
-        if (!args.agent) return undefined
+        if (!args.agent) {
+          return Effect.runPromise(agentSvc.defaultAgent().pipe(Effect.provideService(InstanceRef, localInstance)))
+        }
         const name = args.agent
 
         const entry = await Effect.runPromise(
@@ -643,8 +656,8 @@ export const RunCommand = effectCmd({
       }
 
       async function pickAgent(sdk: OpencodeClient) {
-        if (!args.agent) return undefined
         if (args.attach) {
+          if (!args.agent) return undefined
           return attachAgent(sdk)
         }
 
