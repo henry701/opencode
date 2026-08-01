@@ -64,6 +64,7 @@ export function DirectoryDataProvider(
         <DataProvider
           data={sync().data}
           directory={directory}
+          sessionID={params.id}
           onNavigateToSession={(sessionID: string) => navigate(href(sessionID))}
           onSessionHref={href}
         >
