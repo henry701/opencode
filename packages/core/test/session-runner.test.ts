@@ -2304,21 +2304,29 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Start working" }), resume: false })
 
       requests.length = 0
-      responses = [
-        [LLMEvent.providerError({ message: "Provider unavailable" })],
-        [LLMEvent.providerError({ message: "Provider unavailable" })],
+      const gate = yield* Deferred.make<void>()
+      const started = yield* Deferred.make<void>()
+      const failure = providerUnavailable()
+      response = [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
       ]
-      streamGate = yield* Deferred.make<void>()
-      streamStarted = yield* Deferred.make<void>()
+      responseStream = Stream.unwrap(
+        Effect.gen(function* () {
+          yield* Deferred.succeed(started, undefined)
+          yield* Deferred.await(gate)
+          return Stream.fail(failure)
+        }),
+      )
 
       const first = yield* session.resume(sessionID).pipe(Effect.forkChild)
-      yield* Deferred.await(streamStarted)
+      yield* Deferred.await(started)
       yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Render this prompt" }) })
-      yield* Deferred.succeed(streamGate, undefined)
-      yield* Fiber.join(first)
+      yield* Deferred.succeed(gate, undefined)
+      expect(yield* Fiber.await(first)).toMatchObject({ _tag: "Failure" })
       while (requests.length < 2) yield* Effect.yieldNow
-      streamGate = undefined
-      streamStarted = undefined
+      while ((yield* session.context(sessionID)).length < 4) yield* Effect.yieldNow
 
       expect(requests).toHaveLength(2)
       expect((yield* session.context(sessionID)).map((message) => [message.type, message.type === "user" && message.text])).toEqual([

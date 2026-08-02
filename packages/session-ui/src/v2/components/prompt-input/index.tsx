@@ -265,7 +265,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
                   type="button"
                   variant="ghost-muted"
                   size="normal"
-                  icon={<IconV2 name="list" size="small" />}
+                  icon={<IconV2 name="menu" size="small" />}
                   aria-pressed={queue().active()}
                   aria-label={queue().label()}
                   onClick={queue().onToggle}
