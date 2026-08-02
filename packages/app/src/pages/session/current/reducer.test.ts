@@ -150,6 +150,61 @@ describe("current session reducer", () => {
     ])
   })
 
+  test("keeps a promoted user prompt visible when its provider step fails", () => {
+    const state = dispatch([
+      { type: "hydrated", sequence: 10, messages: [] },
+      {
+        type: "event",
+        event: decodeEvent({
+          id: "evt_prompted",
+          type: "session.next.prompted",
+          durable: { aggregateID: "ses_test", seq: 11, version: 1 },
+          data: {
+            timestamp: 11,
+            sessionID: "ses_test",
+            messageID: "msg_hi",
+            prompt: { text: "hi" },
+            delivery: "steer",
+          },
+        }),
+      },
+      {
+        type: "event",
+        event: decodeEvent({
+          id: "evt_started",
+          type: "session.next.step.started",
+          durable: { aggregateID: "ses_test", seq: 12, version: 1 },
+          data: {
+            timestamp: 12,
+            sessionID: "ses_test",
+            assistantMessageID: "msg_error",
+            agent: "build",
+            model: { providerID: "opencode", id: "mimo-v2.5-free" },
+          },
+        }),
+      },
+      {
+        type: "event",
+        event: decodeEvent({
+          id: "evt_failed",
+          type: "session.next.step.failed",
+          durable: { aggregateID: "ses_test", seq: 13, version: 2 },
+          data: {
+            timestamp: 13,
+            sessionID: "ses_test",
+            assistantMessageID: "msg_error",
+            error: { type: "unknown", message: "Provider unavailable" },
+          },
+        }),
+      },
+    ])
+
+    expect(state.messages).toMatchObject([
+      { id: "msg_hi", type: "user", text: "hi" },
+      { id: "msg_error", type: "assistant", finish: "error", error: { message: "Provider unavailable" } },
+    ])
+  })
+
   test("replaces a projected message in place and keeps timeline order", () => {
     const state = dispatch([
       {

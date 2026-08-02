@@ -1798,8 +1798,6 @@ describe("SessionRunnerLLM", () => {
           type: "assistant",
           agent: "reviewer",
           model: { id: "replacement", variant: "thinking" },
-          systemPrompt,
-          toolDefinitions,
           finish: "stop",
           content: [{ type: "text", text: '{"answer":"done"}' }],
         },
@@ -1822,6 +1820,12 @@ describe("SessionRunnerLLM", () => {
       expect(eventTypes.indexOf("session.next.tool.success")).toBeLessThan(
         eventTypes.lastIndexOf("session.next.step.ended"),
       )
+      const assistant = (yield* session.context(sessionID)).filter(
+        (message): message is SessionMessage.Assistant => message.type === "assistant",
+      )
+      expect(assistant[1]).toMatchObject({ systemPrompt, toolDefinitions })
+      expect(assistant[2]).not.toHaveProperty("systemPrompt")
+      expect(assistant[2]).not.toHaveProperty("toolDefinitions")
     }),
   )
 
@@ -2289,6 +2293,39 @@ describe("SessionRunnerLLM", () => {
         "assistant",
         "user",
         "assistant",
+      ])
+    }),
+  )
+
+  it.effect("projects a steer submitted during a failed provider turn", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Start working" }), resume: false })
+
+      requests.length = 0
+      responses = [
+        [LLMEvent.providerError({ message: "Provider unavailable" })],
+        [LLMEvent.providerError({ message: "Provider unavailable" })],
+      ]
+      streamGate = yield* Deferred.make<void>()
+      streamStarted = yield* Deferred.make<void>()
+
+      const first = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(streamStarted)
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Render this prompt" }) })
+      yield* Deferred.succeed(streamGate, undefined)
+      yield* Fiber.join(first)
+      while (requests.length < 2) yield* Effect.yieldNow
+      streamGate = undefined
+      streamStarted = undefined
+
+      expect(requests).toHaveLength(2)
+      expect((yield* session.context(sessionID)).map((message) => [message.type, message.type === "user" && message.text])).toEqual([
+        ["user", "Start working"],
+        ["assistant", false],
+        ["user", "Render this prompt"],
+        ["assistant", false],
       ])
     }),
   )

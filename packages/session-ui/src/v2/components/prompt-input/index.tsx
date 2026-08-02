@@ -261,16 +261,15 @@ export function PromptInputV2(props: PromptInputV2Props) {
                   </>
                 }
               >
-                <ButtonV2
+                <IconButtonV2
                   type="button"
                   variant="ghost-muted"
                   size="normal"
+                  icon={<IconV2 name="list" size="small" />}
                   aria-pressed={queue().active()}
                   aria-label={queue().label()}
                   onClick={queue().onToggle}
-                >
-                  {queue().label()}
-                </ButtonV2>
+                />
               </TooltipV2>
             )}
           </Show>

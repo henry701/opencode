@@ -521,6 +521,10 @@ const layer = Layer.effect(
       if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
         return yield* Effect.die(continueAfterCompaction(currentStep))
       const startSnapshot = yield* snapshots.capture()
+      const hasPreparedContext = history.some(
+        (message) =>
+          message.type === "assistant" && (message.systemPrompt !== undefined || message.toolDefinitions !== undefined),
+      )
       const publisher = createLLMEventPublisher(events, {
         sessionID: session.id,
         agent: agent.id,
@@ -538,6 +542,7 @@ const layer = Layer.effect(
       const providerStream = llm
         .stream(request, {
           onPrepared: (prepared) => {
+            if (hasPreparedContext) return publisher.setPreparedContext({})
             const systemPrompt = prepared.metadata?.systemPrompt
             const toolDefinitions = prepared.metadata?.toolDefinitions
             return publisher.setPreparedContext({
