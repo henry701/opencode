@@ -41,6 +41,23 @@ describe("normalizeAgentList", () => {
       },
     ])
   })
+
+  test("accepts current agents without optional request settings", () => {
+    const result = normalizeAgentList([
+      {
+        id: "general",
+        name: "General",
+        mode: "primary",
+        hidden: false,
+        request: { headers: {}, body: {} },
+        permissions: [],
+      },
+    ] as unknown as AgentListOutput["data"])
+
+    expect(result[0]?.options).toEqual({})
+    expect(result[0]?.temperature).toBeUndefined()
+    expect(result[0]?.topP).toBeUndefined()
+  })
 })
 
 describe("normalizePermissionRequest", () => {

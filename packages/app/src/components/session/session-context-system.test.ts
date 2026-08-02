@@ -93,8 +93,8 @@ describe("getSessionSystemPrompt", () => {
     ]
 
     expect(getSessionPreparedContext(messages, { messageID: "msg_04" })).toEqual({
-      systemPrompt: "current user system",
-      toolDefinitions: undefined,
+      systemPrompt: "first prepared system",
+      toolDefinitions: "first tools",
     })
   })
 })
