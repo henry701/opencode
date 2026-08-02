@@ -25,7 +25,7 @@ export function getSessionPreparedContext(
   const active = selectSessionContextMessages(messages, input.revert)
   const selected = input.messageID ? active.find((message) => message.id === input.messageID) : undefined
   const assistant =
-    selected?.type === "assistant"
+    selected?.type === "assistant" && Boolean(selected.systemPrompt?.trim() || selected.toolDefinitions?.trim())
       ? selected
       : active.findLast(
           (message): message is SessionMessage.Assistant =>
