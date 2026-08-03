@@ -40,12 +40,24 @@ describe("detectServerProtocol", () => {
     expect(await detectServerProtocol(server, fetcher)).toBe("v2")
   })
 
+  test("recognizes the legacy V1 global health response", async () => {
+    const fetcher = mockFetch((input) => {
+      const path = new URL(input instanceof Request ? input.url : input).pathname
+      if (path === "/api/session") return Promise.resolve(json({}, 404))
+      if (path === "/global/health") return Promise.resolve(json({ healthy: true }))
+      return Promise.resolve(json({}, 404))
+    })
+
+    expect(await detectServerProtocol(server, fetcher)).toBe("v1")
+  })
+
   test("recognizes the transitional V1 API health response", async () => {
     const fetcher = mockFetch((input) => {
       const path = new URL(input instanceof Request ? input.url : input).pathname
       if (path === "/api/session") return Promise.resolve(json({}, 404))
-      if (path === "/api/health") return Promise.resolve(json({}, 404))
-      return Promise.resolve(json({ healthy: true }))
+      if (path === "/global/health") return Promise.resolve(json({}, 404))
+      if (path === "/api/health") return Promise.resolve(json({ healthy: true }))
+      return Promise.resolve(json({}, 404))
     })
 
     expect(await detectServerProtocol(server, fetcher)).toBe("v1")
