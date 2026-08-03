@@ -155,8 +155,12 @@ const OpenAIChatChoice = Schema.Struct({
 })
 
 const OpenAIChatEvent = Schema.Struct({
-  choices: Schema.Array(OpenAIChatChoice),
+  choices: optionalArray(OpenAIChatChoice),
   usage: optionalNull(OpenAIChatUsage),
+  // OpenCode Zen emits a trailing cost-only event after `[DONE]`. It carries
+  // no semantic stream data, but accepting the provider metadata keeps tool
+  // continuations from failing after the tool result has already completed.
+  cost: optionalNull(Schema.Union([Schema.Number, Schema.String])),
 })
 type OpenAIChatEvent = Schema.Schema.Type<typeof OpenAIChatEvent>
 type OpenAIChatRequestMessage = LLMRequest["messages"][number]
@@ -409,7 +413,7 @@ const step = (state: ParserState, event: OpenAIChatEvent) =>
   Effect.gen(function* () {
     const events: LLMEvent[] = []
     const usage = mapUsage(event.usage) ?? state.usage
-    const choice = event.choices[0]
+    const choice = event.choices?.[0]
     const finishReason = choice?.finish_reason ? mapFinishReason(choice.finish_reason) : state.finishReason
     const delta = choice?.delta
     const toolDeltas = delta?.tool_calls ?? []

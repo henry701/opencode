@@ -5,12 +5,92 @@ import type {
   SessionMessageShell,
   SessionMessageUser,
 } from "@opencode-ai/client/promise"
-import type { AssistantMessage, FilePart, Message, Part, ToolPart, UserMessage } from "@opencode-ai/sdk/v2"
+import { SessionMessage } from "@opencode-ai/schema/session-message"
+import type {
+  AssistantMessage,
+  FilePart,
+  Message,
+  Part,
+  SnapshotFileDiff,
+  ToolPart,
+  UserMessage,
+} from "@opencode-ai/sdk/v2"
 import { Option, Schema } from "effect"
+
+type PreparedAssistant = SessionMessageAssistant & {
+  system_prompt?: string
+  tool_defs?: string
+  systemPrompt?: string
+  toolDefinitions?: string
+  snapshot?: { diffs?: SnapshotFileDiff[] }
+}
 
 const emptyTokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
 const emptyModel: { id: string; providerID: string; variant?: string } = { id: "", providerID: "" }
 const decodeToolInput = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
+const encodeCurrentMessage = Schema.encodeSync(SessionMessage.Message)
+
+type CurrentEncodedMessage = (typeof SessionMessage.Message)["Encoded"]
+
+/**
+ * The v2 client and the compatibility renderer use the same persisted messages
+ * with a small wire-shape difference. Keep the conversion at this boundary so
+ * the timeline can continue to use its stable legacy projection while current
+ * events remain the source of truth for live sessions.
+ */
+export function normalizeCurrentSessionMessages(sessionID: string, source: readonly SessionMessage.Message[]) {
+  const encoded = source.map((message) => encodeCurrentMessage(message)).map(toLegacyMessage)
+  return { source: encoded, ...normalizeSessionMessages(sessionID, encoded) }
+}
+
+function toLegacyMessage(message: CurrentEncodedMessage): SessionMessageInfo {
+  if (message.type === "shell") {
+    return {
+      ...message,
+      shellID: message.callID,
+      status: message.time.completed === undefined ? "running" : "exited",
+      output:
+        message.time.completed === undefined
+          ? undefined
+          : {
+              output: message.output,
+              cursor: message.output.length,
+              size: message.output.length,
+              truncated: false,
+            },
+    } as SessionMessageInfo
+  }
+  if (message.type === "synthetic") return { ...message, description: message.text } as SessionMessageInfo
+  if (message.type !== "assistant") return message as SessionMessageInfo
+  return {
+    ...message,
+    content: message.content.map((content) => {
+      if (content.type === "text") return { type: "text" as const, text: content.text }
+      if (content.type === "reasoning")
+        return {
+          type: "reasoning" as const,
+          text: content.text,
+          state: content.providerMetadata,
+          time: content.time,
+        }
+      return {
+        type: "tool" as const,
+        id: content.id,
+        name: content.name,
+        executed: content.provider?.executed,
+        providerState: content.provider?.metadata,
+        providerResultState: content.provider?.resultMetadata,
+        state:
+          content.state.status === "pending"
+            ? { status: "streaming" as const, input: content.state.input }
+            : "structured" in content.state
+              ? { ...content.state, metadata: content.state.structured }
+              : content.state,
+        time: content.time,
+      }
+    }),
+  } as SessionMessageInfo
+}
 
 function record(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value)
@@ -91,6 +171,8 @@ export function normalizeSessionMessages(sessionID: string, source: readonly Ses
           modelID: message.model.id,
           variant: message.model.variant,
         }
+        const diffs = (message as PreparedAssistant).snapshot?.diffs
+        if (diffs) parent.summary = { diffs }
       }
       messages.push(assistantMessage(sessionID, parentID, message))
       parts.set(message.id, assistantParts(sessionID, message))
@@ -231,6 +313,7 @@ function userParts(sessionID: string, message: SessionMessageUser): Part[] {
 }
 
 function assistantMessage(sessionID: string, parentID: string, message: SessionMessageAssistant): AssistantMessage {
+  const prepared = message as PreparedAssistant
   const error = message.error
     ? message.error.type.toLowerCase().includes("abort") || message.error.type.toLowerCase().includes("interrupt")
       ? { name: "MessageAbortedError" as const, data: { message: message.error.message } }
@@ -251,6 +334,12 @@ function assistantMessage(sessionID: string, parentID: string, message: SessionM
     path: { cwd: "", root: "" },
     cost: message.cost ?? 0,
     tokens: message.tokens ?? emptyTokens,
+    ...(prepared.system_prompt === undefined && prepared.systemPrompt === undefined
+      ? {}
+      : { systemPrompt: prepared.system_prompt ?? prepared.systemPrompt }),
+    ...(prepared.tool_defs === undefined && prepared.toolDefinitions === undefined
+      ? {}
+      : { toolDefinitions: prepared.tool_defs ?? prepared.toolDefinitions }),
     finish: message.finish,
   }
 }

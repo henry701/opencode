@@ -21,10 +21,19 @@ async function probe(server: ServerConnection.HttpBase, fetch: typeof globalThis
   return value
 }
 
+function isCurrentSessionList(value: unknown) {
+  if (!value || typeof value !== "object") return false
+  if (!("data" in value) || !Array.isArray(value.data)) return false
+  return "cursor" in value && !!value.cursor && typeof value.cursor === "object"
+}
+
 export async function detectServerProtocol(
   server: ServerConnection.HttpBase,
   fetch: typeof globalThis.fetch,
 ): Promise<ServerProtocol> {
+  const currentSessions = await probe(server, fetch, "/api/session?limit=1").catch(() => undefined)
+  if (isCurrentSessionList(currentSessions)) return "v2"
+
   const legacy = await probe(server, fetch, "/global/health").catch(() => undefined)
   if (legacy && "healthy" in legacy && legacy.healthy === true) return "v1"
 

@@ -593,6 +593,15 @@ it.instance("loop persists prepared system prompt and tool definitions for conte
     expect(stored.info.system_prompt).toBe(providerSystemPrompt(providerInput))
     expect(storedToolNames(stored.info.tool_defs)).toEqual(providerToolNames(providerInput))
     expect(storedToolNames(stored.info.tool_defs).length).toBeGreaterThan(0)
+
+    yield* user(chat.id, "second turn")
+    yield* llm.text("second response")
+    const second = yield* prompt.loop({ sessionID: chat.id })
+    const storedSecond = yield* MessageV2.get({ sessionID: chat.id, messageID: second.info.id })
+    expect(storedSecond.info.role).toBe("assistant")
+    if (storedSecond.info.role !== "assistant") return
+    expect(storedSecond.info.system_prompt).toBeUndefined()
+    expect(storedSecond.info.tool_defs).toBeUndefined()
   }),
 )
 

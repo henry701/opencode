@@ -46,8 +46,7 @@ export function DirectoryDataProvider(
     () => params.id,
     (id) =>
       sync()
-        // Session page owns message paging via the current client; only warm session info here.
-        .session.sync(id, { skipMessages: true })
+        .session.sync(id)
         .catch(() => {}),
   )
 

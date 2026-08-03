@@ -99,6 +99,24 @@ describe("AgentV2", () => {
     }),
   )
 
+  it.effect("falls back when a persisted session refers to a removed agent", () =>
+    Effect.gen(function* () {
+      const agent = yield* AgentV2.Service
+      yield* agent.transform((editor) =>
+        editor.update(AgentV2.defaultID, (info) => {
+          info.mode = "primary"
+          info.hidden = false
+        }),
+      )
+
+      expect(yield* agent.select("Sisyphus - ultraworker")).toMatchObject({
+        id: "Sisyphus - ultraworker",
+        info: undefined,
+      })
+      expect(yield* agent.resolve("Sisyphus - ultraworker")).toMatchObject({ id: AgentV2.defaultID })
+    }),
+  )
+
   it.effect("does not ambiently opt built-in agents into bash", () =>
     Effect.gen(function* () {
       const agent = yield* AgentV2.Service

@@ -4,7 +4,10 @@ import { createCompatibleApi } from "./server-compat"
 
 function setup(
   protocol: "v1" | "v2" | Promise<"v1" | "v2">,
-  responses?: { vcs?: { branch: string; default_branch: string } },
+  responses?: {
+    vcs?: { branch: string; default_branch: string }
+    mcpResource?: { location: { directory: string; project: { id: string; directory: string } }; data: unknown }
+  },
 ) {
   const requests: Request[] = []
   const fetcher = Object.assign(
@@ -37,6 +40,8 @@ function setup(
       }
       if (request.method === "GET" && new URL(request.url).pathname === "/vcs")
         return Response.json(responses?.vcs ?? {})
+      if (request.method === "GET" && new URL(request.url).pathname === "/api/mcp/resource")
+        return Response.json(responses?.mcpResource ?? [])
       if (request.method === "GET") return Response.json([])
       return new Response(undefined, { status: 204 })
     },
@@ -145,6 +150,16 @@ describe("createCompatibleApi", () => {
     await api.session.list()
 
     expect(detections).toBe(1)
+  })
+
+  test("normalizes the current MCP resource catalog for the legacy app shape", async () => {
+    const { api } = setup("v2", {
+      mcpResource: { location: { directory: "/repo", project: { id: "project", directory: "/repo" } }, data: [] },
+    })
+
+    expect(await api.mcp.resource.catalog()).toMatchObject({
+      data: { resources: [], templates: [] },
+    })
   })
 
   /*

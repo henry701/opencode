@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type {
-  MessagesListOutput,
-  SessionsEventsOutput,
-  SessionsGetOutput,
-} from "@/utils/current-client"
+import type { MessagesListOutput, SessionsEventsOutput, SessionsGetOutput } from "@/utils/current-client"
 import { createRoot } from "solid-js"
 import { createCurrentSessionModel, type CurrentSessionPort } from "./model"
 
@@ -20,7 +16,7 @@ const session: SessionsGetOutput = {
 const prompted = (seq: number) =>
   ({
     id: `evt_${seq}`,
-    type: "session.next.prompt.admitted",
+    type: "session.next.prompted",
     durable: { aggregateID: "ses_test", seq, version: 1 },
     data: {
       timestamp: seq,
@@ -98,6 +94,7 @@ describe("current session model", () => {
           .then(() => {
             expect(model.readiness()).toBe("ready")
             expect(model.lastEventSequence()).toBe(4)
+            expect(model.messages().map((message) => String(message.id))).toContain("msg_4")
             expect(queueReads).toBeGreaterThanOrEqual(2)
             model.dispose()
             dispose()
@@ -181,6 +178,49 @@ describe("current session model", () => {
           .then(() => {
             expect(after.slice(0, 2)).toEqual([0, 1])
             expect(model.connection()).toBe("open")
+            model.dispose()
+            dispose()
+            resolve()
+          })
+          .catch(reject)
+      })
+    })
+  })
+
+  test("refreshes context during manual refresh", async () => {
+    let contextReads = 0
+    const base = makePort({ pages: [messages([], undefined, 0), messages([])] })
+    const port = {
+      ...base,
+      sessions: {
+        ...base.sessions,
+        context: async () => {
+          contextReads++
+          return [
+            {
+              id: "msg_context",
+              type: "user" as const,
+              text: "context",
+              time: { created: 1 },
+            },
+          ]
+        },
+      },
+    } satisfies CurrentSessionPort
+
+    await new Promise<void>((resolve, reject) => {
+      createRoot((dispose) => {
+        const model = createCurrentSessionModel({
+          sessionID: () => "ses_test",
+          client: () => port,
+          autoStart: false,
+        })
+        model
+          .start()
+          .then(() => model.refresh())
+          .then(() => {
+            expect(contextReads).toBe(2)
+            expect(model.context().map((message) => String(message.id))).toEqual(["msg_context"])
             model.dispose()
             dispose()
             resolve()

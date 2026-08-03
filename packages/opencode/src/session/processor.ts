@@ -2,7 +2,7 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Image } from "@/image/image"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { Cause, Deferred, Effect, Exit, Layer, Context, Scope, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Layer, Context, Option, Scope, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
@@ -119,6 +119,18 @@ const layer = Layer.effect(
           providerID: input.model.providerID,
           aborted,
         })
+
+      const preparedContextStored = Option.isSome(
+        yield* session
+          .findMessage(
+            input.sessionID,
+            (message) =>
+              message.info.role === "assistant" &&
+              message.info.id !== input.assistantMessage.id &&
+              (message.info.system_prompt !== undefined || message.info.tool_defs !== undefined),
+          )
+          .pipe(Effect.orDie),
+      )
 
       const settleToolCall = Effect.fn("SessionProcessor.settleToolCall")(function* (toolCallID: string) {
         const done = ctx.toolcalls[toolCallID]?.done
@@ -640,6 +652,7 @@ const layer = Layer.effect(
             const stream = llm.stream(streamInput, {
               onPrepared: (context) =>
                 Effect.gen(function* () {
+                  if (preparedContextStored) return
                   ctx.assistantMessage.system_prompt = context.systemPrompt
                   ctx.assistantMessage.tool_defs = context.toolDefs
                   yield* session.updateMessage(ctx.assistantMessage)

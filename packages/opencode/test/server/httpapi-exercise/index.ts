@@ -176,7 +176,16 @@ const scenarios: Scenario[] = [
     .status(400),
   http.protected.get("/config/providers", "config.providers").json(),
   http.protected.get("/project", "project.list").json(200, array, "status"),
+  http.protected.get("/api/project", "v2.project.list").json(200, array, "status"),
   http.protected.get("/project/current", "project.current").json(
+    200,
+    (body, ctx) => {
+      object(body)
+      check(body.worktree === ctx.directory, "current project should resolve from scenario directory")
+    },
+    "status",
+  ),
+  http.protected.get("/api/project/current", "v2.project.current").json(
     200,
     (body, ctx) => {
       object(body)
@@ -232,6 +241,14 @@ const scenarios: Scenario[] = [
     .seeded((ctx) => ctx.project())
     .at((ctx) => ({
       path: route("/project/{projectID}/directories", { projectID: ctx.state.id }),
+      headers: ctx.headers(),
+    }))
+    .json(200, array, "status"),
+  http.protected
+    .get("/api/project/{projectID}/directories", "v2.project.directories")
+    .seeded((ctx) => ctx.project())
+    .at((ctx) => ({
+      path: route("/api/project/{projectID}/directories", { projectID: ctx.state.id }),
       headers: ctx.headers(),
     }))
     .json(200, array, "status"),
@@ -678,6 +695,12 @@ const scenarios: Scenario[] = [
   http.protected.get("/api/location", "v2.location.get").json(200, object),
   http.protected.get("/api/agent", "v2.agent.list").json(200, locationData(array)),
   http.protected.get("/api/model", "v2.model.list").json(200, locationData(array)),
+  http.protected.get("/api/model/default", "v2.model.default").json(
+    200,
+    locationData((value) => {
+      if (value !== null) object(value)
+    }),
+  ),
   http.protected.get("/api/provider", "v2.provider.list").json(200, locationData(array)),
   http.protected.get("/api/mcp", "v2.mcp.status").json(200, locationData(object)),
   http.protected
@@ -727,9 +750,7 @@ const scenarios: Scenario[] = [
     }))
     .json(400, object, "status"),
   http.protected.get("/api/mcp/resource", "v2.mcp.resources").json(200, locationData(array)),
-  http.protected
-    .get("/api/mcp/resource-template", "v2.mcp.resourceTemplates")
-    .json(200, locationData(array)),
+  http.protected.get("/api/mcp/resource-template", "v2.mcp.resourceTemplates").json(200, locationData(array)),
   http.protected
     .post("/api/mcp/resource/read", "v2.mcp.resourceRead")
     .at((ctx) => ({

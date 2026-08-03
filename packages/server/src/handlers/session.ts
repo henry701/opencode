@@ -17,6 +17,7 @@ import {
 } from "@opencode-ai/protocol/errors"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionSharing } from "@opencode-ai/core/session/share"
+import { firstPreparedMessageID, stripRepeatedPreparedContext } from "./prepared-context"
 
 const DefaultSessionsLimit = 50
 const DefaultSessionHistoryLimit = 50
@@ -114,18 +115,16 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.update",
         Effect.fn(function* (ctx) {
           return {
-            data: yield* session
-              .update({ sessionID: ctx.params.sessionID, title: ctx.payload.title })
-              .pipe(
-                Effect.catchTag(
-                  "Session.NotFoundError",
-                  (error) =>
-                    new SessionNotFoundError({
-                      sessionID: error.sessionID,
-                      message: `Session not found: ${error.sessionID}`,
-                    }),
-                ),
+            data: yield* session.update({ sessionID: ctx.params.sessionID, title: ctx.payload.title }).pipe(
+              Effect.catchTag(
+                "Session.NotFoundError",
+                (error) =>
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
               ),
+            ),
           }
         }),
       )
@@ -133,29 +132,27 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.fork",
         Effect.fn(function* (ctx) {
           return {
-            data: yield* session
-              .fork({ sessionID: ctx.params.sessionID, messageID: ctx.payload.messageID })
-              .pipe(
-                Effect.catchTag(
-                  "Session.NotFoundError",
-                  (error) =>
-                    new SessionNotFoundError({
-                      sessionID: error.sessionID,
-                      message: `Session not found: ${error.sessionID}`,
-                    }),
-                ),
-                Effect.catchTag("Session.MessageDecodeError", (error) => {
-                  const ref = `err_${crypto.randomUUID().slice(0, 8)}`
-                  return Effect.logError("failed to decode session message while forking").pipe(
-                    Effect.annotateLogs({ ref, sessionID: error.sessionID, messageID: error.messageID }),
-                    Effect.andThen(
-                      Effect.fail(
-                        new UnknownError({ message: "Unexpected server error. Check server logs for details.", ref }),
-                      ),
-                    ),
-                  )
-                }),
+            data: yield* session.fork({ sessionID: ctx.params.sessionID, messageID: ctx.payload.messageID }).pipe(
+              Effect.catchTag(
+                "Session.NotFoundError",
+                (error) =>
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
               ),
+              Effect.catchTag("Session.MessageDecodeError", (error) => {
+                const ref = `err_${crypto.randomUUID().slice(0, 8)}`
+                return Effect.logError("failed to decode session message while forking").pipe(
+                  Effect.annotateLogs({ ref, sessionID: error.sessionID, messageID: error.messageID }),
+                  Effect.andThen(
+                    Effect.fail(
+                      new UnknownError({ message: "Unexpected server error. Check server logs for details.", ref }),
+                    ),
+                  ),
+                )
+              }),
+            ),
           }
         }),
       )
@@ -172,11 +169,14 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             ),
           )
           return {
-            data: yield* sharing.share(ctx.params.sessionID).pipe(
-              Effect.mapError(
-                () => new ServiceUnavailableError({ service: "session.share", message: "Session sharing unavailable" }),
+            data: yield* sharing
+              .share(ctx.params.sessionID)
+              .pipe(
+                Effect.mapError(
+                  () =>
+                    new ServiceUnavailableError({ service: "session.share", message: "Session sharing unavailable" }),
+                ),
               ),
-            ),
           }
         }),
       )
@@ -193,12 +193,14 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             ),
           )
           return {
-            data: yield* sharing.unshare(ctx.params.sessionID).pipe(
-              Effect.mapError(
-                () =>
-                  new ServiceUnavailableError({ service: "session.unshare", message: "Session sharing unavailable" }),
+            data: yield* sharing
+              .unshare(ctx.params.sessionID)
+              .pipe(
+                Effect.mapError(
+                  () =>
+                    new ServiceUnavailableError({ service: "session.unshare", message: "Session sharing unavailable" }),
+                ),
               ),
-            ),
           }
         }),
       )
@@ -674,28 +676,30 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.context",
         Effect.fn(function* (ctx) {
-          return {
-            data: yield* session.context(ctx.params.sessionID).pipe(
-              Effect.catchTag("Session.NotFoundError", (error) =>
-                Effect.fail(
-                  new SessionNotFoundError({
-                    sessionID: error.sessionID,
-                    message: `Session not found: ${error.sessionID}`,
-                  }),
-                ),
-              ),
-              Effect.catchTag("Session.MessageDecodeError", (error) => {
-                const ref = `err_${crypto.randomUUID().slice(0, 8)}`
-                return Effect.logError("failed to decode session message").pipe(
-                  Effect.annotateLogs({ ref, sessionID: error.sessionID, messageID: error.messageID }),
-                  Effect.andThen(
-                    Effect.fail(
-                      new UnknownError({ message: "Unexpected server error. Check server logs for details.", ref }),
-                    ),
-                  ),
-                )
-              }),
+          const context = yield* session.context(ctx.params.sessionID).pipe(
+            Effect.catchTag(
+              "Session.NotFoundError",
+              (error) =>
+                new SessionNotFoundError({
+                  sessionID: error.sessionID,
+                  message: `Session not found: ${error.sessionID}`,
+                }),
             ),
+            Effect.catchTag("Session.MessageDecodeError", (error) => {
+              const ref = `err_${crypto.randomUUID().slice(0, 8)}`
+              return Effect.logError("failed to decode session message", { error }).pipe(
+                Effect.annotateLogs({ ref, sessionID: error.sessionID, messageID: error.messageID }),
+                Effect.andThen(
+                  Effect.fail(
+                    new UnknownError({ message: "Unexpected server error. Check server logs for details.", ref }),
+                  ),
+                ),
+              )
+            }),
+          )
+          const firstPreparedID = firstPreparedMessageID(context)
+          return {
+            data: context.map((message) => stripRepeatedPreparedContext(message, firstPreparedID)),
           }
         }),
       )

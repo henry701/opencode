@@ -7,6 +7,7 @@ import { DateTime, Effect } from "effect"
 
 export type CurrentSessionState = {
   readonly messages: ReadonlyArray<SessionMessage.Message>
+  readonly context: ReadonlyArray<SessionMessage.Message>
   readonly queue: ReadonlyArray<SessionInput.Queued>
   readonly session?: Session.Info
   readonly active: boolean
@@ -28,6 +29,7 @@ export type CurrentSessionAction =
       readonly sequence?: number
       readonly cursor?: string
     }
+  | { readonly type: "context-updated"; readonly context: ReadonlyArray<SessionMessage.Message> }
   | {
       readonly type: "older-loaded"
       readonly messages: ReadonlyArray<SessionMessage.Message>
@@ -51,6 +53,7 @@ export type CurrentSessionAction =
 export function currentSessionInitialState(): CurrentSessionState {
   return {
     messages: [],
+    context: [],
     queue: [],
     active: false,
     readiness: "loading",
@@ -73,6 +76,8 @@ export function reduceCurrentSession(state: CurrentSessionState, action: Current
         hasOlder: action.cursor !== undefined,
         lastEventSequence: action.sequence,
       }
+    case "context-updated":
+      return { ...state, context: [...action.context] }
     case "older-loaded": {
       const loaded = new Set(state.messages.map((message) => message.id))
       return {

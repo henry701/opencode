@@ -150,6 +150,34 @@ describe("current session reducer", () => {
     ])
   })
 
+  test("does not duplicate messages when a buffered event is already in the hydrated page", () => {
+    const state = dispatch([
+      {
+        type: "hydrated",
+        sequence: 10,
+        messages: [user("msg_hi", "hi", 9)],
+      },
+      {
+        type: "event",
+        event: decodeEvent({
+          id: "evt_prompted",
+          type: "session.next.prompted",
+          durable: { aggregateID: "ses_test", seq: 11, version: 1 },
+          data: {
+            timestamp: 11,
+            sessionID: "ses_test",
+            messageID: "msg_hi",
+            prompt: { text: "hi" },
+            delivery: "steer",
+          },
+        }),
+      },
+    ])
+
+    expect(state.messages).toHaveLength(1)
+    expect(state.messages[0]).toMatchObject({ id: "msg_hi", type: "user", text: "hi" })
+  })
+
   test("keeps a promoted user prompt visible when its provider step fails", () => {
     const state = dispatch([
       { type: "hydrated", sequence: 10, messages: [] },

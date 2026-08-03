@@ -52,6 +52,7 @@ import type {
   ToolPart,
   UserMessage,
 } from "@opencode-ai/sdk/v2"
+import type { SessionMessageInfo } from "@opencode-ai/client/promise"
 import { showToast } from "@/utils/toast"
 import { getDirectory, getFilename } from "@opencode-ai/core/util/path"
 import { Popover as KobaltePopover } from "@kobalte/core/popover"
@@ -251,6 +252,9 @@ export function MessageTimeline(props: {
   onAutoScrollInteraction: (event: MouseEvent) => void
   shouldAnchorBottom: () => boolean
   centered: boolean
+  messages?: Accessor<MessageType[]>
+  sessionMessages?: Accessor<SessionMessageInfo[]>
+  getMessageParts?: (messageID: string) => PartType[]
   setContentRef: (el: HTMLDivElement) => void
   userMessages: UserMessage[]
   anchor: (id: string) => string
@@ -282,13 +286,17 @@ export function MessageTimeline(props: {
     if (!id) return idle
     return sync().data.session_status[id] ?? idle
   })
-  const sessionMessages = createMemo(() => (sessionID() ? (sync().data.message[sessionID()!] ?? []) : []))
+  const sessionMessages = createMemo(() => {
+    if (props.messages) return props.messages()
+    const id = sessionID()
+    return id ? (sync().data.message[id] ?? []) : []
+  })
   const projectedMessages = createMemo(() => {
     const id = sessionID()
     if (!id) return []
     const visible = new Set(props.userMessages.map((message) => message.id))
     const boundary = sessionMessages().find((message) => message.role === "user" && !visible.has(message.id))?.id
-    const messages = sync().data.session_message[id] ?? []
+    const messages = props.sessionMessages?.() ?? sync().data.session_message[id] ?? []
     return boundary ? messages.filter((message) => message.id < boundary) : messages
   })
   const info = createMemo(() => {
@@ -312,7 +320,7 @@ export function MessageTimeline(props: {
     return sync().data.message[id] ?? emptyMessages
   })
   const parentTitle = createMemo(() => sessionTitle(parent()?.title) ?? language.t("command.session.new"))
-  const getMsgParts = (msgId: string) => sync().data.part[msgId] ?? emptyParts
+  const getMsgParts = (msgId: string) => props.getMessageParts?.(msgId) ?? sync().data.part[msgId] ?? emptyParts
   const getMsgPart = (messageID: string, partID: string) => getMsgParts(messageID).find((part) => part.id === partID)
   const childTaskDescription = createMemo(() => {
     const id = sessionID()
