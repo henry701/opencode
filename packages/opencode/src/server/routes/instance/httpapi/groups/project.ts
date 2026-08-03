@@ -1,5 +1,7 @@
 import { Project } from "@/project/project"
 import { ProjectV2 } from "@opencode-ai/core/project"
+import { Location } from "@opencode-ai/schema/location"
+import { LocationMiddleware } from "@opencode-ai/server/location"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { ProjectNotFoundError } from "../errors"
@@ -29,12 +31,32 @@ export const ProjectApi = HttpApi.make("project")
             description: "Get a list of projects that have been opened with OpenCode.",
           }),
         ),
+        HttpApiEndpoint.get("listV2", "/api/project", {
+          query: WorkspaceRoutingQuery,
+          success: described(Location.response(Schema.Array(Project.Info)), "List of projects"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.project.list",
+            summary: "List all projects",
+            description: "Get a list of projects that have been opened with OpenCode.",
+          }),
+        ),
         HttpApiEndpoint.get("current", `${root}/current`, {
           query: WorkspaceRoutingQuery,
           success: described(Project.Info, "Current project information"),
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "project.current",
+            summary: "Get current project",
+            description: "Retrieve the currently active project that OpenCode is working with.",
+          }),
+        ),
+        HttpApiEndpoint.get("currentV2", "/api/project/current", {
+          query: WorkspaceRoutingQuery,
+          success: described(Location.response(Project.Info), "Current project information"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.project.current",
             summary: "Get current project",
             description: "Retrieve the currently active project that OpenCode is working with.",
           }),
@@ -73,6 +95,17 @@ export const ProjectApi = HttpApi.make("project")
             description: "List known local absolute directories for a project.",
           }),
         ),
+        HttpApiEndpoint.get("directoriesV2", "/api/project/:projectID/directories", {
+          params: { projectID: ProjectV2.ID },
+          query: WorkspaceRoutingQuery,
+          success: described(Location.response(ProjectV2.Directories), "Project directories"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.project.directories",
+            summary: "List project directories",
+            description: "List known local absolute directories for a project.",
+          }),
+        ),
       )
       .annotateMerge(
         OpenApi.annotations({
@@ -82,6 +115,7 @@ export const ProjectApi = HttpApi.make("project")
       )
       .middleware(InstanceContextMiddleware)
       .middleware(WorkspaceRoutingMiddleware)
+      .middleware(LocationMiddleware)
       .middleware(Authorization),
   )
   .annotateMerge(

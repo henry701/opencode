@@ -1,8 +1,127 @@
 import { describe, expect, test } from "bun:test"
 import type { SessionMessageInfo } from "@opencode-ai/client/promise"
-import { normalizeSessionMessages } from "./session-message"
+import { SessionMessage } from "@opencode-ai/schema/session-message"
+import { Schema } from "effect"
+import { normalizeCurrentSessionMessages, normalizeSessionMessages } from "./session-message"
+
+const decodeCurrentMessage = Schema.decodeUnknownSync(SessionMessage.Message)
 
 describe("normalizeSessionMessages", () => {
+  test("adapts current messages for the compatibility timeline", () => {
+    const result = normalizeCurrentSessionMessages("ses_1", [
+      decodeCurrentMessage({
+        id: "msg_user",
+        type: "user",
+        text: "hello",
+        files: [],
+        agents: [],
+        time: { created: 1 },
+      }),
+      decodeCurrentMessage({
+        id: "msg_assistant",
+        type: "assistant",
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+        systemPrompt: "prepared system",
+        toolDefinitions: '[{"name":"read"}]',
+        content: [
+          { type: "text", id: "text", text: "world" },
+          {
+            type: "tool",
+            id: "call_read",
+            name: "read",
+            state: {
+              status: "completed",
+              input: { filePath: "README.md" },
+              structured: {},
+              content: [{ type: "text", text: "contents" }],
+            },
+            time: { created: 2, ran: 3, completed: 4 },
+          },
+        ],
+        tokens: { input: 10, output: 2, reasoning: 1, cache: { read: 3, write: 0 } },
+        time: { created: 2, completed: 4 },
+      }),
+    ])
+
+    expect(result.source.map((message) => message.type)).toEqual(["user", "assistant"])
+    expect(result.messages).toMatchObject([
+      { id: "msg_user", role: "user" },
+      {
+        id: "msg_assistant",
+        role: "assistant",
+        parentID: "msg_user",
+        systemPrompt: "prepared system",
+        toolDefinitions: '[{"name":"read"}]',
+        tokens: { input: 10, output: 2, reasoning: 1, cache: { read: 3, write: 0 } },
+      },
+    ])
+    expect(result.parts.get("msg_assistant")).toMatchObject([
+      { type: "text", text: "world" },
+      { type: "tool", callID: "call_read", state: { status: "completed", output: "contents" } },
+    ])
+  })
+
+  test("renders current synthetic text, structured tool metadata, and snapshot diffs", () => {
+    const result = normalizeCurrentSessionMessages("ses_1", [
+      decodeCurrentMessage({
+        id: "msg_synthetic",
+        type: "synthetic",
+        sessionID: "ses_1",
+        text: "Generated context",
+        time: { created: 1 },
+      }),
+      decodeCurrentMessage({
+        id: "msg_user",
+        type: "user",
+        text: "edit it",
+        files: [],
+        agents: [],
+        time: { created: 2 },
+      }),
+      decodeCurrentMessage({
+        id: "msg_assistant",
+        type: "assistant",
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+        snapshot: { diffs: [{ file: "README.md", additions: 2, deletions: 1, status: "modified" }] },
+        content: [
+          {
+            type: "tool",
+            id: "call_edit",
+            name: "edit",
+            state: {
+              status: "completed",
+              input: { path: "/repo/README.md" },
+              structured: {
+                files: [{ file: "README.md", patch: "@@", additions: 2, deletions: 1 }],
+              },
+              content: [{ type: "text", text: "Edited" }],
+            },
+            time: { created: 3, ran: 4, completed: 5 },
+          },
+        ],
+        time: { created: 3, completed: 5 },
+      }),
+    ])
+
+    expect(result.parts.get("msg_synthetic")).toMatchObject([
+      { type: "text", text: "Generated context", synthetic: true },
+    ])
+    expect(result.parts.get("msg_assistant")).toMatchObject([
+      {
+        type: "tool",
+        state: {
+          status: "completed",
+          metadata: { filediff: { file: "README.md", patch: "@@", additions: 2, deletions: 1 } },
+        },
+      },
+    ])
+    expect(result.messages.find((message) => message.id === "msg_user")).toMatchObject({
+      summary: { diffs: [{ file: "README.md", additions: 2, deletions: 1, status: "modified" }] },
+    })
+  })
+
   test("projects current turns into stable legacy rendering records", () => {
     const source = [
       { id: "msg_1", type: "agent-switched", agent: "build", time: { created: 1 } },
@@ -116,6 +235,33 @@ describe("normalizeSessionMessages", () => {
     ] satisfies SessionMessageInfo[]
 
     expect(normalizeSessionMessages("ses_1", source).messages).toEqual([])
+  })
+
+  test("keeps prepared context from compatibility assistant records", () => {
+    const source = [
+      { id: "msg_user", type: "user", text: "hello", time: { created: 1 } },
+      {
+        id: "msg_assistant",
+        type: "assistant",
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+        content: [{ type: "text", text: "world" }],
+        system_prompt: "prepared system",
+        tool_defs: '[{"name":"read"}]',
+        time: { created: 2, completed: 3 },
+      } as Extract<SessionMessageInfo, { type: "assistant" }> & {
+        system_prompt: string
+        tool_defs: string
+      },
+    ] satisfies SessionMessageInfo[]
+
+    const result = normalizeSessionMessages("ses_1", source)
+
+    expect(result.messages[1]).toMatchObject({
+      role: "assistant",
+      systemPrompt: "prepared system",
+      toolDefinitions: '[{"name":"read"}]',
+    })
   })
 
   test("projects a current shell message into a renderable standalone turn", () => {

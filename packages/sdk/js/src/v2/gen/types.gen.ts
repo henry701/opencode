@@ -4431,6 +4431,15 @@ export type ConfigV2ExperimentalPolicy = {
   resource: string
 }
 
+export type LocationInfo = {
+  directory: string
+  workspaceID?: string
+  project: {
+    id: string
+    directory: string
+  }
+}
+
 export type ProjectDirectories = Array<{
   directory: string
   strategy?: string
@@ -4444,15 +4453,6 @@ export type PtyTicketConnectToken = {
 export type WorkspaceEventConnectionStatus = {
   workspaceID: string
   status: "connected" | "connecting" | "disconnected" | "error"
-}
-
-export type LocationInfo = {
-  directory: string
-  workspaceID?: string
-  project: {
-    id: string
-    directory: string
-  }
 }
 
 export type ProviderRequest = {
@@ -9347,6 +9347,41 @@ export type ProjectListResponses = {
 
 export type ProjectListResponse = ProjectListResponses[keyof ProjectListResponses]
 
+export type V2ProjectListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/project"
+}
+
+export type V2ProjectListErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+}
+
+export type V2ProjectListError = V2ProjectListErrors[keyof V2ProjectListErrors]
+
+export type V2ProjectListResponses = {
+  /**
+   * List of projects
+   */
+  200: {
+    location: LocationInfo
+    data: Array<Project>
+  }
+}
+
+export type V2ProjectListResponse = V2ProjectListResponses[keyof V2ProjectListResponses]
+
 export type ProjectCurrentData = {
   body?: never
   path?: never
@@ -9374,6 +9409,41 @@ export type ProjectCurrentResponses = {
 }
 
 export type ProjectCurrentResponse = ProjectCurrentResponses[keyof ProjectCurrentResponses]
+
+export type V2ProjectCurrentData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/project/current"
+}
+
+export type V2ProjectCurrentErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+}
+
+export type V2ProjectCurrentError = V2ProjectCurrentErrors[keyof V2ProjectCurrentErrors]
+
+export type V2ProjectCurrentResponses = {
+  /**
+   * Current project information
+   */
+  200: {
+    location: LocationInfo
+    data: Project
+  }
+}
+
+export type V2ProjectCurrentResponse = V2ProjectCurrentResponses[keyof V2ProjectCurrentResponses]
 
 export type ProjectInitGitData = {
   body?: never
@@ -9470,6 +9540,43 @@ export type ProjectDirectoriesResponses = {
 }
 
 export type ProjectDirectoriesResponse = ProjectDirectoriesResponses[keyof ProjectDirectoriesResponses]
+
+export type V2ProjectDirectoriesData = {
+  body?: never
+  path: {
+    projectID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/project/{projectID}/directories"
+}
+
+export type V2ProjectDirectoriesErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+}
+
+export type V2ProjectDirectoriesError = V2ProjectDirectoriesErrors[keyof V2ProjectDirectoriesErrors]
+
+export type V2ProjectDirectoriesResponses = {
+  /**
+   * Project directories
+   */
+  200: {
+    location: LocationInfo
+    data: ProjectDirectories
+  }
+}
+
+export type V2ProjectDirectoriesResponse = V2ProjectDirectoriesResponses[keyof V2ProjectDirectoriesResponses]
 
 export type ExperimentalProjectCopyGenerateNameData = {
   body?: {
@@ -13252,6 +13359,47 @@ export type V2ModelListResponses = {
 }
 
 export type V2ModelListResponse = V2ModelListResponses[keyof V2ModelListResponses]
+
+export type V2ModelDefaultData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/model/default"
+}
+
+export type V2ModelDefaultErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2ModelDefaultError = V2ModelDefaultErrors[keyof V2ModelDefaultErrors]
+
+export type V2ModelDefaultResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: ModelV2Info
+  }
+}
+
+export type V2ModelDefaultResponse = V2ModelDefaultResponses[keyof V2ModelDefaultResponses]
 
 export type V2ProviderListData = {
   body?: never

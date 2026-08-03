@@ -69,6 +69,7 @@ export function memory(state: MemoryState): Adapter {
     },
     appendMessage(message) {
       return Effect.sync(() => {
+        if (state.messages.some((current) => current.id === message.id)) return
         state.messages.push(message)
       })
     },
@@ -124,7 +125,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       },
       "session.next.moved": () => Effect.void,
       "session.next.updated": () => Effect.void,
-      "session.next.message.imported": () => Effect.void,
+      "session.next.message.imported": (event) => adapter.appendMessage(event.data.message),
       "session.next.command.executed": () => Effect.void,
       "session.next.prompted": (event) => {
         return adapter.appendMessage(

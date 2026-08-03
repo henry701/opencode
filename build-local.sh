@@ -7,6 +7,7 @@ PKG_DIR="$REPO_ROOT/packages/opencode"
 INSTALL_DIR="$HOME/.local/bin"
 BINARY_NAME="opencode-local"
 SERVICE_NAME="opencode-server"
+BACKEND_SERVICE_NAME="opencode-backend"
 RESTART_SERVICE=1
 
 usage() {
@@ -86,11 +87,11 @@ if [[ "$RESTART_SERVICE" == "0" ]]; then
   exit 0
 fi
 
-echo "==> Reloading systemd user daemon and restarting $SERVICE_NAME..."
+echo "==> Reloading systemd user daemon and restarting $BACKEND_SERVICE_NAME and $SERVICE_NAME..."
 if XDG_RUNTIME_DIR="/run/user/$(id -u)" systemctl --user daemon-reload 2>/dev/null; then
-  XDG_RUNTIME_DIR="/run/user/$(id -u)" systemctl --user restart "$SERVICE_NAME"
+  XDG_RUNTIME_DIR="/run/user/$(id -u)" systemctl --user restart "$BACKEND_SERVICE_NAME" "$SERVICE_NAME"
   sleep 1
-  XDG_RUNTIME_DIR="/run/user/$(id -u)" systemctl --user status "$SERVICE_NAME" --no-pager
+  XDG_RUNTIME_DIR="/run/user/$(id -u)" systemctl --user status "$BACKEND_SERVICE_NAME" "$SERVICE_NAME" --no-pager
 else
   echo "    DBUS unavailable - simulating start on a different port to verify binary works..."
   TEST_PORT=14097
@@ -106,7 +107,7 @@ else
     exit 1
   fi
   echo ""
-  echo "    NOTE: run 'systemctl --user restart $SERVICE_NAME' from your desktop session to apply."
+  echo "    NOTE: run 'systemctl --user restart $BACKEND_SERVICE_NAME $SERVICE_NAME' from your desktop session to apply."
 fi
 
 echo "==> Done."

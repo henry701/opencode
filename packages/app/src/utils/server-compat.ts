@@ -85,10 +85,63 @@ function sessionInfo(session: Session): SessionInfo {
 
 export function createCompatibleApi(input: CompatibleInput): CompatibleApi {
   const v1 = createV1Api(input)
+  const current = createCurrentApi(input.current)
   return lazyApi(
-    input.protocol.then((protocol) => (protocol === "v1" ? v1 : input.current)),
-    input.current,
+    input.protocol.then((protocol) => (protocol === "v1" ? v1 : current)),
+    current,
   )
+}
+
+function createCurrentApi(input: ServerApi): ServerApi {
+  return {
+    ...input,
+    project: {
+      ...input.project,
+      async list(...args) {
+        return unwrapLocated(await input.project.list(...args))
+      },
+      async current(...args) {
+        return unwrapLocated(await input.project.current(...args))
+      },
+      async directories(...args) {
+        return unwrapLocated(await input.project.directories(...args))
+      },
+    },
+    mcp: {
+      ...input.mcp,
+      async list(...args) {
+        return normalizeMcpList(await input.mcp.list(...args))
+      },
+      resource: {
+        ...input.mcp.resource,
+        async catalog(...args) {
+          return normalizeMcpResourceCatalog(await input.mcp.resource.catalog(...args))
+        },
+      },
+    },
+  }
+}
+
+function unwrapLocated<T>(value: T): T {
+  if (value !== null && typeof value === "object" && "data" in value) return value.data as T
+  return value
+}
+
+function normalizeMcpList<T extends { data: unknown }>(value: T): T {
+  if (Array.isArray(value.data)) return value
+  if (value.data === null || typeof value.data !== "object") return value
+  return {
+    ...value,
+    data: Object.entries(value.data).map(([name, status]) => ({ name, status })),
+  } as T
+}
+
+function normalizeMcpResourceCatalog<T extends { data: unknown }>(value: T): T {
+  if (!Array.isArray(value.data)) return value
+  return {
+    ...value,
+    data: { resources: value.data, templates: [] },
+  } as T
 }
 
 function lazyApi<T extends object>(implementation: Promise<T>, shape: T): T {

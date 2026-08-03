@@ -93,7 +93,7 @@ const layer = Layer.effect(
         return selectedDefault()
       }),
       resolve: Effect.fn("AgentV2.resolve")(function* (id) {
-        if (id !== undefined) return state.get().agents.get(ID.make(id))
+        if (id !== undefined) return state.get().agents.get(ID.make(id)) ?? selectedDefault()
         return selectedDefault()
       }),
       select: Effect.fn("AgentV2.select")(function* (id) {

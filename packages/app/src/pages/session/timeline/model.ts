@@ -1,8 +1,10 @@
 import type { Message, UserMessage } from "@opencode-ai/sdk/v2"
+import type { SessionMessage } from "@opencode-ai/schema/session-message"
 import { createMemo, createResource, onCleanup, untrack, type Accessor } from "solid-js"
 import { useServerSync } from "@/context/server-sync"
 import { useSync } from "@/context/sync"
 import { same } from "@/utils/same"
+import { normalizeCurrentSessionMessages } from "@/utils/session-message"
 
 const emptyUserMessages: UserMessage[] = []
 const sessionFreshness = 15_000
@@ -11,7 +13,8 @@ export function createTimelineModel(input: {
   sessionID: Accessor<string | undefined>
   revertMessageID: Accessor<string | undefined>
   current?: {
-    messages: Accessor<Message[]>
+    enabled: Accessor<boolean>
+    messages: Accessor<readonly SessionMessage.Message[]>
     ready: Accessor<boolean>
     more: Accessor<boolean>
     loading: Accessor<boolean>
@@ -22,9 +25,18 @@ export function createTimelineModel(input: {
   const sync = useSync()
   let refreshFrame: number | undefined
   let refreshTimer: number | undefined
+  const useCurrent = () => input.current?.enabled() ?? false
+  const currentProjection = createMemo(() => {
+    const id = input.sessionID()
+    if (!id || !useCurrent()) return
+    return normalizeCurrentSessionMessages(id, input.current!.messages())
+  })
 
   const [resource] = createResource(
-    () => (input.current ? undefined : input.sessionID()),
+    () => {
+      const id = useCurrent() ? undefined : input.sessionID()
+      return id
+    },
     (id) => {
       clearRefresh()
       if (!id) return
@@ -47,12 +59,21 @@ export function createTimelineModel(input: {
     },
   )
   const messages = createMemo(() => {
-    if (input.current) return input.current.messages()
+    if (useCurrent()) return currentProjection()?.messages ?? []
     const id = input.sessionID()
     return id ? (sync().data.message[id] ?? []) : []
   })
+  const sessionMessages = createMemo(() => {
+    if (useCurrent()) return currentProjection()?.source ?? []
+    const id = input.sessionID()
+    return id ? (sync().data.session_message[id] ?? []) : []
+  })
+  const parts = (messageID: string) => {
+    if (useCurrent()) return currentProjection()?.parts.get(messageID) ?? []
+    return sync().data.part[messageID] ?? []
+  }
   const ready = createMemo(() => {
-    if (input.current) return input.current.ready()
+    if (useCurrent()) return input.current!.ready()
     const id = input.sessionID()
     return !id || isTimelineReady(sync().data.message[id], serverSync().session.history.loading(id))
   })
@@ -65,12 +86,12 @@ export function createTimelineModel(input: {
     { equals: same },
   )
   const more = createMemo(() => {
-    if (input.current) return input.current.more()
+    if (useCurrent()) return input.current!.more()
     const id = input.sessionID()
     return id ? sync().session.history.more(id) : false
   })
   const loading = createMemo(() => {
-    if (input.current) return input.current.loading()
+    if (useCurrent()) return input.current!.loading()
     const id = input.sessionID()
     return id ? sync().session.history.loading(id) : false
   })
@@ -79,8 +100,7 @@ export function createTimelineModel(input: {
       sessionID: input.sessionID,
       more,
       loading,
-      loadMore: (sessionID) =>
-        input.current ? input.current.loadOlder() : sync().session.history.loadMore(sessionID),
+      loadMore: (sessionID) => (useCurrent() ? input.current!.loadOlder() : sync().session.history.loadMore(sessionID)),
       before: options?.before,
       after: options?.after,
     })
@@ -92,6 +112,8 @@ export function createTimelineModel(input: {
     history: { loadOlder, loading, more },
     lastUserMessage: createMemo(() => visibleUserMessages().at(-1)),
     messages,
+    sessionMessages,
+    parts,
     ready,
     resource,
     userMessages,

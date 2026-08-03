@@ -404,16 +404,19 @@ export const listQueued = Effect.fn("SessionInput.listQueued")(function* (
     .orderBy(asc(SessionInputTable.admitted_seq))
     .all()
     .pipe(Effect.orDie)
-  return rows.map((row, position) => {
-    if (row.payload === null) throw new LifecycleConflict({ id: SessionMessage.ID.make(row.id) })
-    return Queued.make({
-      id: SessionMessage.ID.make(row.id),
-      sessionID,
-      position,
-      timeCreated: DateTime.makeUnsafe(row.time_created),
-      payload: decodePayload(row.payload),
-    })
-  })
+  // Prompt-only queue records predate typed queue payloads. They remain
+  // drainable by the runner but cannot be edited through the typed queue API.
+  return rows
+    .filter((row) => row.payload !== null)
+    .map((row, position) =>
+      Queued.make({
+        id: SessionMessage.ID.make(row.id),
+        sessionID,
+        position,
+        timeCreated: DateTime.makeUnsafe(row.time_created),
+        payload: decodePayload(row.payload!),
+      }),
+    )
 })
 
 export const getQueued = Effect.fn("SessionInput.getQueued")(function* (

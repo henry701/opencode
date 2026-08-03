@@ -1,5 +1,7 @@
 import * as InstanceState from "@/effect/instance-state"
+import { Location } from "@opencode-ai/core/location"
 import { Project } from "@/project/project"
+import { response } from "@opencode-ai/server/location"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -16,8 +18,19 @@ export const projectHandlers = HttpApiBuilder.group(InstanceHttpApi, "project", 
       return yield* svc.list()
     })
 
+    const listV2 = Effect.fn("ProjectHttpApi.listV2")(function* () {
+      return yield* response(svc.list())
+    })
+
     const current = Effect.fn("ProjectHttpApi.current")(function* () {
       return (yield* InstanceState.context).project
+    })
+
+    const currentV2 = Effect.fn("ProjectHttpApi.currentV2")(function* () {
+      const location = yield* Location.Service
+      const current = yield* svc.get(location.project.id)
+      if (current) return yield* response(Effect.succeed(current))
+      return yield* response(Effect.map(InstanceState.context, (ctx) => ctx.project))
     })
 
     const initGit = Effect.fn("ProjectHttpApi.initGit")(function* () {
@@ -53,11 +66,18 @@ export const projectHandlers = HttpApiBuilder.group(InstanceHttpApi, "project", 
       project.directories({ projectID: ctx.params.projectID }),
     )
 
+    const directoriesV2 = Effect.fn("ProjectHttpApi.directoriesV2")((ctx: { params: { projectID: ProjectV2.ID } }) =>
+      response(project.directories({ projectID: ctx.params.projectID })),
+    )
+
     return handlers
       .handle("list", list)
+      .handle("listV2", listV2)
       .handle("current", current)
+      .handle("currentV2", currentV2)
       .handle("initGit", initGit)
       .handle("update", update)
       .handle("directories", directories)
+      .handle("directoriesV2", directoriesV2)
   }),
 )

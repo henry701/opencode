@@ -20,7 +20,8 @@ const decodeQueue = Schema.decodeUnknownSync(Schema.Array(SessionInput.Queued))
 const decodeEvent = Schema.decodeUnknownSync(SessionEvent.All)
 
 export type CurrentSessionPort = {
-  readonly sessions: Pick<CurrentClient["sessions"], "get" | "active" | "events" | "queueList">
+  readonly sessions: Pick<CurrentClient["sessions"], "get" | "active" | "events" | "queueList"> &
+    Partial<Pick<CurrentClient["sessions"], "context">>
   readonly messages: Pick<CurrentClient["messages"], "list">
 }
 
@@ -38,6 +39,7 @@ export function createCurrentSessionModel(input: {
   let sessionRefresh = 0
   let queueRefresh = 0
   let activeRefresh = 0
+  let contextRefresh = 0
 
   const dispatch = (action: CurrentSessionAction) => setState((current) => reduceCurrentSession(current, action))
 
@@ -71,6 +73,36 @@ export function createCurrentSessionModel(input: {
     })
   }
 
+  const refreshContext = async (client: CurrentSessionPort, sessionID: string, signal?: AbortSignal) => {
+    const context = client.sessions.context
+    if (!context) return
+    const request = ++contextRefresh
+    try {
+      const messages = decodeMessages(await context({ sessionID }, { signal }))
+      if (request !== contextRefresh) return
+      dispatch({ type: "context-updated", context: messages })
+    } catch (error) {
+      if (!isAbort(error, signal ?? new AbortController().signal))
+        console.error("Failed to refresh current session context", error)
+    }
+  }
+
+  const loadContext = async (
+    client: CurrentSessionPort,
+    sessionID: string,
+    fallback: readonly SessionMessage.Message[],
+    signal?: AbortSignal,
+  ) => {
+    try {
+      if (!client.sessions.context) return fallback
+      return decodeMessages(await client.sessions.context({ sessionID }, { signal }))
+    } catch (error) {
+      if (!isAbort(error, signal ?? new AbortController().signal))
+        console.error("Failed to load current session context", error)
+      return fallback
+    }
+  }
+
   const newest = async (client: CurrentSessionPort, sessionID: string, signal?: AbortSignal) => {
     const page = await client.messages.list({ sessionID, order: "desc", limit: pageSize }, { signal })
     return {
@@ -89,10 +121,12 @@ export function createCurrentSessionModel(input: {
     const queue = events.some(eventRefreshesQueue)
     const session = events.some(eventRefreshesSession)
     const active = events.some(eventRefreshesActive)
+    const context = events.some(eventRefreshesContext)
     await Promise.all([
       queue ? refreshQueue(client, sessionID, signal) : undefined,
       session ? refreshSession(client, sessionID, signal) : undefined,
       active ? refreshActive(client, sessionID, signal) : undefined,
+      context ? refreshContext(client, sessionID, signal) : undefined,
     ])
   }
 
@@ -151,6 +185,7 @@ export function createCurrentSessionModel(input: {
     const sessionID = input.sessionID()
     if (!sessionID) {
       dispatch({ type: "hydrated", messages: [] })
+      dispatch({ type: "context-updated", context: [] })
       return
     }
     const buffered: SessionEvent.Event[] = []
@@ -177,15 +212,17 @@ export function createCurrentSessionModel(input: {
           activeGeneration,
         )
         await Promise.resolve()
-        const [session, queue, active] = await Promise.all([
+        const [session, queue, active, context] = await Promise.all([
           client.sessions.get({ sessionID }, { signal: controller.signal }).then(decodeSession),
           client.sessions.queueList({ sessionID }, { signal: controller.signal }).then(decodeQueue),
           client.sessions.active({ signal: controller.signal }).then((sessions) => sessions[sessionID] !== undefined),
+          loadContext(client, sessionID, page.messages, controller.signal),
         ])
         if (controller.signal.aborted || generation !== activeGeneration) return
         dispatch({ type: "session-updated", session })
         dispatch({ type: "queue-updated", queue })
         dispatch({ type: "active-updated", active })
+        dispatch({ type: "context-updated", context })
         dispatch({
           type: "hydrated",
           messages: page.messages,
@@ -196,10 +233,14 @@ export function createCurrentSessionModel(input: {
 
         while (buffered.length > 0) {
           const events = buffered.splice(0)
-          events.forEach((event) => dispatch({ type: "event-observed", sequence: event.durable?.seq }))
           const page = await newest(client, sessionID, controller.signal)
           if (controller.signal.aborted || generation !== activeGeneration) return
           dispatch({ type: "newest-merged", messages: page.messages, hasOlder: page.cursor !== undefined })
+          events.forEach((event) => dispatch({ type: "event", event }))
+          if (events.some((event) => event.type === "session.next.step.started"))
+            dispatch({ type: "active-updated", active: true })
+          if (events.some((event) => event.type === "session.next.step.failed"))
+            dispatch({ type: "active-updated", active: false })
           await refreshForEvents(client, sessionID, events, controller.signal)
         }
         buffering = false
@@ -246,6 +287,7 @@ export function createCurrentSessionModel(input: {
       newest(client, sessionID, controller.signal),
       refreshQueue(client, sessionID, controller.signal),
       refreshActive(client, sessionID, controller.signal),
+      refreshContext(client, sessionID, controller.signal),
     ])
     dispatch({ type: "newest-merged", messages: page.messages, hasOlder: page.cursor !== undefined })
   }
@@ -271,6 +313,7 @@ export function createCurrentSessionModel(input: {
   return {
     state,
     messages: () => state().messages,
+    context: () => state().context,
     queue: () => state().queue,
     session: () => state().session,
     active: () => state().active,
@@ -321,6 +364,7 @@ function eventRefreshesQueue(event: SessionEvent.Event) {
 
 function eventRefreshesSession(event: SessionEvent.Event) {
   return (
+    event.type === "session.next.updated" ||
     event.type === "session.next.agent.switched" ||
     event.type === "session.next.model.switched" ||
     event.type === "session.next.moved" ||
@@ -336,6 +380,22 @@ function eventRefreshesActive(event: SessionEvent.Event) {
     event.type === "session.next.step.started" ||
     event.type === "session.next.step.ended" ||
     event.type === "session.next.step.failed"
+  )
+}
+
+function eventRefreshesContext(event: SessionEvent.Event) {
+  return (
+    event.type === "session.next.message.imported" ||
+    event.type === "session.next.prompted" ||
+    event.type === "session.next.synthetic" ||
+    event.type === "session.next.context.updated" ||
+    event.type === "session.next.agent.switched" ||
+    event.type === "session.next.model.switched" ||
+    event.type === "session.next.step.started" ||
+    event.type === "session.next.step.ended" ||
+    event.type === "session.next.step.failed" ||
+    event.type === "session.next.compaction.ended" ||
+    event.type.startsWith("session.next.revert.")
   )
 }
 

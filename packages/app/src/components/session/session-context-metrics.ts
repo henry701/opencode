@@ -40,10 +40,7 @@ const lastAssistantWithTokens = (messages: readonly SessionMessage.Message[]) =>
   }
 }
 
-const build = (
-  messages: readonly SessionMessage.Message[] = [],
-  providers: Provider[] = [],
-): Context | undefined => {
+const build = (messages: readonly SessionMessage.Message[] = [], providers: Provider[] = []): Context | undefined => {
   const message = lastAssistantWithTokens(messages)
   if (!message?.tokens) return
 
@@ -59,15 +56,12 @@ const build = (
     providerLabel: provider?.name ?? message.model.providerID,
     modelLabel: model?.name ?? message.model.id,
     limit,
-    input: message.tokens.input,
+    input: message.tokens.input + message.tokens.cache.read + message.tokens.cache.write,
     total,
     usage: limit ? Math.round((total / limit) * 100) : null,
   }
 }
 
-export function getSessionContext(
-  messages: readonly SessionMessage.Message[] = [],
-  providers: Provider[] = [],
-) {
+export function getSessionContext(messages: readonly SessionMessage.Message[] = [], providers: Provider[] = []) {
   return build(messages, providers)
 }

@@ -4,6 +4,7 @@ import { Effect, Schema } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { InvalidCursorError, SessionNotFoundError, UnknownError } from "@opencode-ai/protocol/errors"
+import { firstPreparedMessageID, stripRepeatedPreparedContext } from "./prepared-context"
 
 const DefaultMessagesLimit = 50
 
@@ -76,10 +77,19 @@ export const MessageHandler = HttpApiBuilder.group(Api, "server.message", (handl
               )
             }),
           )
-        const first = messages[0]
-        const last = messages.at(-1)
+        const firstPreparedID = firstPreparedMessageID(
+          yield* session.context(ctx.params.sessionID).pipe(
+            Effect.catchTags({
+              "Session.MessageDecodeError": () => Effect.succeed([]),
+              "Session.NotFoundError": () => Effect.succeed([]),
+            }),
+          ),
+        )
+        const projected = messages.map((message) => stripRepeatedPreparedContext(message, firstPreparedID))
+        const first = projected[0]
+        const last = projected.at(-1)
         return {
-          data: messages,
+          data: projected,
           throughSeq,
           cursor: {
             previous: first ? cursor.encode(first, order, "previous") : undefined,

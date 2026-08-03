@@ -909,6 +909,23 @@ describe("SessionV2.queue", () => {
     ],
   })
 
+  it.effect("ignores prompt-only queue records in the typed queue listing", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+
+      const admitted = yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "legacy queue prompt" }),
+        delivery: "queue",
+        resume: false,
+      })
+
+      expect(admitted.payload).toBeUndefined()
+      expect(yield* session.queue.list(sessionID)).toEqual([])
+    }),
+  )
+
   it.effect("persists, revises, expedites, and tombstones queued payloads durably", () =>
     Effect.gen(function* () {
       yield* setup

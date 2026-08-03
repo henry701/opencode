@@ -523,7 +523,9 @@ export default function Page() {
 
   const current = useCurrentSession(() => params.id)
   const busy = (sessionID: string) =>
-    sessionID === params.id ? current.busy() || sync().data.session_working(sessionID) : sync().data.session_working(sessionID)
+    sessionID === params.id
+      ? current.busy() || sync().data.session_working(sessionID)
+      : sync().data.session_working(sessionID)
   createEffect(
     on(
       () => [params.id, current.readiness(), current.busy()] as const,
@@ -559,14 +561,27 @@ export default function Page() {
   const activeTab = tabState.activeTab
   const activeFileTab = tabState.activeFileTab
   const revertMessageID = createMemo(() => info()?.revert?.messageID)
-  const contextMessages = current.messages
-  const timeline = createTimelineModel({ sessionID: () => params.id, revertMessageID })
+  const contextMessages = current.context
+  const timeline = createTimelineModel({
+    sessionID: () => params.id,
+    revertMessageID,
+    current: {
+      enabled: () => serverSDK().protocolKind() === "v2",
+      messages: current.messages,
+      ready: () => current.readiness() === "ready",
+      more: current.hasOlder,
+      loading: () => current.readiness() === "loading" || current.loadingOlder(),
+      loadOlder: current.loadOlder,
+    },
+  })
   const historyLoading = timeline.history.loading
   const historyMore = timeline.history.more
   const lastUserMessage = timeline.lastUserMessage
   const messages = timeline.messages
   const messagesReady = timeline.ready
   const sessionSync = timeline.resource
+  const timelineSessionMessages = timeline.sessionMessages
+  const timelineParts = timeline.parts
   const userMessages = timeline.userMessages
   const visibleUserMessages = timeline.visibleUserMessages
 
@@ -1723,7 +1738,13 @@ export default function Page() {
     })),
   )
   const [editingFollowup, setEditingFollowup] = createSignal<FollowupDraft>()
-  createEffect(on(() => params.id, () => setEditingFollowup(undefined), { defer: true }))
+  createEffect(
+    on(
+      () => params.id,
+      () => setEditingFollowup(undefined),
+      { defer: true },
+    ),
+  )
 
   const followupMutation = useMutation(() => ({
     mutationFn: async (input: { sessionID: string; id: string; manual?: boolean }) => {
@@ -1798,7 +1819,9 @@ export default function Page() {
     if (draft.queueID) setEditingFollowup(undefined)
   }
 
-  const followupDock = createMemo(() => queuedFollowups().map((item) => ({ id: item.id, text: followupText(item.draft) })))
+  const followupDock = createMemo(() =>
+    queuedFollowups().map((item) => ({ id: item.id, text: followupText(item.draft) })),
+  )
 
   const sendFollowup = (sessionID: string, id: string, opts?: { manual?: boolean }) => {
     if (current.session()?.parentID) return Promise.resolve()
@@ -2091,6 +2114,9 @@ export default function Page() {
                     !location.hash && !store.messageId && !ui.pendingMessage && !autoScroll.userScrolled()
                   }
                   centered={centered()}
+                  messages={messages}
+                  sessionMessages={timelineSessionMessages}
+                  getMessageParts={timelineParts}
                   setContentRef={(el) => {
                     content = el
                     autoScroll.contentRef(el)

@@ -32,7 +32,6 @@ import {
   ErrorBoundary,
   For,
   type JSX,
-  lazy,
   onCleanup,
   type ParentProps,
   Show,
@@ -69,8 +68,7 @@ import { createSessionLineage } from "@/pages/session/session-lineage"
 import { SessionPage, SessionRouteErrorBoundary, TargetSessionRouteContent } from "@/pages/session"
 import { NewHome } from "@/pages/home"
 import { LegacyHome } from "@/pages/home/legacy-home"
-
-const NewSession = lazy(() => import("@/pages/new-session"))
+import NewSession from "@/pages/new-session"
 
 const SessionRoute = () => {
   const settings = useSettings()

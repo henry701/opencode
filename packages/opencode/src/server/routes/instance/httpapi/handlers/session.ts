@@ -8,6 +8,7 @@ import { SessionShare } from "@/share/session"
 import { Session } from "@/session/session"
 import { SessionCompaction } from "@/session/compaction"
 import { MessageV2 } from "@/session/message-v2"
+import { firstPreparedContextID, projectPreparedContext } from "@/session/prepared-context"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
@@ -118,7 +119,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       }
       yield* requireSession(ctx.params.sessionID)
       if (ctx.query.limit === undefined || ctx.query.limit === 0) {
-        return yield* SessionError.mapStorageNotFound(session.messages({ sessionID: ctx.params.sessionID }))
+        return projectPreparedContext(
+          yield* SessionError.mapStorageNotFound(session.messages({ sessionID: ctx.params.sessionID })),
+        )
       }
 
       const page = yield* SessionError.mapStorageNotFound(
@@ -128,7 +131,14 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           before: ctx.query.before,
         }),
       )
-      if (!page.cursor) return page.items
+      if (!page.cursor) return projectPreparedContext(page.items)
+      const pagePreparedID = firstPreparedContextID(page.items)
+      const firstPreparedID =
+        pagePreparedID === undefined
+          ? undefined
+          : firstPreparedContextID(
+              yield* SessionError.mapStorageNotFound(session.messages({ sessionID: ctx.params.sessionID })),
+            )
 
       const request = yield* HttpServerRequest.HttpServerRequest
       // toURL() honors the Host + x-forwarded-proto headers, so the Link
@@ -136,7 +146,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       const url = Option.getOrElse(HttpServerRequest.toURL(request), () => new URL(request.url, "http://localhost"))
       url.searchParams.set("limit", ctx.query.limit.toString())
       url.searchParams.set("before", page.cursor)
-      return HttpServerResponse.jsonUnsafe(page.items, {
+      return HttpServerResponse.jsonUnsafe(projectPreparedContext(page.items, firstPreparedID), {
         headers: {
           "Access-Control-Expose-Headers": "Link, X-Next-Cursor",
           Link: `<${url.toString()}>; rel="next"`,
