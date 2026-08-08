@@ -4,18 +4,23 @@ import { Schema } from "effect"
 import { buildRequestParts } from "./build-request-parts"
 import type { FollowupDraft } from "./submit"
 import { Identifier } from "@/utils/id"
+import { blobDataUrl } from "@/utils/draft-store"
 
 type Payload = NonNullable<SessionsPromptInput["payload"]>
 const decodePayload = Schema.decodeUnknownSync(SessionInputPayload.Payload)
 const encodePayload = Schema.encodeSync(SessionInputPayload.Payload)
 
-export function createSessionPayload(draft: FollowupDraft): Payload {
+export function createSessionPayload(draft: FollowupDraft, imageDataUrls?: ReadonlyMap<string, string>): Payload {
   const text = draft.prompt.map((part) => ("content" in part ? part.content : "")).join("")
   const images = draft.prompt.filter((part) => part.type === "image")
+  const encodedImages = images.map((attachment) => ({
+    ...attachment,
+    dataUrl: imageDataUrls?.get(attachment.id) ?? attachment.blob.url,
+  }))
   const built = buildRequestParts({
     prompt: draft.prompt,
     context: draft.context,
-    images,
+    images: encodedImages,
     text,
     sessionID: draft.sessionID,
     messageID: Identifier.ascending("message"),
@@ -47,6 +52,16 @@ export function createSessionPayload(draft: FollowupDraft): Payload {
       parts: previous ? mergeEditableParts(previous.parts, parts) : parts,
     }),
   )
+}
+
+export async function createSessionPayloadWithImages(draft: FollowupDraft): Promise<Payload> {
+  const images = draft.prompt.filter((part) => part.type === "image")
+  const imageDataUrls = new Map(
+    await Promise.all(
+      images.map(async (attachment) => [attachment.id, await blobDataUrl(attachment.blob, attachment.mime)] as const),
+    ),
+  )
+  return createSessionPayload(draft, imageDataUrls)
 }
 
 function mergeEditableParts(previous: Payload["parts"], next: Payload["parts"]) {

@@ -3,6 +3,7 @@ import type { JSX } from "solid-js"
 import { checksum } from "@opencode-ai/core/util/encode"
 import { same } from "@/utils/same"
 import { Icon } from "@opencode-ai/ui/icon"
+import { Button } from "@opencode-ai/ui/button"
 import { Accordion } from "@opencode-ai/ui/accordion"
 import { StickyAccordionHeader } from "@opencode-ai/ui/sticky-accordion-header"
 import { File } from "@opencode-ai/session-ui/file"
@@ -11,6 +12,8 @@ import { ScrollView } from "@opencode-ai/ui/scroll-view"
 import type { SessionMessage } from "@opencode-ai/schema/session-message"
 import type { Session } from "@opencode-ai/schema/session"
 import { DateTime } from "effect"
+import { showToast } from "@/utils/toast"
+import { downloadSessionExport, fetchSessionExport, sessionExportFilename } from "@/utils/session-export"
 import { useLanguage } from "@/context/language"
 import { useProviders } from "@/hooks/use-providers"
 import { useSDK } from "@/context/sdk"
@@ -217,6 +220,31 @@ export function SessionContextTab(props: {
     },
   ] satisfies { label: string; value: () => JSX.Element }[]
 
+  const exportSession = async () => {
+    const sessionID = params.id
+    if (!sessionID) return
+    try {
+      const data = await fetchSessionExport({
+        sessionID,
+        client: sdk().client,
+      })
+      const filename = sessionExportFilename(data.info)
+      downloadSessionExport(filename, data)
+      showToast({
+        variant: "success",
+        icon: "circle-check",
+        title: language.t("toast.session.export.success.title"),
+        description: language.t("toast.session.export.success.description", { filename }),
+      })
+    } catch (err) {
+      showToast({
+        variant: "error",
+        title: language.t("toast.session.export.failed.title"),
+        description: err instanceof Error ? err.message : language.t("toast.session.export.failed.description"),
+      })
+    }
+  }
+
   let scroll: HTMLDivElement | undefined
   let frame: number | undefined
   let pending: { x: number; y: number } | undefined
@@ -323,7 +351,18 @@ export function SessionContextTab(props: {
         </Show>
 
         <div class="flex flex-col gap-2">
-          <div class="text-12-regular text-text-weak">{language.t("context.rawMessages.title")}</div>
+          <div class="flex items-center justify-between">
+            <div class="text-12-regular text-text-weak">{language.t("context.rawMessages.title")}</div>
+            <Button
+              size="small"
+              variant="ghost"
+              class="gap-1.5 px-2 text-text-weak hover:text-text-base"
+              onClick={exportSession}
+            >
+              <Icon name="download" size="small" />
+              <span>{language.t("context.export.session")}</span>
+            </Button>
+          </div>
           <Accordion multiple>
             <For each={messages()}>
               {(message) => <RawMessage message={message} onRendered={restoreScroll} time={formatter().time} />}
