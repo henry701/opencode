@@ -92,6 +92,14 @@ function toLegacyMessage(message: CurrentEncodedMessage): SessionMessageInfo {
   } as SessionMessageInfo
 }
 
+export function compareMessages(a: Pick<Message, "id" | "time">, b: Pick<Message, "id" | "time">) {
+  const left = messageKey(a)
+  const right = messageKey(b)
+  return left < right ? -1 : left > right ? 1 : 0
+}
+
+export const messageKey = (message: Pick<Message, "id" | "time">) => message.time.created + message.id
+
 function record(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value)
 }

@@ -22,7 +22,7 @@ const draft = (queueID?: string): FollowupDraft => ({
       id: "img_1",
       filename: "diagram.png",
       mime: "image/png",
-      dataUrl: "data:image/png;base64,AA==",
+      blob: { id: "data:image/png;base64,AA==", url: "data:image/png;base64,AA==" },
     },
   ],
   context: [{ key: "ctx_1", type: "file", path: "src/context.ts" }],
@@ -33,8 +33,8 @@ const draft = (queueID?: string): FollowupDraft => ({
 })
 
 describe("session durable queue payload", () => {
-  test("preserves the prompt, context, agent, model, and variant", () => {
-    const payload = createSessionPayload(draft())
+  test("preserves the prompt, context, agent, model, and variant", async () => {
+    const payload = await createSessionPayload(draft())
 
     expect(payload).toMatchObject({
       version: 1,
@@ -52,13 +52,14 @@ describe("session durable queue payload", () => {
     )
   })
 
-  test("restores an editable followup from a durable queue item", () => {
+  test("restores an editable followup from a durable queue item", async () => {
+    const payload = await createSessionPayload(draft())
     const item: SessionsQueueListOutput[number] = {
       id: "msg_queue",
       sessionID: "ses_test",
       position: 0,
       timeCreated: 1,
-      payload: createSessionPayload(draft()),
+      payload,
     }
 
     const restored = queuedFollowup(item, "/repo", "attachment")
@@ -75,9 +76,9 @@ describe("session durable queue payload", () => {
     ])
   })
 
-  test("retains hidden parts and execution controls when an item is edited", () => {
-    const original = createSessionPayload(draft())
-    const payload = createSessionPayload({
+  test("retains hidden parts and execution controls when an item is edited", async () => {
+    const original = await createSessionPayload(draft())
+    const payload = await createSessionPayload({
       ...draft("msg_queue"),
       prompt: [{ type: "text", content: "Edited", start: 0, end: 6 }],
       context: [],
@@ -121,12 +122,13 @@ describe("session durable queue payload", () => {
 describe("session durable queue save", () => {
   test("enqueues a new draft without resuming an idle drain", async () => {
     const calls: SessionsQueueEnqueueInput[] = []
+    const payload = await createSessionPayload(draft())
     const queued = {
       id: "msg_queue",
       sessionID: "ses_test",
       position: 0,
       timeCreated: 1,
-      payload: createSessionPayload(draft()),
+      payload,
     } satisfies SessionsQueueEnqueueOutput
 
     await saveQueuedFollowup({
@@ -185,7 +187,7 @@ describe("session durable queue save", () => {
             id: "msg_command",
             sessionID: "ses_test",
             prompt: { text: "/review now" },
-            payload: createSessionPayload(draft()),
+            payload: await createSessionPayload(draft()),
             delivery: "queue",
             admittedSeq: 1,
             timeCreated: 1,

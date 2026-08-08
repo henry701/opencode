@@ -7,7 +7,7 @@ import type {
   SessionsQueueUpdateInput,
 } from "@/utils/current-client"
 import type { FollowupDraft } from "@/components/prompt-input/submit"
-import { createSessionPayload } from "@/components/prompt-input/session-payload"
+import { createSessionPayloadWithImages } from "@/components/prompt-input/session-payload"
 import { promptFromSessionPayload } from "@/components/prompt-input/prompt-from-session-payload"
 import { createPathHelpers } from "@/context/file/path"
 import type { ContextItem } from "@/context/prompt"
@@ -47,7 +47,7 @@ export function queuedFollowup(
 }
 
 export async function saveQueuedFollowup(input: { client: QueueWriter; draft: FollowupDraft }) {
-  const payload = createSessionPayload(input.draft)
+  const payload = await createSessionPayloadWithImages(input.draft)
   if (!input.draft.queueID && input.draft.command) {
     if (!input.client.command) throw new Error("Current command API is unavailable")
     return input.client.command({

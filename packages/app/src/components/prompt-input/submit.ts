@@ -18,7 +18,7 @@ import { Worktree as WorktreeState } from "@/utils/worktree"
 import { setCursorPosition } from "./editor-dom"
 import { ScopedKey } from "@/utils/server-scope"
 import { createPromptSubmissionState } from "./submission-state"
-import { createSessionPayload } from "./session-payload"
+import { createSessionPayload, createSessionPayloadWithImages } from "./session-payload"
 
 type PendingPrompt = {
   abort: AbortController
@@ -54,10 +54,13 @@ type FollowupSendInput = {
 export async function sendFollowupDraft(input: FollowupSendInput) {
   const messageID = input.messageID ?? Identifier.ascending("message")
   if ((await input.before?.()) === false) return false
+  const payload = input.draft.prompt.some((part) => part.type === "image")
+    ? await createSessionPayloadWithImages(input.draft)
+    : createSessionPayload(input.draft)
   await input.client.sessions.prompt({
     sessionID: input.draft.sessionID,
     id: messageID,
-    payload: createSessionPayload(input.draft),
+    payload,
     delivery: input.delivery,
     resume: true,
   })
@@ -390,13 +393,16 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
     if (draft.command) {
       clearInput()
+      const payload = draft.prompt.some((part) => part.type === "image")
+        ? await createSessionPayloadWithImages(draft)
+        : createSessionPayload(draft)
       serverSDK().currentClient.sessions
         .command({
           id: Identifier.ascending("message"),
           sessionID: session.id,
           name: draft.command.name,
           arguments: draft.command.arguments,
-          payload: createSessionPayload(draft),
+          payload,
           resume: true,
         })
         .catch((err) => {

@@ -215,6 +215,12 @@ export function Session() {
       .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   })
   const messages = createMemo(() => currentTimelineMessages(data.session.message.list(route.sessionID) ?? []))
+  const messagesBeforeRevert = () => {
+    const messageID = session()?.revert?.messageID
+    if (!messageID) return messages()
+    const index = messages().findIndex((message) => message.id === messageID)
+    return index === -1 ? messages() : messages().slice(0, index)
+  }
   const messageParts = (messageID: string) => {
     const message = messages().find((candidate) => candidate.id === messageID)
     if (message?.type === "assistant") return message.content
@@ -245,9 +251,11 @@ export function Session() {
   const disabled = createMemo(() => permissions().length > 0 || questions().length > 0)
 
   const pending = createMemo(() => {
-    const completed = messages().findLast((x) => x.type === "assistant" && x.time.completed)?.id
-    return messages().findLast((x) => x.type === "assistant" && !x.time.completed && (!completed || x.id > completed))
-      ?.id
+    const completed = messages().findLastIndex((message) => message.type === "assistant" && message.time.completed)
+    const index = messages().findLastIndex(
+      (message, messageIndex) => messageIndex > completed && message.type === "assistant" && !message.time.completed,
+    )
+    return index === -1 ? undefined : index
   })
 
   const lastAssistant = createMemo(() => {
@@ -618,8 +626,7 @@ export function Session() {
       run: async () => {
         const status = sync.data.session_status?.[route.sessionID]
         if (status?.type !== "idle") await sdk.next.sessions.interrupt({ sessionID: route.sessionID }).catch(() => {})
-        const revert = currentSession()?.revert?.messageID
-        const message = messages().findLast((x) => (!revert || x.id < revert) && x.type === "user")
+        const message = messagesBeforeRevert().findLast((item) => item.type === "user")
         if (!message) return
         void sdk.next.sessions
           .stage({
@@ -658,7 +665,8 @@ export function Session() {
         dialog.clear()
         const messageID = currentSession()?.revert?.messageID
         if (!messageID) return
-        const message = messages().find((x) => x.type === "user" && x.id > messageID)
+        const index = messages().findIndex((item) => item.id === messageID)
+        const message = index === -1 ? undefined : messages().slice(index + 1).find((item) => item.type === "user")
         if (!message) {
           void sdk.next.sessions.clear({
             sessionID: route.sessionID,
@@ -886,10 +894,7 @@ export function Session() {
       value: "messages.copy",
       category: "Session",
       run: () => {
-        const revertID = session()?.revert?.messageID
-        const lastAssistantMessage = messages().findLast(
-          (msg) => msg.type === "assistant" && (!revertID || msg.id < revertID),
-        )
+        const lastAssistantMessage = messagesBeforeRevert().findLast((message) => message.type === "assistant")
         if (!lastAssistantMessage) {
           toast.show({ message: "No assistant messages found", variant: "error" })
           dialog.clear()
@@ -1127,10 +1132,18 @@ export function Session() {
 
   const revertDiffFiles = createMemo(() => getRevertDiffFiles(revertInfo()?.diff ?? ""))
 
-  const revertRevertedMessages = createMemo(() => {
+  const revertMessageIndex = createMemo(() => {
     const messageID = revertMessageID()
-    if (!messageID) return []
-    return messages().filter((x) => x.id >= messageID && x.type === "user")
+    if (!messageID) return -1
+    return messages().findIndex((message) => message.id === messageID)
+  })
+
+  const revertRevertedMessages = createMemo(() => {
+    const index = revertMessageIndex()
+    if (index === -1) return []
+    return messages()
+      .slice(index)
+      .filter((message) => message.type === "user")
   })
 
   const revert = createMemo(() => {
@@ -1253,7 +1266,11 @@ export function Session() {
                           )
                         })()}
                       </Match>
-                      <Match when={revert()?.messageID && message.id >= revert()!.messageID}>
+                      <Match
+                        when={
+                          revert()?.messageID && revertMessageIndex() !== -1 && index() >= revertMessageIndex()
+                        }
+                      >
                         <></>
                       </Match>
                       <Match when={message.type === "user"}>
@@ -1351,7 +1368,7 @@ export function Session() {
   )
 }
 
-function UserMessage(props: { message: CurrentUser; onMouseUp: () => void; index: number; pending?: string }) {
+function UserMessage(props: { message: CurrentUser; onMouseUp: () => void; index: number; pending?: number }) {
   const ctx = use()
   const local = useLocal()
   const text = createMemo(() => {
@@ -1371,7 +1388,7 @@ function UserMessage(props: { message: CurrentUser; onMouseUp: () => void; index
   )
   const { theme } = useTheme()
   const [hover, setHover] = createSignal(false)
-  const afterAssistant = createMemo(() => props.pending && props.message.id > props.pending)
+  const afterAssistant = createMemo(() => props.pending !== undefined && props.index > props.pending)
   const steer = createMemo(() => afterAssistant())
   const color = createMemo(() => local.agent.color(props.message.payload?.agent ?? "build"))
   const badgeFg = createMemo(() => selectedForeground(theme, color()))
@@ -1461,7 +1478,8 @@ function AssistantMessage(props: { message: CurrentAssistant; last: boolean }) {
   const duration = createMemo(() => {
     if (!final()) return 0
     if (!props.message.time.completed) return 0
-    const user = messages().findLast((x) => x.type === "user" && x.id < props.message.id)
+    const index = messages().findIndex((message) => message.id === props.message.id)
+    const user = index === -1 ? undefined : messages().slice(0, index).findLast((message) => message.type === "user")
     if (!user || !user.time) return 0
     return props.message.time.completed - user.time.created
   })
