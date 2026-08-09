@@ -1154,4 +1154,8 @@ export const dict = {
   "workspace.reset.archived.many": "{{count}} sesi akan diarkibkan.",
   "workspace.reset.note": "Ini akan menetap semula ruang kerja agar sepadan dengan cawangan lalai.",
   "dialog.usageExceeded.dontShowAgain": "Jangan tunjukkan lagi",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
+  "context.breakdown.toolDefs": "Tool Definitions",
+  "session.followupDock.editing": "Editing",
 }

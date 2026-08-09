@@ -10,6 +10,7 @@ import { SessionID, MessageID, PartID } from "../../src/session/schema"
 import { Question } from "../../src/question"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { InvalidProviderOutputReason, LLMError } from "@opencode-ai/llm"
 
 const sessionID = SessionID.make("session")
 const providerID = ProviderV2.ID.make("test")
@@ -1444,6 +1445,55 @@ describe("session.message-v2.fromError", () => {
       },
     }
     const result = MessageV2.fromError({ message: JSON.stringify(body) }, { providerID })
+
+    expect(result).toStrictEqual({
+      name: "APIError",
+      data: {
+        message: body.error.message,
+        isRetryable: true,
+        responseBody: JSON.stringify(body),
+      },
+    })
+  })
+
+  test("serializes direct compatible stream errors as retryable APIError", () => {
+    const body = {
+      error: {
+        type: "server_error",
+        code: "server_error",
+        message: "temporarily unavailable",
+      },
+    }
+    const result = MessageV2.fromError(body, { providerID })
+
+    expect(result).toStrictEqual({
+      name: "APIError",
+      data: {
+        message: body.error.message,
+        isRetryable: true,
+        responseBody: JSON.stringify(body),
+      },
+    })
+  })
+
+  test("serializes compatible stream errors carried by LLMError as retryable APIError", () => {
+    const body = {
+      error: {
+        type: "server_error",
+        code: "server_error",
+        message: "temporarily unavailable",
+      },
+    }
+    const error = new LLMError({
+      module: "ProviderShared",
+      method: "stream",
+      reason: new InvalidProviderOutputReason({
+        route: "openai-compatible-chat",
+        message: "Invalid openai-compatible-chat stream event",
+        raw: JSON.stringify(body),
+      }),
+    })
+    const result = MessageV2.fromError(error, { providerID })
 
     expect(result).toStrictEqual({
       name: "APIError",

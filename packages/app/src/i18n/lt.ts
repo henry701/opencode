@@ -1170,4 +1170,8 @@ export const dict = {
   "workspace.reset.archived.many": "{{count}} sesijos bus archyvuojamos.",
   "workspace.reset.note": "Tai iš naujo nustatys darbo sritį, kad ji atitiktų numatytąją šaką.",
   "dialog.usageExceeded.dontShowAgain": "Daugiau nerodyti",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
+  "context.breakdown.toolDefs": "Tool Definitions",
+  "session.followupDock.editing": "Editing",
 }

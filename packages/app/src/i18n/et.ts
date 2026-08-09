@@ -1148,4 +1148,8 @@ export const dict = {
   "workspace.reset.archived.many": "{{count}} seanssi arhiivitakse.",
   "workspace.reset.note": "See lähtestab tööruumi, et see vastaks vaikeharule.",
   "dialog.usageExceeded.dontShowAgain": "Ära kuva enam",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
+  "context.breakdown.toolDefs": "Tool Definitions",
+  "session.followupDock.editing": "Editing",
 }

@@ -1152,4 +1152,8 @@ export const dict = {
   "workspace.reset.archived.many": "جلسات {{count}} بایگانی خواهد شد.",
   "workspace.reset.note": "این کار فضای کاری را برای مطابقت با شاخه پیش فرض بازنشانی می کند.",
   "dialog.usageExceeded.dontShowAgain": "دیگر نشان نده",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
+  "context.breakdown.toolDefs": "Tool Definitions",
+  "session.followupDock.editing": "Editing",
 }

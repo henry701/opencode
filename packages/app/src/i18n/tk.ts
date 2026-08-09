@@ -1156,4 +1156,8 @@ export const dict = {
   "workspace.reset.archived.many": "{{count}} sessiýalary arhiwlener.",
   "workspace.reset.note": "Bu workspace-i adaty şaha gabat getirmek üçin täzeden düzer.",
   "dialog.usageExceeded.dontShowAgain": "Gaýtadan görkezme",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
+  "context.breakdown.toolDefs": "Tool Definitions",
+  "session.followupDock.editing": "Editing",
 }

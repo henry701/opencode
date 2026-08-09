@@ -1170,4 +1170,8 @@ export const dict = {
   "workspace.reset.archived.many": "{{count}} sessions s'arxivaran.",
   "workspace.reset.note": "Això restablirà l'espai de treball perquè coincideixi amb la branca predeterminada.",
   "dialog.usageExceeded.dontShowAgain": "No ho tornis a mostrar",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
+  "context.breakdown.toolDefs": "Tool Definitions",
+  "session.followupDock.editing": "Editing",
 }
