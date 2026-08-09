@@ -1161,4 +1161,8 @@ export const dict = {
   "workspace.reset.archived.many": "{{count}} сессия архив карда мешаванд.",
   "workspace.reset.note": "Ин фазои кориро барои мувофиқ кардани филиали пешфарз барқарор мекунад.",
   "dialog.usageExceeded.dontShowAgain": "Дигар нишон надиҳед",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
+  "context.breakdown.toolDefs": "Tool Definitions",
+  "session.followupDock.editing": "Editing",
 }

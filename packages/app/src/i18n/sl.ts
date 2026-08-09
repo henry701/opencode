@@ -1160,4 +1160,8 @@ export const dict = {
   "workspace.reset.archived.many": "{{count}} seje bodo arhivirane.",
   "workspace.reset.note": "To bo ponastavilo delovni prostor, da bo ustrezal privzeti veji.",
   "dialog.usageExceeded.dontShowAgain": "Ne prikaži več",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
+  "context.breakdown.toolDefs": "Tool Definitions",
+  "session.followupDock.editing": "Editing",
 }

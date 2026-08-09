@@ -1165,4 +1165,8 @@ export const dict = {
   "workspace.reset.archived.many": "{{count}} сессийг архивлах болно.",
   "workspace.reset.note": "Энэ нь ажлын талбарыг анхдагч салбартай тааруулахын тулд дахин тохируулах болно.",
   "dialog.usageExceeded.dontShowAgain": "Дахин бүү харуул",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
+  "context.breakdown.toolDefs": "Tool Definitions",
+  "session.followupDock.editing": "Editing",
 }

@@ -1167,4 +1167,8 @@ export const dict = {
   "workspace.reset.archived.many": "A {{count}} munkamenetek archiválva lesznek.",
   "workspace.reset.note": "Ezzel visszaállítja a munkaterületet, hogy megfeleljen az alapértelmezett ágnak.",
   "dialog.usageExceeded.dontShowAgain": "Ne jelenjen meg újra",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
+  "context.breakdown.toolDefs": "Tool Definitions",
+  "session.followupDock.editing": "Editing",
 }

@@ -1,9 +1,11 @@
 import katex from "katex"
 import { Marked, type MarkedExtension, type Tokens } from "marked"
 import markedShiki from "marked-shiki"
+import { markedCodeSpanBoundary } from "./marked-code-span"
 
 export function createMarkdownParser(highlight: (code: string, language: string) => string | Promise<string>) {
   return new Marked(
+    markedCodeSpanBoundary,
     {
       renderer: {
         link({ href, title, text }) {

@@ -1,6 +1,7 @@
 import { APICallError } from "ai"
 import { STATUS_CODES } from "http"
 import { iife } from "@/util/iife"
+import { isRecord } from "@/util/record"
 import type { ProviderV2 } from "@opencode-ai/core/provider"
 import { isContextOverflow } from "@opencode-ai/llm"
 
@@ -70,17 +71,23 @@ function message(providerID: ProviderV2.ID, e: APICallError) {
   }).trim()
 }
 
-function json(input: unknown) {
+function json(input: unknown): Record<string, unknown> | undefined {
   if (typeof input === "string") {
     try {
       const result = JSON.parse(input)
-      if (result && typeof result === "object") return result
+      if (isRecord(result)) return result
       return undefined
     } catch {
       return undefined
     }
   }
-  if (typeof input === "object" && input !== null) {
+  if (isRecord(input)) {
+    if (isRecord(input.reason) && typeof input.reason.raw === "string") {
+      return json(input.reason.raw) ?? input
+    }
+    if (isRecord(input.data) && typeof input.data.message === "string") {
+      return json(input.data.message) ?? input
+    }
     return input
   }
   return undefined
@@ -105,9 +112,10 @@ export function parseStreamError(input: unknown): ParsedStreamError | undefined 
   if (!body) return
 
   const responseBody = JSON.stringify(body)
-  if (body.type !== "error") return
+  if (body.type !== "error" && !isRecord(body.error)) return
+  const error = isRecord(body.error) ? body.error : {}
 
-  switch (body?.error?.code) {
+  switch (error.code) {
     case "context_length_exceeded":
       return {
         type: "context_overflow",
@@ -131,7 +139,7 @@ export function parseStreamError(input: unknown): ParsedStreamError | undefined 
     case "invalid_prompt":
       return {
         type: "api_error",
-        message: typeof body?.error?.message === "string" ? body?.error?.message : "Invalid prompt.",
+        message: typeof error.message === "string" ? error.message : "Invalid prompt.",
         isRetryable: false,
         responseBody,
       }
@@ -139,7 +147,7 @@ export function parseStreamError(input: unknown): ParsedStreamError | undefined 
     case "server_error":
       return {
         type: "api_error",
-        message: typeof body?.error?.message === "string" ? body?.error?.message : "Server error.",
+        message: typeof error.message === "string" ? error.message : "Server error.",
         isRetryable: true,
         responseBody,
       }
@@ -165,7 +173,11 @@ export type ParsedAPICallError =
 export function parseAPICallError(input: { providerID: ProviderV2.ID; error: APICallError }): ParsedAPICallError {
   const m = message(input.providerID, input.error)
   const body = json(input.error.responseBody)
-  if (isContextOverflow(m) || input.error.statusCode === 413 || body?.error?.code === "context_length_exceeded") {
+  if (
+    isContextOverflow(m) ||
+    input.error.statusCode === 413 ||
+    (body && isRecord(body.error) && body.error.code === "context_length_exceeded")
+  ) {
     return {
       type: "context_overflow",
       message: m,

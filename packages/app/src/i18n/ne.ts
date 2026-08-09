@@ -1154,4 +1154,8 @@ export const dict: Record<string, string> = {
   "workspace.reset.archived.many": "{{count}} सत्रहरू अभिलेख गरिनेछ।",
   "workspace.reset.note": "यसले पूर्वनिर्धारित शाखासँग मिलाउन कार्यस्थान रिसेट गर्नेछ।",
   "dialog.usageExceeded.dontShowAgain": "फेरि नदेखाउनुहोस्",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
+  "context.breakdown.toolDefs": "Tool Definitions",
+  "session.followupDock.editing": "Editing",
 }

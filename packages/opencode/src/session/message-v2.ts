@@ -711,6 +711,14 @@ export function fromError(
   e: unknown,
   ctx: { providerID: ProviderV2.ID; aborted?: boolean },
 ): NonNullable<Assistant["error"]> {
+  const parsedStreamError = iife(() => {
+    try {
+      return ProviderError.parseStreamError(e)
+    } catch {
+      return undefined
+    }
+  })
+
   switch (true) {
     case e instanceof DOMException && e.name === "AbortError":
       return new AbortedError(
@@ -806,33 +814,27 @@ export function fromError(
         },
         { cause: e },
       ).toObject()
+    case parsedStreamError !== undefined:
+      if (parsedStreamError.type === "context_overflow") {
+        return new ContextOverflowError(
+          {
+            message: parsedStreamError.message,
+            responseBody: parsedStreamError.responseBody,
+          },
+          { cause: e },
+        ).toObject()
+      }
+      return new APIError(
+        {
+          message: parsedStreamError.message,
+          isRetryable: parsedStreamError.isRetryable,
+          responseBody: parsedStreamError.responseBody,
+        },
+        { cause: e },
+      ).toObject()
     case e instanceof Error:
       return new NamedError.Unknown({ message: errorMessage(e) }, { cause: e }).toObject()
     default:
-      try {
-        const parsed = ProviderError.parseStreamError(e)
-        if (parsed) {
-          if (parsed.type === "context_overflow") {
-            return new ContextOverflowError(
-              {
-                message: parsed.message,
-                responseBody: parsed.responseBody,
-              },
-              { cause: e },
-            ).toObject()
-          }
-          return new APIError(
-            {
-              message: parsed.message,
-              isRetryable: parsed.isRetryable,
-              responseBody: parsed.responseBody,
-            },
-            {
-              cause: e,
-            },
-          ).toObject()
-        }
-      } catch {}
       return new NamedError.Unknown({ message: JSON.stringify(e) }, { cause: e }).toObject()
   }
 }

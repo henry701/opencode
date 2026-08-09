@@ -1159,4 +1159,8 @@ export const dict = {
   "workspace.reset.archived.many": "Tiks arhivētas {{count}} sesijas.",
   "workspace.reset.note": "Darbvieta tiks atiestatīta uz noklusējuma zara stāvokli.",
   "dialog.usageExceeded.dontShowAgain": "Vairs nerādīt",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
+  "context.breakdown.toolDefs": "Tool Definitions",
+  "session.followupDock.editing": "Editing",
 }

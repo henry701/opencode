@@ -1153,4 +1153,8 @@ export const dict = {
   "workspace.reset.archived.many": "{{count}} სესია დაარქივდება.",
   "workspace.reset.note": "ეს აღადგენს სამუშაო სივრცეს ნაგულისხმევი ფილიალის შესატყვისად.",
   "dialog.usageExceeded.dontShowAgain": "აღარ მაჩვენო",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
+  "context.breakdown.toolDefs": "Tool Definitions",
+  "session.followupDock.editing": "Editing",
 }

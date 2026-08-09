@@ -1158,4 +1158,8 @@ export const dict = {
   "workspace.reset.archived.many": "{{count}} сесије ће бити архивиране.",
   "workspace.reset.note": "Ово ће ресетовати радни простор тако да одговара подразумеваној грани.",
   "dialog.usageExceeded.dontShowAgain": "Не приказуј поново",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
+  "context.breakdown.toolDefs": "Tool Definitions",
+  "session.followupDock.editing": "Editing",
 }

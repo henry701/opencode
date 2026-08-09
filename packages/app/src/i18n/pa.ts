@@ -1158,4 +1158,8 @@ export const dict = {
   "workspace.reset.archived.one": "1 سیشن آرکائیو کیتا جائے گا۔",
   "workspace.reset.archived.many": "{{count}} سیشن آرکائیو کیتے جان گے۔",
   "workspace.reset.note": "ایہ ورک اسپیس نو ڈیفالٹ برانچ نال ملاون لئی ری سیٹ کرے گا۔",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
+  "context.breakdown.toolDefs": "Tool Definitions",
+  "session.followupDock.editing": "Editing",
 }

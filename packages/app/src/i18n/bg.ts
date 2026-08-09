@@ -1167,4 +1167,8 @@ export const dict = {
   "workspace.reset.archived.many": "{{count}} сесии ще бъдат архивирани.",
   "workspace.reset.note": "Това ще нулира работното пространство, за да съответства на клона по подразбиране.",
   "dialog.usageExceeded.dontShowAgain": "Не показвай отново",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
+  "context.breakdown.toolDefs": "Tool Definitions",
+  "session.followupDock.editing": "Editing",
 }

@@ -1156,4 +1156,8 @@ export const dict = {
   "workspace.reset.archived.many": "{{count}} relácií bude archivovaných.",
   "workspace.reset.note": "Týmto sa pracovný priestor obnoví podľa predvolenej vetvy.",
   "dialog.usageExceeded.dontShowAgain": "Znova nezobrazovať",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
+  "context.breakdown.toolDefs": "Tool Definitions",
+  "session.followupDock.editing": "Editing",
 }

@@ -5,6 +5,7 @@ import type {
   ImageAttachmentPart,
   Prompt,
 } from "@/context/prompt"
+import { createLegacyBlobReference } from "@/utils/draft-store"
 
 type Inline =
   | {
@@ -84,7 +85,7 @@ export function promptFromSessionPayload(
             id: part.id ?? part.url,
             filename: part.filename ?? options?.attachmentName ?? "attachment",
             mime: part.mime,
-            dataUrl: part.url,
+            blob: createLegacyBlobReference(part.url),
           },
         ]
       : [],

@@ -1162,4 +1162,8 @@ export const dict = {
   "workspace.reset.archived.many": "{{count}} նիստերը կարխիվացվեն։",
   "workspace.reset.note": "Սա կվերակայի աշխատանքային տարածքը, որպեսզի համապատասխանի լռելյայն ճյուղին:",
   "dialog.usageExceeded.dontShowAgain": "Այլևս չցուցադրել",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
+  "context.breakdown.toolDefs": "Tool Definitions",
+  "session.followupDock.editing": "Editing",
 }

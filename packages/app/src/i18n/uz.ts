@@ -1168,4 +1168,8 @@ export const dict = {
   "workspace.reset.archived.many": "{{count}} seanslari arxivlanadi.",
   "workspace.reset.note": "Bu standart filialga mos keladigan ish maydonini tiklaydi.",
   "dialog.usageExceeded.dontShowAgain": "Boshqa ko‘rsatma",
+  "prompt.action.queue": "Queue",
+  "prompt.action.sendDirect": "Send direct",
+  "context.breakdown.toolDefs": "Tool Definitions",
+  "session.followupDock.editing": "Editing",
 }
