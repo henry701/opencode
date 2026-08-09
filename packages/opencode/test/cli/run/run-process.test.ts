@@ -278,6 +278,32 @@ describe("opencode run (non-interactive subprocess)", () => {
   )
 
   cliIt.live(
+    "attach mode waits for a delayed response before exiting",
+    ({ llm, opencode }) =>
+      Effect.gen(function* () {
+        const gate = Promise.withResolvers<void>()
+        yield* llm.hold("delayed attach response", gate.promise)
+        const server = yield* opencode.serve()
+        const run = yield* opencode.startRun("slow attach", {
+          format: "json",
+          extraArgs: ["--attach", server.url],
+        })
+
+        yield* llm.wait(1)
+        gate.resolve()
+        const result = yield* run.result
+
+        opencode.expectExit(result, 0)
+        const events = opencode.parseJsonEvents(result.stdout)
+        expect(events.map((event) => event.type)).toEqual(["step_start", "text", "step_finish"])
+        expect(events.find((event) => event.type === "text")?.part).toEqual(
+          expect.objectContaining({ type: "text", text: "delayed attach response" }),
+        )
+      }),
+    60_000,
+  )
+
+  cliIt.live(
     "attach mode sends client-local file contents without a shared path",
     ({ home, llm, opencode }) =>
       Effect.gen(function* () {
