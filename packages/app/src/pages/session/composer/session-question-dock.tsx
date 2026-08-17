@@ -6,6 +6,7 @@ import { DockPrompt } from "@opencode-ai/session-ui/dock-prompt"
 import { Icon } from "@opencode-ai/ui/icon"
 import { useSpring } from "@opencode-ai/ui/motion-spring"
 import { showToast } from "@/utils/toast"
+import { formatServerError } from "@/utils/server-errors"
 import type { QuestionAnswer, QuestionRequest } from "@opencode-ai/sdk/v2"
 import { useLanguage } from "@/context/language"
 import { useSDK } from "@/context/sdk"
@@ -218,8 +219,7 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
   })
 
   const fail = (err: unknown) => {
-    const message = err instanceof Error ? err.message : String(err)
-    showToast({ title: language.t("common.requestFailed"), description: message })
+    showToast({ title: language.t("common.requestFailed"), description: formatServerError(err, language.t) })
   }
 
   const replyMutation = useMutation(() => ({
@@ -259,7 +259,7 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
     await rejectMutation.mutateAsync()
   }
 
-  const submit = () => void reply(questions().map((_, i) => store.answers[i] ?? []))
+  const submit = () => void reply(questions().map((_, i) => [...(store.answers[i] ?? [])]))
 
   const answered = (i: number) => {
     if ((store.answers[i]?.length ?? 0) > 0) return true

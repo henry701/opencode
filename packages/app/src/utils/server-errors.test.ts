@@ -101,6 +101,25 @@ describe("formatServerError", () => {
     )
   })
 
+  test("extracts tagged JSON error bodies instead of [object Object]", () => {
+    expect(
+      formatServerError(
+        {
+          _tag: "QuestionNotFoundError",
+          requestID: "que_1",
+          message: "Question request not found: que_1",
+        },
+        language.t,
+      ),
+    ).toBe("Question request not found: que_1")
+    expect(
+      formatServerError(
+        { name: "UnauthorizedError", data: { message: "Authentication required" } },
+        language.t,
+      ),
+    ).toBe("Authentication required")
+  })
+
   test("formats provider model errors using provider/model", () => {
     const error = {
       name: "ProviderModelNotFoundError",
