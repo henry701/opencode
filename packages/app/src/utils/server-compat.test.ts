@@ -7,6 +7,7 @@ function setup(
   responses?: {
     vcs?: { branch: string; default_branch: string }
     mcpResource?: { location: { directory: string; project: { id: string; directory: string } }; data: unknown }
+    currentQuestion?: "missing"
   },
 ) {
   const requests: Request[] = []
@@ -43,6 +44,18 @@ function setup(
       if (request.method === "GET" && new URL(request.url).pathname === "/api/mcp/resource")
         return Response.json(responses?.mcpResource ?? [])
       if (request.method === "GET") return Response.json([])
+      const pathname = new URL(request.url).pathname
+      if (
+        request.method === "POST" &&
+        responses?.currentQuestion === "missing" &&
+        pathname.startsWith("/api/session/") &&
+        pathname.includes("/question/")
+      ) {
+        return Response.json(
+          { _tag: "QuestionNotFoundError", requestID: "que_1", message: "Question request not found: que_1" },
+          { status: 404 },
+        )
+      }
       return new Response(undefined, { status: 204 })
     },
     { preconnect: globalThis.fetch.preconnect },
@@ -197,6 +210,21 @@ describe("createCompatibleApi", () => {
     expect(url.pathname).toBe("/find/file")
     expect(url.searchParams.get("dirs")).toBe("false")
     expect(url.searchParams.get("limit")).toBe("20")
+  })
+
+  test("falls back to the V1 question reply when the current request is missing", async () => {
+    const { api, requests } = setup("v2", { currentQuestion: "missing" })
+    await api.question.reply({
+      sessionID: "ses_1",
+      requestID: "que_1",
+      answers: [["Just disable rnnoise for now."]],
+    })
+
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      "/api/session/ses_1/question/que_1/reply",
+      "/question/que_1/reply",
+    ])
+    expect(await requests[1]!.json()).toEqual({ answers: [["Just disable rnnoise for now."]] })
   })
 
   test("routes V1 permission replies through the requested directory", async () => {

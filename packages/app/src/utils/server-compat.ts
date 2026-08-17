@@ -85,16 +85,45 @@ function sessionInfo(session: Session): SessionInfo {
 
 export function createCompatibleApi(input: CompatibleInput): CompatibleApi {
   const v1 = createV1Api(input)
-  const current = createCurrentApi(input.current)
+  const current = createCurrentApi(input.current, input.legacy)
   return lazyApi(
     input.protocol.then((protocol) => (protocol === "v1" ? v1 : current)),
     current,
   )
 }
 
-function createCurrentApi(input: ServerApi): ServerApi {
+function isMissingQuestion(error: unknown) {
+  const body =
+    error instanceof Error && error.cause && typeof error.cause === "object" && "body" in error.cause
+      ? (error.cause as Record<string, unknown>).body
+      : error
+  if (!body || typeof body !== "object") return false
+  const tag = "name" in body && typeof body.name === "string" ? body.name : undefined
+  const labeled = "_tag" in body && typeof body._tag === "string" ? body._tag : tag
+  return labeled === "QuestionNotFoundError" || labeled === "SessionNotFoundError"
+}
+
+function createCurrentApi(input: ServerApi, legacy: LegacyFor): ServerApi {
   return {
     ...input,
+    question: {
+      ...input.question,
+      reply(value: Parameters<ServerApi["question"]["reply"]>[0]) {
+        return input.question.reply(value).catch(async (error: unknown) => {
+          if (!isMissingQuestion(error)) throw error
+          await legacy().question.reply({
+            requestID: value.requestID,
+            answers: value.answers.map((answer) => [...answer]),
+          })
+        })
+      },
+      reject(value: Parameters<ServerApi["question"]["reject"]>[0]) {
+        return input.question.reject(value).catch(async (error: unknown) => {
+          if (!isMissingQuestion(error)) throw error
+          await legacy().question.reject({ requestID: value.requestID })
+        })
+      },
+    },
     project: {
       ...input.project,
       async list(...args) {
