@@ -274,6 +274,11 @@ export function createRoutes(
   corsOptions?: CorsOptions,
 ): Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements> {
   const locationServiceMapV2 = buildLocationServiceMap()
+  // HTTP location middleware must use this map. `app` also provides LocationServiceMap
+  // (Agent/SystemPrompt embed locationServiceMapLayer), and that second map would hide
+  // in-memory QuestionV2/PermissionV2 state owned by SessionV2 drains.
+  const httpLocation = locationLayer.pipe(Layer.provide(locationServiceMapV2))
+  const httpSessionLocation = sessionLocationLayer.pipe(Layer.provide(locationServiceMapV2))
 
   return Layer.mergeAll(
     rootApiRoutes,
@@ -294,8 +299,8 @@ export function createRoutes(
       HttpServer.layerServices,
     ]),
     Layer.provide(Layer.succeed(CorsConfig)(corsOptions)),
-    Layer.provide(sessionLocationLayer),
-    Layer.provide(locationLayer),
+    Layer.provide(httpSessionLocation),
+    Layer.provide(httpLocation),
     Layer.provide(PtyEnvironment.layer),
     Layer.provide(
       AppNodeBuilderV1.build(SessionV2.node, [
@@ -305,7 +310,12 @@ export function createRoutes(
     ),
     Layer.provide(locationServiceMapV2),
 
-    Layer.provide(AppNodeBuilderV1.build(app, [[SessionExecution.node, SessionExecutionLocal.node]])),
+    Layer.provide(
+      AppNodeBuilderV1.build(app, [
+        [SessionExecution.node, SessionExecutionLocal.node],
+        [LocationServiceMap.node, locationServiceMapV2],
+      ]),
+    ),
     // Must stay last: layers provided later in this pipe build beneath earlier ones,
     // so Observability must come after every service graph. Otherwise eagerly forked
     // fibers (e.g. the ModelsDev background refresh) capture Effect's default stdout
