@@ -64,7 +64,7 @@ import { useSettingsCommand } from "@/components/settings-dialog"
 import { setCursorPosition } from "@/components/prompt-input/editor-dom"
 import { promptLength } from "@/components/prompt-input/history"
 import { type FollowupDraft } from "@/components/prompt-input/submit"
-import { promptFromSessionPayload } from "@/components/prompt-input/prompt-from-session-payload"
+import { promptFromSessionMessage } from "@/components/prompt-input/prompt-from-session-payload"
 import {
   createPromptInputController,
   createSessionComposerController,
@@ -97,7 +97,6 @@ import { useSessionCommands } from "@/pages/session/use-session-commands"
 import { useSessionHashScroll } from "@/pages/session/use-session-hash-scroll"
 import { queuedFollowup, saveQueuedFollowup } from "@/pages/session/session-queue"
 import { diffs as list } from "@/utils/diffs"
-import { extractPromptFromParts } from "@/utils/prompt"
 import { formatServerError, isLocalSessionNotFoundError, isSessionNotFoundError } from "@/utils/server-errors"
 import { legacySessionHref, requireServerKey, sessionHref } from "@/utils/session-route"
 import { useUsageExceededDialogs } from "./session/usage-exceeded-dialogs"
@@ -1172,6 +1171,7 @@ export default function Page() {
     navigateMessageByOffset,
     setActiveMessage,
     focusInput,
+    getMessageParts: timelineParts,
     review: reviewTab,
     fileBrowser: () => newSessionDesign() && isDesktop() && !!params.id,
   })
@@ -1699,11 +1699,14 @@ export default function Page() {
     ),
   )
 
-  const draft = (id: string) =>
-    extractPromptFromParts(sync().data.part[id] ?? [], {
+  const draft = (id: string) => {
+    const message = current.messages().find((item) => item.id === id)
+    const parts = timelineParts(id)
+    return promptFromSessionMessage(message, parts.length > 0 ? parts : (sync().data.part[id] ?? []), {
       directory: sdk().directory,
       attachmentName: language.t("common.attachment"),
     })
+  }
 
   const line = (id: string) => {
     const text = draft(id)
@@ -1738,10 +1741,14 @@ export default function Page() {
     })),
   )
   const [editingFollowup, setEditingFollowup] = createSignal<FollowupDraft>()
+  const [editingRevert, setEditingRevert] = createSignal<string>()
   createEffect(
     on(
       () => params.id,
-      () => setEditingFollowup(undefined),
+      () => {
+        setEditingFollowup(undefined)
+        setEditingRevert(undefined)
+      },
       { defer: true },
     ),
   )
@@ -1872,7 +1879,7 @@ export default function Page() {
           prompt.set(value)
         },
         request: () => halt(input.sessionID).then(() => session.revert.stage(input)),
-        complete: () => undefined,
+        complete: () => setEditingRevert(input.messageID),
         rollback: () => roll(input.sessionID, last, target),
         fail,
       })
@@ -1905,7 +1912,7 @@ export default function Page() {
           !next
             ? halt(sessionID).then(() => session.revert.clear({ sessionID }))
             : halt(sessionID).then(() => session.revert.stage({ sessionID, messageID: next.id }).then(() => undefined)),
-        complete: () => undefined,
+        complete: () => setEditingRevert(next?.id),
         rollback: () => roll(sessionID, last, target),
         fail,
       })
@@ -2120,6 +2127,8 @@ export default function Page() {
                   centered={centered()}
                   messages={messages}
                   sessionMessages={timelineSessionMessages}
+                  contextMessages={contextMessages}
+                  contextSession={current.session}
                   getMessageParts={timelineParts}
                   setContentRef={(el) => {
                     content = el
@@ -2230,12 +2239,21 @@ export default function Page() {
                       editingQueueID={() => editingFollowup()?.queueID}
                       editingQueuePayload={() => editingFollowup()?.queuePayload}
                       resetEditingQueueID={clearFollowupEdit}
+                      revertMessageID={() => editingRevert() ?? revertMessageID()}
+                      onRevertSubmit={(messageID) => {
+                        const id = params.id
+                        if (!id) return Promise.resolve()
+                        return sdk()
+                          .api.session.revert.stage({ sessionID: id, messageID })
+                          .then(() => undefined)
+                      }}
+                      onRevertSubmitComplete={() => setEditingRevert(undefined)}
                       shouldQueue={queueEnabled}
                       onQueue={queueFollowup}
                       onAbort={() => {
                         const id = params.id
-                        if (!id) return
-                        void serverSDK().currentClient.sessions.queueDrainPause({ sessionID: id })
+                        if (!id) return Promise.resolve()
+                        return serverSDK().currentClient.sessions.queueDrainPause({ sessionID: id })
                       }}
                     />
                   }
@@ -2264,12 +2282,21 @@ export default function Page() {
                       editingQueueID: () => editingFollowup()?.queueID,
                       editingQueuePayload: () => editingFollowup()?.queuePayload,
                       resetEditingQueueID: clearFollowupEdit,
+                      revertMessageID: () => editingRevert() ?? revertMessageID(),
+                      onRevertSubmit: (messageID) => {
+                        const id = params.id
+                        if (!id) return Promise.resolve()
+                        return sdk()
+                          .api.session.revert.stage({ sessionID: id, messageID })
+                          .then(() => undefined)
+                      },
+                      onRevertSubmitComplete: () => setEditingRevert(undefined),
                       shouldQueue: queueEnabled,
                       onQueue: queueFollowup,
                       onAbort: () => {
                         const id = params.id
-                        if (!id) return
-                        void serverSDK().currentClient.sessions.queueDrainPause({ sessionID: id })
+                        if (!id) return Promise.resolve()
+                        return serverSDK().currentClient.sessions.queueDrainPause({ sessionID: id })
                       },
                     })
                     return <PromptInputV2Composer controller={controller} borderUnderlay />

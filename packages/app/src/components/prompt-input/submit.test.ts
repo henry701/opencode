@@ -39,6 +39,8 @@ const commandCalls: unknown[] = []
 const currentCommands: Array<{ name: string; template: string; description?: string }> = []
 const promotedDrafts: Array<{ draftID: string; server: string; sessionId: string }> = []
 const resumedQueues: string[] = []
+const abortOrder: string[] = []
+const todoCleared: string[] = []
 
 let params: { id?: string } = {}
 let search: { draftId?: string } = {}
@@ -241,7 +243,9 @@ beforeAll(async () => {
             promptAsyncCalls.push(input)
             return { id: "input-1" }
           },
-          interrupt: async () => undefined,
+          interrupt: async () => {
+            abortOrder.push("interrupt")
+          },
           shell: async (input: { sessionID: string }) => {
             sentShell.push(sessionLocations[input.sessionID] ?? input.sessionID)
           },
@@ -277,7 +281,9 @@ beforeAll(async () => {
           remove: () => undefined,
         },
       },
-      set: () => undefined,
+      set: (...args: unknown[]) => {
+        if (args[0] === "todo" && typeof args[1] === "string") todoCleared.push(args[1])
+      },
     }),
   }))
 
@@ -343,6 +349,8 @@ beforeEach(() => {
   commandCalls.length = 0
   currentCommands.length = 0
   resumedQueues.length = 0
+  abortOrder.length = 0
+  todoCleared.length = 0
   selected = "/repo/worktree-a"
   variant = undefined
   permissionServer = "server-a"
@@ -641,6 +649,82 @@ describe("prompt submit worktree selection", () => {
 })
 
 describe("prompt submit queue mode", () => {
+  test("replaces a staged rollback instead of queueing or repeating it", async () => {
+    params = { id: "session-1" }
+    const order: string[] = []
+    const submit = createPromptSubmit({
+      prompt,
+      info: () => ({ id: "session-1" }),
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "normal",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      queueMode: () => true,
+      revertMessageID: () => "message-1",
+      onRevertSubmit: async (messageID) => {
+        order.push(`stage:${messageID}`)
+      },
+      onRevertSubmitComplete: () => order.push("complete"),
+      onSubmit: () => order.push("submit"),
+    })
+
+    await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
+    await Promise.resolve()
+
+    expect(order).toEqual(["stage:message-1", "submit"])
+    expect(promptAsyncCalls).toHaveLength(1)
+    expect(resumedQueues).toEqual(["session-1"])
+    expect(queuedDrafts).toHaveLength(0)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(order).toEqual(["stage:message-1", "submit", "complete"])
+  })
+
+  test("pauses queue draining before interrupting and preserves admitted input", async () => {
+    params = { id: "session-1" }
+    let release = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const submit = createPromptSubmit({
+      prompt,
+      info: () => ({ id: "session-1" }),
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "normal",
+      working: () => true,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      onAbort: async () => {
+        await gate
+        abortOrder.push("pause")
+      },
+    })
+
+    const pending = submit.abort()
+    await Promise.resolve()
+    expect(abortOrder).toEqual([])
+    release()
+    await pending
+
+    expect(abortOrder).toEqual(["pause", "interrupt"])
+    expect(todoCleared).toEqual([])
+    expect(promptAsyncCalls).toHaveLength(0)
+  })
+
   test("recognizes queued slash commands from the current catalog before routing the draft", async () => {
     params = { id: "session-1" }
     promptValue = [{ type: "text", content: "/review now", start: 0, end: 11 }]
