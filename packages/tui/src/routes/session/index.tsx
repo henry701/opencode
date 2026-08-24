@@ -1670,7 +1670,7 @@ function ReasoningPart(props: { last: boolean; part: CurrentReasoning; message: 
     // OpenRouter encrypts some reasoning blocks; drop the placeholder.
     return props.part.text.replace("[REDACTED]", "").trim()
   })
-  const opaque = createMemo(() => !content() && Boolean(props.part.metadata))
+  const opaque = createMemo(() => !content() && Boolean(props.part.providerMetadata))
   // Reasoning is finalized when the server sets `time.end` (see processor.ts).
   // Flips independently of the parent message completing.
   const isDone = createMemo(() => props.part.time?.completed !== undefined)
