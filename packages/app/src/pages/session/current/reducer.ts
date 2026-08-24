@@ -1,5 +1,5 @@
 import type { SessionEvent } from "@opencode-ai/schema/session-event"
-import type { SessionMessage } from "@opencode-ai/schema/session-message"
+import { SessionMessage } from "@opencode-ai/schema/session-message"
 import type { Session } from "@opencode-ai/schema/session"
 import type { SessionInput } from "@opencode-ai/schema/session-input"
 import { SessionMessageUpdater } from "@opencode-ai/core/session/message-updater"
@@ -7,6 +7,7 @@ import { DateTime, Effect } from "effect"
 
 export type CurrentSessionState = {
   readonly messages: ReadonlyArray<SessionMessage.Message>
+  readonly pending: ReadonlyArray<SessionMessage.User>
   readonly context: ReadonlyArray<SessionMessage.Message>
   readonly queue: ReadonlyArray<SessionInput.Queued>
   readonly session?: Session.Info
@@ -53,6 +54,7 @@ export type CurrentSessionAction =
 export function currentSessionInitialState(): CurrentSessionState {
   return {
     messages: [],
+    pending: [],
     context: [],
     queue: [],
     active: false,
@@ -71,6 +73,7 @@ export function reduceCurrentSession(state: CurrentSessionState, action: Current
       return {
         ...state,
         messages: [...action.messages],
+        pending: reconcilePending(state.pending, action.messages),
         readiness: "ready" as const,
         cursor: action.cursor,
         hasOlder: action.cursor !== undefined,
@@ -83,6 +86,7 @@ export function reduceCurrentSession(state: CurrentSessionState, action: Current
       return {
         ...state,
         messages: [...action.messages.filter((message) => !loaded.has(message.id)), ...state.messages],
+        pending: reconcilePending(state.pending, action.messages),
         cursor: action.cursor,
         hasOlder: action.cursor !== undefined,
       }
@@ -100,6 +104,7 @@ export function reduceCurrentSession(state: CurrentSessionState, action: Current
       return {
         ...state,
         messages: Array.from(messages.values()).toSorted((left, right) => order(left).localeCompare(order(right))),
+        pending: reconcilePending(state.pending, action.messages),
       }
     }
     case "message-replaced": {
@@ -112,16 +117,18 @@ export function reduceCurrentSession(state: CurrentSessionState, action: Current
               DateTime.toEpochMillis(left.time.created) - DateTime.toEpochMillis(right.time.created) ||
               String(left.id).localeCompare(String(right.id)),
           ),
+          pending: reconcilePending(state.pending, [action.message]),
         }
       const messages = [...state.messages]
       messages[index] = action.message
-      return { ...state, messages }
+      return { ...state, messages, pending: reconcilePending(state.pending, [action.message]) }
     }
     case "event": {
       const sequence = action.event.durable?.seq
       if (sequence !== undefined && sequence <= (state.lastEventSequence ?? -1)) return state
       const messages = [...state.messages]
       Effect.runSync(SessionMessageUpdater.update(SessionMessageUpdater.memory({ messages }), action.event))
+      const pending = reducePending(state.pending, action.event, messages)
       const retry =
         action.event.type === "session.next.retried"
           ? action.event
@@ -133,7 +140,8 @@ export function reduceCurrentSession(state: CurrentSessionState, action: Current
       return {
         ...state,
         messages,
-        active: action.event.type === "session.next.retried" ? true : state.active,
+        pending,
+        active: activeForEvent(state.active, action.event),
         retry,
         lastEventSequence: sequence ?? state.lastEventSequence,
       }
@@ -154,6 +162,84 @@ export function reduceCurrentSession(state: CurrentSessionState, action: Current
     case "failed":
       return { ...state, readiness: "error", error: action.error }
   }
+}
+
+function activeForEvent(active: boolean, event: SessionEvent.Event) {
+  if (event.type === "session.next.retried") return true
+  if (event.type === "session.next.prompt.admitted" && event.data.delivery === "steer") return true
+  if (event.type === "session.next.prompt.expedited") return true
+  if (event.type === "session.next.step.started") return true
+  if (event.type === "session.next.step.ended" || event.type === "session.next.step.failed") return false
+  return active
+}
+
+export function currentSessionMessages(state: CurrentSessionState) {
+  if (state.pending.length === 0) return state.messages
+  return [...state.messages, ...state.pending].toSorted((left, right) => order(left).localeCompare(order(right)))
+}
+
+function reconcilePending(pending: readonly SessionMessage.User[], messages: readonly SessionMessage.Message[]) {
+  if (pending.length === 0) return pending
+  const promoted = new Set(messages.map((message) => message.id))
+  return pending.filter((message) => !promoted.has(message.id))
+}
+
+function reducePending(
+  pending: readonly SessionMessage.User[],
+  event: SessionEvent.Event,
+  messages: readonly SessionMessage.Message[],
+) {
+  const reconciled = reconcilePending(pending, messages)
+  if (event.type === "session.next.prompt.admitted" && event.data.delivery === "steer")
+    return upsertPending(reconciled, pendingUser(event.data, event.metadata))
+  if (event.type === "session.next.prompt.expedited")
+    return upsertPending(reconciled, pendingUser(event.data, event.metadata))
+  if (event.type === "session.next.prompt.revised") {
+    const current = reconciled.find((message) => message.id === event.data.messageID)
+    if (!current) return reconciled
+    return upsertPending(
+      reconciled,
+      pendingUser(
+        {
+          messageID: event.data.messageID,
+          prompt: event.data.prompt,
+          payload: event.data.payload,
+          timestamp: event.data.timestamp,
+        },
+        current.metadata,
+      ),
+    )
+  }
+  if (event.type === "session.next.prompt.discarded")
+    return reconciled.filter((message) => message.id !== event.data.messageID)
+  if (event.type === "session.next.prompted") return reconciled.filter((message) => message.id !== event.data.messageID)
+  return reconciled
+}
+
+function upsertPending(pending: readonly SessionMessage.User[], message: SessionMessage.User) {
+  const next = pending.filter((current) => current.id !== message.id)
+  return [...next, message].toSorted((left, right) => order(left).localeCompare(order(right)))
+}
+
+function pendingUser(
+  data: {
+    messageID: SessionMessage.ID
+    prompt: SessionEvent.PromptAdmitted["data"]["prompt"]
+    payload?: SessionEvent.PromptAdmitted["data"]["payload"]
+    timestamp: SessionEvent.PromptAdmitted["data"]["timestamp"]
+  },
+  metadata?: Record<string, unknown>,
+) {
+  return SessionMessage.User.make({
+    id: data.messageID,
+    type: "user",
+    metadata,
+    text: data.prompt.text,
+    files: data.prompt.files,
+    agents: data.prompt.agents,
+    payload: data.payload,
+    time: { created: data.timestamp },
+  })
 }
 
 function order(message: SessionMessage.Message) {

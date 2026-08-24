@@ -27,6 +27,20 @@ const prompted = (seq: number) =>
     },
   }) as const
 
+const admitted = (seq: number) =>
+  ({
+    id: `evt_${seq}`,
+    type: "session.next.prompt.admitted",
+    durable: { aggregateID: "ses_test", seq, version: 1 },
+    data: {
+      timestamp: seq,
+      sessionID: "ses_test",
+      messageID: "msg_steer",
+      prompt: { text: "steer now" },
+      delivery: "steer",
+    },
+  }) as const
+
 const messages = (
   items: Array<{ id: string; text: string; created: number }>,
   next?: string,
@@ -96,6 +110,31 @@ describe("current session model", () => {
             expect(model.lastEventSequence()).toBe(4)
             expect(model.messages().map((message) => String(message.id))).toContain("msg_4")
             expect(queueReads).toBeGreaterThanOrEqual(2)
+            model.dispose()
+            dispose()
+            resolve()
+          })
+          .catch(reject)
+      })
+    })
+  })
+
+  test("shows admitted steering input and reports the session busy before promotion", async () => {
+    const port = makePort({ events: admitted(2), pages: [messages([], undefined, 1)] })
+
+    await new Promise<void>((resolve, reject) => {
+      createRoot((dispose) => {
+        const model = createCurrentSessionModel({
+          sessionID: () => "ses_test",
+          client: () => port,
+          autoStart: false,
+        })
+        model
+          .start()
+          .then(() => {
+            expect(model.messages().map((message) => String(message.id))).toEqual(["msg_steer"])
+            expect(model.messages()[0]).toMatchObject({ type: "user", text: "steer now" })
+            expect(model.busy()).toBe(true)
             model.dispose()
             dispose()
             resolve()

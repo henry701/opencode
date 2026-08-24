@@ -8,6 +8,7 @@ import { Schema } from "effect"
 import { createEffect, createSignal, on, onCleanup, type Accessor } from "solid-js"
 import {
   currentSessionInitialState,
+  currentSessionMessages,
   reduceCurrentSession,
   type CurrentSessionAction,
   type CurrentSessionState,
@@ -312,7 +313,7 @@ export function createCurrentSessionModel(input: {
 
   return {
     state,
-    messages: () => state().messages,
+    messages: () => currentSessionMessages(state()),
     context: () => state().context,
     queue: () => state().queue,
     session: () => state().session,

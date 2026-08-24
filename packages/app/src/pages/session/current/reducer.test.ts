@@ -302,4 +302,78 @@ describe("current session reducer", () => {
     expect(retrying.active).toBe(true)
     expect(running.retry).toBeUndefined()
   })
+
+  test("projects admitted steering prompts until the durable prompt is promoted", () => {
+    const admitted = decodeEvent({
+      id: "evt_admitted",
+      type: "session.next.prompt.admitted",
+      durable: { aggregateID: "ses_test", seq: 2, version: 1 },
+      data: {
+        timestamp: 2,
+        sessionID: "ses_test",
+        messageID: "msg_steer",
+        prompt: { text: "steer now" },
+        delivery: "steer",
+      },
+    })
+    const prompted = decodeEvent({
+      id: "evt_prompted",
+      type: "session.next.prompted",
+      durable: { aggregateID: "ses_test", seq: 3, version: 1 },
+      data: {
+        timestamp: 3,
+        sessionID: "ses_test",
+        messageID: "msg_steer",
+        prompt: { text: "steer now" },
+        delivery: "steer",
+      },
+    })
+
+    const pending = dispatch([
+      { type: "hydrated", sequence: 1, messages: [] },
+      { type: "event", event: admitted },
+    ])
+
+    expect(pending.pending.map((message) => message.text)).toEqual(["steer now"])
+    expect(pending.active).toBe(true)
+
+    const promoted = reduceCurrentSession(pending, { type: "event", event: prompted })
+    expect(promoted.pending).toEqual([])
+    expect(promoted.messages).toMatchObject([{ id: "msg_steer", type: "user", text: "steer now" }])
+  })
+
+  test("keeps an admitted steering prompt across interruption until it is discarded or promoted", () => {
+    const admitted = decodeEvent({
+      id: "evt_admitted",
+      type: "session.next.prompt.admitted",
+      durable: { aggregateID: "ses_test", seq: 2, version: 1 },
+      data: {
+        timestamp: 2,
+        sessionID: "ses_test",
+        messageID: "msg_steer",
+        prompt: { text: "preserve me" },
+        delivery: "steer",
+      },
+    })
+    const interrupted = decodeEvent({
+      id: "evt_failed",
+      type: "session.next.step.failed",
+      durable: { aggregateID: "ses_test", seq: 3, version: 1 },
+      data: {
+        timestamp: 3,
+        sessionID: "ses_test",
+        assistantMessageID: "msg_assistant",
+        error: { type: "interrupted", message: "Provider turn interrupted" },
+      },
+    })
+
+    const state = dispatch([
+      { type: "hydrated", sequence: 1, messages: [] },
+      { type: "event", event: admitted },
+      { type: "event", event: interrupted },
+    ])
+
+    expect(state.pending.map((message) => message.text)).toEqual(["preserve me"])
+    expect(state.active).toBe(false)
+  })
 })

@@ -26,6 +26,7 @@ export type SessionCommandContext = {
   navigateMessageByOffset: (offset: number) => void
   setActiveMessage: (message: UserMessage | undefined) => void
   focusInput: () => void
+  getMessageParts?: (messageID: string) => Part[]
   review?: () => boolean
   fileBrowser?: () => boolean
 }
@@ -344,7 +345,8 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     if (boundary < 0) return
     const message = messages[boundary - 1]
     if (!message) return
-    const parts = sync().data.part[message.id]
+    const projectedParts = actions.getMessageParts?.(message.id)
+    const parts = projectedParts?.length ? projectedParts : sync().data.part[message.id]
 
     if (sync().data.session_working(sessionID)) {
       await session.interrupt({ sessionID }).catch(() => {})

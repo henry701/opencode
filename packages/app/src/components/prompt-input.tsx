@@ -252,7 +252,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     return paths
   })
   const info = createMemo(() => (props.controls.session.id ? sync().session.get(props.controls.session.id) : undefined))
-  const working = createMemo(() => sync().data.session_working(props.controls.session.id ?? ""))
+  const working = createMemo(
+    () => props.controls.session.working?.() ?? sync().data.session_working(props.controls.session.id ?? ""),
+  )
   const imageAttachments = createMemo(() =>
     prompt.current().filter((part): part is ImageAttachmentPart => part.type === "image"),
   )
@@ -1231,6 +1233,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       resetEditingQueueID: props.resetEditingQueueID,
       onQueue: props.onQueue,
       onAbort: props.onAbort,
+      revertMessageID: props.revertMessageID,
+      onRevertSubmit: props.onRevertSubmit,
+      onRevertSubmitComplete: props.onRevertSubmitComplete,
       onSubmit: props.onSubmit,
       model: props.controls.model.selection,
     })
@@ -1401,7 +1406,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       ) {
         return
       }
-      if (event.altKey && store.mode === "normal" && props.controls.session.id && props.onQueue && !props.editingQueueID?.()) {
+      if (
+        event.altKey &&
+        store.mode === "normal" &&
+        props.controls.session.id &&
+        props.onQueue &&
+        !props.editingQueueID?.()
+      ) {
         queue(event)
         return
       }
@@ -1590,7 +1601,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
             />
 
             <div class="flex items-center gap-1 pointer-events-auto">
-              <Show when={store.mode === "normal" && props.controls.session.id && props.onQueue && !props.editingQueueID?.()}>
+              <Show
+                when={
+                  store.mode === "normal" && props.controls.session.id && props.onQueue && !props.editingQueueID?.()
+                }
+              >
                 <TooltipV2
                   placement="top"
                   value={
@@ -1609,7 +1624,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     variant={queueMode() ? "secondary" : "ghost"}
                     class="size-8"
                     aria-pressed={queueMode()}
-                    aria-label={queueMode() ? language.t("prompt.action.sendDirect") : language.t("prompt.action.queue")}
+                    aria-label={
+                      queueMode() ? language.t("prompt.action.sendDirect") : language.t("prompt.action.queue")
+                    }
                     onClick={() => setQueueMode((value) => !value)}
                   />
                 </TooltipV2>
