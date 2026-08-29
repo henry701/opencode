@@ -1902,9 +1902,7 @@ export function CurrentToolPart(props: CurrentToolPartProps) {
                 <ToolErrorCard
                   tool={props.part.name}
                   error={error()}
-                  title={
-                    props.part.name === "websearch" ? webSearchProviderLabel(metadata().provider, i18n) : undefined
-                  }
+                  title={props.part.name === "websearch" ? webSearchProviderLabel(metadata().provider, i18n) : undefined}
                   defaultOpen={props.defaultOpen}
                   open={props.open}
                   onOpenChange={props.onOpenChange}
@@ -2127,9 +2125,7 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
                 <ToolErrorCard
                   tool={part().tool}
                   error={error()}
-                  title={
-                    part().tool === "websearch" ? webSearchProviderLabel(partMetadata().provider, i18n) : undefined
-                  }
+                  title={part().tool === "websearch" ? webSearchProviderLabel(partMetadata().provider, i18n) : undefined}
                   defaultOpen={props.defaultOpen}
                   open={controlledOpen()}
                   onOpenChange={props.onToolOpenChange ? handleToolOpenChange : undefined}

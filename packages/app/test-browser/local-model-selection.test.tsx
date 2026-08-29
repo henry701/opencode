@@ -131,6 +131,7 @@ beforeAll(async () => {
                 { id: "anthropic", name: "Anthropic", models: { "claude-sonnet-4": { id: "claude-sonnet-4" } } },
               ],
       default: () => ({ opencode: "big-pickle" }),
+      defaultModel: () => undefined,
     }),
   }))
   mock.module("@/context/models", () => ({
