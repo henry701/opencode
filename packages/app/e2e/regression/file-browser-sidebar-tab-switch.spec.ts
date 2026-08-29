@@ -63,6 +63,39 @@ test("keeps the file-browser sidebar mounted when switching file tabs", async ({
   await expect.poll(() => viewport.evaluate((element) => element.scrollTop)).toBe(scrolled)
 })
 
+test("keeps previous file search results visible while the next search loads", async ({ page }) => {
+  const searchPending = Promise.withResolvers<void>()
+  await setup(page, async ({ query }) => {
+    if (query === "file-0") return ["file-00.ts"]
+    if (query === "file-7") {
+      await searchPending.promise
+      return ["file-79.ts"]
+    }
+    return []
+  })
+
+  await page.goto(`/server/${base64Encode(server)}/session/${sessionID}`)
+  await expectSessionTitle(page, title)
+
+  const panel = page.locator("#review-panel")
+  await panel.getByRole("button", { name: "Open file" }).click()
+  const filter = panel.getByRole("combobox", { name: "Filter files" })
+  await filter.fill("file-0")
+  await expect(panel.getByRole("option", { name: "file-00.ts" })).toBeVisible()
+
+  const nextSearch = page.waitForRequest((request) => {
+    const url = new URL(request.url())
+    return ["/find/file", "/api/fs/find"].includes(url.pathname) && url.searchParams.get("query") === "file-7"
+  })
+  await filter.fill("file-7")
+  await nextSearch
+  await expect(panel.getByRole("option", { name: "file-00.ts" })).toBeVisible()
+
+  searchPending.resolve()
+  await expect(panel.getByRole("option", { name: "file-79.ts" })).toBeVisible()
+  await expect(panel.getByRole("option", { name: "file-00.ts" })).toBeHidden()
+})
+
 type Probed = HTMLElement & { __e2eProbe?: string }
 
 async function writeProbe(page: Page) {
@@ -77,7 +110,10 @@ async function readProbe(page: Page) {
     .evaluate((el) => (el as Probed).__e2eProbe)
 }
 
-async function setup(page: Page) {
+async function setup(
+  page: Page,
+  findFiles?: (input: { query: string; dirs?: string; limit?: number }) => unknown | Promise<unknown>,
+) {
   await mockOpenCodeServer(page, {
     directory,
     project: {
@@ -123,6 +159,8 @@ async function setup(page: Page) {
     },
     fileContent: (path) => ({ type: "text", content: `contents:${path}` }),
     currentPageMessages: () => ({ items: [], throughSeq: 0 }),
+    findFiles,
+    pageMessages: () => ({ items: [] }),
   })
 
   await page.addInitScript(
