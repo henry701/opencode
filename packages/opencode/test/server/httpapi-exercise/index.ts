@@ -176,7 +176,7 @@ const scenarios: Scenario[] = [
     .status(400),
   http.protected.get("/config/providers", "config.providers").json(),
   http.protected.get("/project", "project.list").json(200, array, "status"),
-  http.protected.get("/api/project", "v2.project.list").json(200, array, "status"),
+  http.protected.get("/api/project", "v2.project.list").json(200, locationData(array), "status"),
   http.protected.get("/project/current", "project.current").json(
     200,
     (body, ctx) => {
@@ -189,7 +189,10 @@ const scenarios: Scenario[] = [
     200,
     (body, ctx) => {
       object(body)
-      check(body.worktree === ctx.directory, "current project should resolve from scenario directory")
+      object(body.location)
+      object(body.location.project)
+      object(body.data)
+      check(body.data.worktree === ctx.directory, "current project should resolve from scenario directory")
     },
     "status",
   ),
@@ -251,7 +254,7 @@ const scenarios: Scenario[] = [
       path: route("/api/project/{projectID}/directories", { projectID: ctx.state.id }),
       headers: ctx.headers(),
     }))
-    .json(200, array, "status"),
+    .json(200, locationData(array), "status"),
   http.protected
     .post("/experimental/project/{projectID}/copy/generate-name", "experimental.projectCopy.generateName")
     .seeded((ctx) => ctx.project())

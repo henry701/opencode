@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test"
 import type { Page } from "@playwright/test"
-import { fixture, pageMessages } from "../smoke/session-timeline.fixture"
+import { fixture, currentPageMessages } from "../smoke/session-timeline.fixture"
 import { mockOpenCodeServer } from "../utils/mock-server"
 import { expectAppVisible } from "../utils/waits"
 
@@ -22,7 +22,7 @@ async function openProjectDialog(page: Page) {
     provider: fixture.provider,
     directory: fixture.directory,
     project: fixture.project,
-    pageMessages,
+    currentPageMessages,
     fileList: () => [],
     findFiles: () => [],
   })

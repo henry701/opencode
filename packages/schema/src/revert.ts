@@ -16,6 +16,8 @@ export interface FileDiff extends Schema.Schema.Type<typeof FileDiff> {}
 
 export const State = Schema.Struct({
   messageID: SessionMessage.ID,
+  inclusive: Schema.Boolean.pipe(optional),
+  inputThroughSeq: NonNegativeInt.pipe(optional),
   partID: Schema.String.pipe(optional),
   snapshot: Schema.String.pipe(optional),
   diff: Schema.String.pipe(optional),

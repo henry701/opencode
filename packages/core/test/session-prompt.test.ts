@@ -198,6 +198,43 @@ describe("SessionV2.prompt", () => {
     }),
   )
 
+  it.effect("pending UI inputs exclude queued, discarded and promoted messages", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const database = yield* Database.Service
+      const events = yield* EventV2.Service
+      const steer = yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "keep visible" }), resume: false })
+      const removed = yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "discard me" }), resume: false })
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "queue separately" }),
+        delivery: "queue",
+        resume: false,
+      })
+      expect((yield* SessionInput.listPending(database.db, sessionID)).map((input) => input.id)).toEqual([
+        steer.id,
+        removed.id,
+      ])
+      yield* session.interrupt(sessionID)
+      expect((yield* SessionInput.listPending(database.db, sessionID)).map((input) => input.id)).toEqual([
+        steer.id,
+        removed.id,
+      ])
+      yield* database.db
+        .update(SessionInputTable)
+        .set({ discarded_seq: 99 })
+        .where(eq(SessionInputTable.id, removed.id))
+        .run()
+        .pipe(Effect.orDie)
+      expect((yield* SessionInput.listPending(database.db, sessionID)).map((input) => input.id)).toEqual([steer.id])
+      expect(yield* session.messages({ sessionID })).toEqual([])
+      yield* SessionInput.promoteSteers(database.db, events, sessionID, Number.MAX_SAFE_INTEGER)
+      expect(yield* SessionInput.listPending(database.db, sessionID)).toEqual([])
+      expect(yield* session.messages({ sessionID })).toMatchObject([{ id: steer.id, text: "keep visible" }])
+    }),
+  )
+
   it.effect("durably admits one user message before transcript promotion", () =>
     Effect.gen(function* () {
       yield* setup

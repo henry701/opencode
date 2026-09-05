@@ -64,6 +64,7 @@ import { useSettingsCommand } from "@/components/settings-dialog"
 import { setCursorPosition } from "@/components/prompt-input/editor-dom"
 import { promptLength } from "@/components/prompt-input/history"
 import { type FollowupDraft } from "@/components/prompt-input/submit"
+import { SessionMessage } from "@opencode-ai/schema/session-message"
 import { promptFromSessionMessage } from "@/components/prompt-input/prompt-from-session-payload"
 import {
   createPromptInputController,
@@ -1729,6 +1730,7 @@ export default function Page() {
   const merge = (next: Session, target = sync()) => target.session.remember(next)
 
   const roll = (sessionID: string, next: NonNullable<ReturnType<typeof info>>["revert"], target = sync()) => {
+    current.setRevert(sessionID, next && { ...next, messageID: SessionMessage.ID.make(next.messageID) })
     const session = target.session.get(sessionID)
     if (!session) return
     target.session.remember({ ...session, revert: next })
@@ -1859,12 +1861,7 @@ export default function Page() {
     setEditingFollowup(undefined)
   }
 
-  const halt = (sessionID: string) =>
-    busy(sessionID)
-      ? sdk()
-          .api.session.interrupt({ sessionID })
-          .catch(() => {})
-      : Promise.resolve()
+  const halt = (sessionID: string) => (busy(sessionID) ? sdk().api.session.interrupt({ sessionID }) : Promise.resolve())
 
   const revertMutation = useMutation(() => ({
     mutationFn: async (input: { sessionID: string; messageID: string }) => {
@@ -1878,7 +1875,7 @@ export default function Page() {
           roll(input.sessionID, { messageID: input.messageID }, target)
           prompt.set(value)
         },
-        request: () => halt(input.sessionID).then(() => session.revert.stage(input)),
+        request: () => halt(input.sessionID).then(() => session.revert.stage({ ...input, inclusive: true })),
         complete: () => setEditingRevert(input.messageID),
         rollback: () => roll(input.sessionID, last, target),
         fail,
@@ -1911,7 +1908,9 @@ export default function Page() {
         request: () =>
           !next
             ? halt(sessionID).then(() => session.revert.clear({ sessionID }))
-            : halt(sessionID).then(() => session.revert.stage({ sessionID, messageID: next.id }).then(() => undefined)),
+            : halt(sessionID).then(() =>
+                session.revert.stage({ sessionID, messageID: next.id, inclusive: true }).then(() => undefined),
+              ),
         complete: () => setEditingRevert(next?.id),
         rollback: () => roll(sessionID, last, target),
         fail,
@@ -2244,7 +2243,7 @@ export default function Page() {
                         const id = params.id
                         if (!id) return Promise.resolve()
                         return sdk()
-                          .api.session.revert.stage({ sessionID: id, messageID })
+                          .api.session.revert.stage({ sessionID: id, messageID, inclusive: true })
                           .then(() => undefined)
                       }}
                       onRevertSubmitComplete={() => setEditingRevert(undefined)}
@@ -2287,7 +2286,7 @@ export default function Page() {
                         const id = params.id
                         if (!id) return Promise.resolve()
                         return sdk()
-                          .api.session.revert.stage({ sessionID: id, messageID })
+                          .api.session.revert.stage({ sessionID: id, messageID, inclusive: true })
                           .then(() => undefined)
                       },
                       onRevertSubmitComplete: () => setEditingRevert(undefined),

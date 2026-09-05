@@ -30,7 +30,15 @@ const model = { providerID: "opencode", modelID: "claude-opus-4-6", variant: "ma
 
 type MessagePart = Record<string, unknown> & { id: string; type: string; text?: string; name?: string }
 type Message =
-  | { id: string; type: "user"; text: string; payload: Record<string, unknown>; time: { created: number } }
+  | {
+      id: string
+      type: "user"
+      text: string
+      files: unknown[]
+      agents: unknown[]
+      payload: Record<string, unknown>
+      time: { created: number }
+    }
   | {
       id: string
       type: "assistant"
@@ -225,8 +233,8 @@ const sourceMessages = Array.from({ length: 12 }, (_, index) => [
 
 function renderable(part: MessagePart) {
   if (part.type === "tool" && part.name === "todowrite") return false
-  if (part.type === "text") return !!part.text.trim()
-  if (part.type === "reasoning") return !!part.text.trim()
+  if (part.type === "text") return !!part.text?.trim()
+  if (part.type === "reasoning") return !!part.text?.trim()
   return part.type !== "step-start" && part.type !== "step-finish" && part.type !== "patch"
 }
 
@@ -284,9 +292,7 @@ export const fixture = {
   expected: {
     sourceTitle: "Uncommitted changes inquiry",
     targetTitle: "Example Game: sample jump movement & sample physics analysis",
-    targetMessageIDs: targetMessages
-      .filter((message) => message.type === "user")
-      .map((message) => message.id),
+    targetMessageIDs: targetMessages.filter((message) => message.type === "user").map((message) => message.id),
     targetPartIDs: targetMessages.flatMap((message) =>
       orderedParts(message)
         .filter(renderable)

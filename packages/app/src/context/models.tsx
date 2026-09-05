@@ -161,7 +161,8 @@ export const { use: useModels, provider: ModelsProvider } = createSimpleContext(
       visible,
       setVisibility,
       recent: {
-        list: () => recentModels()!,
+        // A recent-model update must not suspend and detach the session timeline.
+        list: () => recentModels.latest,
         push,
       },
       variant: {

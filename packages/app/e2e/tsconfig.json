@@ -3,7 +3,9 @@
   "compilerOptions": {
     "noEmit": true,
     "rootDir": "..",
-    "types": ["node", "bun"]
+    "types": ["node", "bun"],
+    "composite": false,
+    "emitDeclarationOnly": false
   },
   "include": [
     "./performance/timeline-stability/**/*.spec.ts",
@@ -15,6 +17,14 @@
     "../src/pages/session/timeline/observe-element-offset.ts",
     "./regression/new-session-panel-corner.spec.ts",
     "./regression/session-timeline-context-resize.spec.ts",
-    "./utils/**/*.ts"
+    "./utils/**/*.ts",
+    "./regression/session-pending-reload.spec.ts",
+    "./regression/session-rollback-queue.spec.ts",
+    "./regression/session-model-selection.spec.ts",
+    "./regression/session-timeline-reasoning-projection.spec.ts",
+    "./regression/review-state-persistence.spec.ts",
+    "./regression/session-rename.spec.ts",
+    "./regression/project-picker-recent-search.spec.ts",
+    "./regression/session-model-timeline-scroll.spec.ts"
   ]
 }

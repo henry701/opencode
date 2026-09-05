@@ -425,7 +425,7 @@ export async function bootstrapDirectory(input: {
             })),
       () =>
         retry(async () => {
-          if ((await input.protocol) !== "v1") return
+          // Branch metadata still comes from the compatibility endpoint on V2 servers.
           return input.sdk.vcs.get().then((result) => {
             const next = { branch: result.data?.branch, default_branch: result.data?.default_branch }
             input.setStore("vcs", next)

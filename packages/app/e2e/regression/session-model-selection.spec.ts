@@ -183,12 +183,12 @@ test("keeps a manually selected model when submitting a brand-new web session", 
       default: { opencode: "big-pickle" },
     }),
     agents: [
+      { name: "build", mode: "primary" },
       {
         name: "Sisyphus - ultraworker",
         mode: "primary",
         model: { providerID: "opencode", modelID: "big-pickle" },
       },
-      { name: "build", mode: "primary" },
     ],
     sessions,
     createSession: () => {

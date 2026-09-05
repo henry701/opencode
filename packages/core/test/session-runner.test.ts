@@ -1726,6 +1726,54 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("replaces a staged user prompt before the next provider turn without repeating it", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const boundary = SessionMessage.ID.create()
+      yield* session.prompt({
+        id: boundary,
+        sessionID,
+        prompt: Prompt.make({ text: "boundary" }),
+        resume: false,
+      })
+      response = []
+      yield* session.resume(sessionID)
+      yield* events.publish(SessionEvent.RevertEvent.Staged, {
+        sessionID,
+        timestamp: DateTime.makeUnsafe(1),
+        revert: {
+          messageID: boundary,
+          files: [],
+          inclusive: true,
+          inputThroughSeq: yield* session.latestSequence(sessionID),
+        },
+      })
+      const steer = yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "steer after revert" }),
+        resume: false,
+      })
+      response = fragmentFixture("text", "text-after-steer-revert", ["done"]).completeEvents
+
+      yield* session.resume(sessionID)
+
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { id: steer.id, type: "user", text: "steer after revert" },
+        { type: "assistant", content: [{ type: "text", text: "done" }] },
+      ])
+      const history = yield* session.history({ sessionID, limit: 100 })
+      const committed = history.events.findIndex((event) => event.type === "session.next.revert.committed")
+      const promoted = history.events.findIndex(
+        (event) =>
+          event.type === "session.next.prompted" && "messageID" in event.data && event.data.messageID === steer.id,
+      )
+      expect(committed).toBeGreaterThan(-1)
+      expect(promoted).toBeGreaterThan(committed)
+    }),
+  )
+
   it.effect("projects a payload-controlled queued tool continuation into the consumer timeline and history", () =>
     Effect.gen(function* () {
       yield* setup

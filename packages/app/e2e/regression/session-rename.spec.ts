@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test"
-import { fixture, pageMessages } from "../smoke/session-timeline.fixture"
+import { fixture, currentPageMessages } from "../smoke/session-timeline.fixture"
 import { mockOpenCodeServer } from "../utils/mock-server"
 
 test.beforeEach(async ({ page }) => {
@@ -10,7 +10,7 @@ test.beforeEach(async ({ page }) => {
     provider: fixture.provider,
     directory: fixture.directory,
     project: fixture.project,
-    pageMessages,
+    currentPageMessages,
   })
   await page.route(/\/session\/[^/]+(?:\?.*)?$/, async (route) => {
     if (route.request().method() !== "PATCH") return route.fallback()

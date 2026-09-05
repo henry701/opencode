@@ -6,6 +6,7 @@ function setup(
   protocol: "v1" | "v2" | Promise<"v1" | "v2">,
   responses?: {
     vcs?: { branch: string; default_branch: string }
+    vcsDiff?: Array<{ file: string; additions: number; deletions: number; patch: string }>
     mcpResource?: { location: { directory: string; project: { id: string; directory: string } }; data: unknown }
     currentQuestion?: "missing"
   },
@@ -39,6 +40,8 @@ function setup(
           delivery: "steer",
         })
       }
+      if (request.method === "GET" && new URL(request.url).pathname === "/vcs/diff")
+        return Response.json(responses?.vcsDiff ?? [])
       if (request.method === "GET" && new URL(request.url).pathname === "/vcs")
         return Response.json(responses?.vcs ?? {})
       if (request.method === "GET" && new URL(request.url).pathname === "/api/mcp/resource")
@@ -71,6 +74,17 @@ function setup(
 }
 
 describe("createCompatibleApi", () => {
+  test("loads V2 review diffs from the supported compatibility route", async () => {
+    const file = { file: "a.ts", additions: 1, deletions: 1, patch: "patch" }
+    const { api, requests } = setup("v2", { vcsDiff: [file] })
+    expect((await api.vcs.diff({ location: { directory: "/repo" }, mode: "working" })).data).toEqual([
+      { ...file, status: "modified" },
+    ])
+    const url = new URL(requests[0]!.url)
+    expect(url.pathname).toBe("/vcs/diff")
+    expect(url.searchParams.get("mode")).toBe("git")
+    expect(url.searchParams.get("directory")).toBe("/repo")
+  })
   /*
   test("routes V1 archive through the legacy session update", async () => {
     const { api, requests } = setup("v1")
