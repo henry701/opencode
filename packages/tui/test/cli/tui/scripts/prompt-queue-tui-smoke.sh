@@ -10,7 +10,7 @@
 #   OPENCODE_ARTIFACT_DIR — writes session-id.txt, queued.txt, tui-attach.txt
 #   OPENCODE_QUEUE_ONLY=1 — only queue deferred messages (open turn started elsewhere)
 #   OPENCODE_EDIT_FIRST=1 — edit the first queued message and save it with Return
-#   OPENCODE_SKIP_ATTACH=1 — skip `script` capture of `opencode attach`
+#   OPENCODE_SKIP_ATTACH=1 — skip terminal capture; edit through the API instead
 #   OPENCODE_CLI_ENTRY   — path to src/index.ts (defaults below)
 #
 set -euo pipefail
@@ -78,12 +78,15 @@ attach_capture() {
   local sid=$1
   local out="${ARTIFACT_DIR}/tui-attach.txt"
   : >"$out"
-  if [[ "${OPENCODE_SKIP_ATTACH:-}" == "1" ]]; then
-    printf 'attach skipped\n' >"$out"
-    return 0
-  fi
-  if ! command -v script >/dev/null 2>&1; then
-    printf 'attach skipped: script(1) not found\n' >"$out"
+  if [[ "${OPENCODE_SKIP_ATTACH:-}" == "1" ]] || ! command -v script >/dev/null 2>&1; then
+    printf 'attach skipped: disabled or script(1) unavailable\n' >"$out"
+    if [[ "${OPENCODE_EDIT_FIRST:-}" == "1" ]]; then
+      local queued
+      queued="$(api GET "/api/session/${sid}/queue" | jq -ec '.data[0]')"
+      api PATCH "/api/session/${sid}/queue/$(jq -er '.id' <<<"$queued")" \
+        -d "$(jq -c '{payload: (.payload | .parts[0].text += "-edited")}' <<<"$queued")" >/dev/null
+      printf 'queue edit exercised through API, not terminal\n' >>"$out"
+    fi
     return 0
   fi
   if [[ "${OPENCODE_EDIT_FIRST:-}" == "1" ]]; then

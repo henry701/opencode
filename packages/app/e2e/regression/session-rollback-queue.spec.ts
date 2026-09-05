@@ -181,11 +181,15 @@ test("command undo and redo use the current pending input and replacement draft"
   await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
   await expectSessionTitle(page, session.title)
   await expect(page.getByText("second user prompt", { exact: true })).toHaveCount(1)
+  await page.clock.install()
   const select = async (command: string) => {
     await page.keyboard.press("Control+p")
     const dialog = page.getByRole("dialog")
     await dialog.getByRole("textbox").fill(command)
     await dialog.getByText(command, { exact: true }).click()
+    // Dialog portals disappear before the 100ms close timer releases the command lock.
+    await page.clock.runFor(150)
+    await expect(page.locator("[data-dialog-layer]")).toHaveCount(0)
   }
   const input = page.locator('[data-component="prompt-input"]')
   await select("Undo")

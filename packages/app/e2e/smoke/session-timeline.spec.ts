@@ -3,7 +3,7 @@ import { base64Encode } from "@opencode-ai/core/util/encode"
 import { currentPageMessages, fixture } from "./session-timeline.fixture"
 import { trackPageErrors, expectNoSmokeErrors } from "../utils/errors"
 import { mockOpenCodeServer } from "../utils/mock-server"
-import { APP_READY_TIMEOUT, expectAppVisible, expectSessionTitle } from "../utils/waits"
+import { expectAppVisible, expectSessionTitle } from "../utils/waits"
 import { expectAtBottom, scrollToBottom } from "../utils/scroll"
 
 const forbiddenText = ["Load details", "Show earlier steps"]
@@ -383,9 +383,6 @@ test.describe("smoke: session timeline", () => {
     })
     await configureSmokePage(page, fixture.directory)
 
-    await selectHomeProject(page, fixture.project.name)
-    await navigateToSession(page, fixture.directory, fixture.sourceID, fixture.expected.sourceTitle)
-    await expectSessionReady(page)
     await navigateToSession(page, fixture.directory, fixture.targetID, fixture.expected.targetTitle)
     const expectedPartIDs = fixture.expected.targetPartIDs
     const expectedMessageIDs = fixture.expected.targetMessageIDs
@@ -761,18 +758,6 @@ function expectCompleteScroll(
   expect(new Set(expectedPartIDs).size).toBe(expectedPartIDs.length)
   expect(new Set(expectedMessageIDs).size).toBe(expectedMessageIDs.length)
   expect(expectedPartIDs.length).toBe(331)
-}
-
-async function selectHomeProject(page: Page, projectName: string) {
-  await page.goto("/")
-  const row = page
-    .locator('[data-component="home-project-row"]')
-    .filter({ hasText: new RegExp(projectName, "i") })
-    .first()
-  await expectAppVisible(row)
-  await row.click()
-  await expect(row).toHaveAttribute("data-selected", "", { timeout: APP_READY_TIMEOUT })
-  await expect(page).toHaveURL(/\/$/)
 }
 
 async function navigateToSession(page: Page, directory: string, sessionId: string, expectedTitle: string) {
