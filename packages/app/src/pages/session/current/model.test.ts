@@ -120,6 +120,69 @@ describe("current session model", () => {
     )
   })
 
+  test("independent clients converge after replacement without dropping later admission", async () => {
+    const commit = Promise.withResolvers<void>()
+    let committed = false
+    const port: CurrentSessionPort = {
+      ...makePort(),
+      sessions: {
+        ...makePort().sessions,
+        events: async function* (_input, options) {
+          await commit.promise
+          yield {
+            id: "evt_commit",
+            type: "session.next.revert.committed",
+            durable: { aggregateID: "ses_test", seq: 4, version: 1 },
+            data: { sessionID: "ses_test", messageID: "msg_old", timestamp: 4 },
+          }
+          await new Promise<void>((resolve) =>
+            options?.signal?.addEventListener("abort", () => resolve(), { once: true }),
+          )
+        },
+      },
+      messages: {
+        list: async () => ({
+          ...messages(committed ? [] : [{ id: "msg_old", text: "old", created: 1 }], undefined, committed ? 5 : 2),
+          pending: [
+            {
+              id: committed ? "msg_new" : "msg_pending",
+              type: "user",
+              text: committed ? "replacement" : "old steer",
+              time: { created: committed ? 5 : 2 },
+            },
+          ],
+        }),
+      },
+    }
+    await new Promise<void>((resolve, reject) =>
+      createRoot((dispose) => {
+        const clients = [0, 1].map(() =>
+          createCurrentSessionModel({ sessionID: () => "ses_test", client: () => port, autoStart: false }),
+        )
+        Promise.all(clients.map((client) => client.start()))
+          .then(async () => {
+            expect(clients.map((client) => client.messages().map((message) => String(message.id)))).toEqual([
+              ["msg_old", "msg_pending"],
+              ["msg_old", "msg_pending"],
+            ])
+            committed = true
+            commit.resolve()
+            await until(() =>
+              clients.every((client) => client.messages().length === 1 && client.messages()[0]?.id === "msg_new"),
+            )
+            expect(clients.map((client) => client.messages()[0])).toMatchObject([
+              { id: "msg_new", text: "replacement" },
+              { id: "msg_new", text: "replacement" },
+            ])
+            clients.forEach((client) => client.dispose())
+            dispose()
+            resolve()
+          })
+          .catch(reject)
+      }),
+    )
+  })
+
   test("buffers SSE during hydration and refreshes server-authoritative queue state", async () => {
     let queueReads = 0
     const event = prompted(4)

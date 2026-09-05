@@ -199,6 +199,7 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
     if (path === "/api/mcp") return json(route, { location: location(config), data: [] })
     if (path === "/api/mcp/resource")
       return json(route, { location: location(config), data: { resources: [], templates: [] } })
+    if (path === "/api/integration") return json(route, { location: location(config), data: [] })
     const integration = path.match(/^\/api\/integration\/([^/]+)$/)?.[1]
     if (integration && route.request().method() === "GET")
       return json(route, {
@@ -341,6 +342,13 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
       const session = config.sessions.find((item) => item.id === renameMatch[1])
       if (!session) return json(route, { error: "Session not found" }, undefined, 404)
       session.title = route.request().postDataJSON().title
+      return route.fulfill({ status: 204, headers: { "access-control-allow-origin": "*" } })
+    }
+    const clearRevertMatch = path.match(/^\/api\/session\/([^/]+)\/revert\/clear$/)
+    if (clearRevertMatch && route.request().method() === "POST") {
+      const session = config.sessions.find((item) => item.id === clearRevertMatch[1])
+      if (!session) return json(route, { error: "Session not found" }, undefined, 404)
+      delete session.revert
       return route.fulfill({ status: 204, headers: { "access-control-allow-origin": "*" } })
     }
     if (
@@ -513,8 +521,11 @@ export function currentCatalog(config: Pick<MockServerConfig, "provider">) {
       >
     }[]
     default?: { providerID?: string; modelID?: string }
+    connected?: string[]
   }
-  const providers = catalog.all ?? []
+  const providers = (catalog.all ?? []).filter(
+    (provider) => !catalog.connected || catalog.connected.includes(provider.id ?? ""),
+  )
   const models = providers.flatMap((provider) =>
     Object.entries(provider.models ?? {}).map(([id, model]) => ({
       id: model.id ?? id,

@@ -137,7 +137,9 @@ export async function setupTimeline(
   }
   await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
   await transport.waitForConnection()
-  await expectSessionTitle(page, title)
+  if (input.settings?.newLayoutDesigns === false)
+    await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible()
+  else await expectSessionTitle(page, title)
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
   if (input.cpuRate && input.cpuRate > 1) {
     const devtools = await page.context().newCDPSession(page)
@@ -219,7 +221,7 @@ export function event(type: EventType, data: TimelineEvent["data"]): TimelineEve
     ...(durable
       ? {
           durable: {
-            aggregateID: sessionID,
+            aggregateID: data.sessionID,
             seq: ++durableSequence,
             version: type === "session.next.step.ended" || type === "session.next.step.failed" ? 2 : 1,
           },

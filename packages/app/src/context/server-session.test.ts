@@ -162,6 +162,33 @@ function setup(sessions: Record<string, Session>) {
 }
 
 describe("server session", () => {
+  test("loads current session todos through the supported endpoint and preserves live updates", async () => {
+    const todos = [{ content: "Persisted task", status: "in_progress", priority: "high" }]
+    const calls: string[] = []
+    const client = {
+      session: {
+        todo: async (input: { sessionID: string }) => {
+          calls.push(input.sessionID)
+          return { data: todos }
+        },
+      },
+    } as unknown as OpencodeClient
+    const store = createServerSession(client, { protocol: Promise.resolve("v2") })
+    store.remember(session("child"))
+    await store.todo("child")
+    expect(store.data.todo.child).toEqual(todos)
+    store.apply({
+      type: "todo.updated",
+      properties: { sessionID: "child", todos: [{ ...todos[0], status: "completed" }] },
+    })
+    expect(store.data.todo.child?.[0]?.status).toBe("completed")
+    await store.todo("child")
+    expect(calls).toEqual(["child"])
+    await store.todo("child", { force: true })
+    expect(calls).toEqual(["child", "child"])
+    expect(store.data.todo.child).toEqual(todos)
+  })
+
   test("projects V2 session events into current and legacy message state", () => {
     const ctx = setup({ child: session("child") })
     ctx.store.remember(session("child"))

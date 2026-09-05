@@ -12,6 +12,7 @@ import {
   title,
   userID,
   userMessage,
+  type TimelineEvent,
 } from "../performance/timeline-stability/fixture"
 import { mockOpenCodeServer } from "../utils/mock-server"
 import { installSseTransport } from "../utils/sse-transport"
@@ -33,8 +34,8 @@ const olderAssistant = assistantMessage([textPart(`prt_history_root_99`, "Earlie
 })
 const messages = [olderUser, olderAssistant, userMessage(), ...latestAssistants]
 const lastAssistant = latestAssistants.at(-1)!
-const lastPartID = lastAssistant.content[0]!.id
-const olderPartID = olderAssistant.content[0]!.id
+const lastPartID = `${lastAssistant.id}:text:0`
+const olderPartID = `${olderAssistant.id}:text:0`
 const completed = {
   ...lastAssistant,
   time: { ...lastAssistant.time, completed: lastAssistant.time.created + 15_000 },
@@ -57,7 +58,7 @@ for (const scenario of scenarios) {
     const pages: { cursor?: string; limit: number }[] = []
     const sequence: string[] = []
     const history = Promise.withResolvers<void>()
-    const transport = await installSseTransport<{ directory: string; payload: Record<string, unknown> }>(page, {
+    const transport = await installSseTransport<TimelineEvent>(page, {
       server: `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`,
       path: `/api/session/${sessionID}/event`,
       retry: 20,
@@ -86,7 +87,7 @@ for (const scenario of scenarios) {
       sessions: [session()],
       status: active,
       currentPageMessages: (_, limit, cursor) => {
-        pages.push({ cursor, limit })
+        if (limit === historyPageSize) pages.push({ cursor, limit })
         const end = cursor ? Number(cursor) : messages.length
         const start = Math.max(0, end - limit)
         return {
@@ -97,7 +98,9 @@ for (const scenario of scenarios) {
       },
     })
     await page.route(`**/api/session/${sessionID}/message?**`, async (route) => {
-      const cursor = new URL(route.request().url()).searchParams.get("cursor") ?? undefined
+      const url = new URL(route.request().url())
+      if (Number(url.searchParams.get("limit")) !== historyPageSize) return route.fallback()
+      const cursor = url.searchParams.get("cursor") ?? undefined
       const label = cursor ?? "latest"
       requests.push({ cursor, phase: "start" })
       sequence.push(`messages:start:${label}`)
@@ -162,8 +165,11 @@ for (const scenario of scenarios) {
     const viewport = page
       .locator(".scroll-view__viewport")
       .filter({ has: page.locator("[data-timeline-virtual-content]") })
-    await viewport.hover()
-    await page.mouse.wheel(0, -100_000)
+    await viewport.evaluate((element) => {
+      element.dispatchEvent(new WheelEvent("wheel", { deltaY: -120, bubbles: true }))
+      element.scrollTop = 0
+      element.dispatchEvent(new Event("scroll"))
+    })
     await expect.poll(() => requests.filter((request) => request.phase === "start").length).toBe(2)
     expect(requests.filter((request) => request.phase === "end")).toHaveLength(1)
     const root = page.locator(`[data-message-id="${userID}"]`).first()
@@ -190,9 +196,7 @@ for (const scenario of scenarios) {
       ).__historyRootProbe!.arm()
     })
     await waitForProbeSamples(page, 0)
-    await expect
-      .poll(async () => visibleContentHidden(page), { timeout: 5_000 })
-      .toBe(false)
+    await expect.poll(async () => visibleContentHidden(page), { timeout: 5_000 }).toBe(false)
     const beforeHistory = await probeSamples(page)
     history.resolve()
     await expect(root).toBeVisible()
@@ -211,7 +215,7 @@ for (const scenario of scenarios) {
     for (const event of events) {
       const beforeEvent = await probeSamples(page)
       if (event === idle) active[sessionID] = { type: "idle" }
-      await transport.send(event)
+      await transport.burst(Array.isArray(event) ? event : [event])
       if (event === events.at(-1)) await expect(page.getByRole("button", { name: "Stop" })).toHaveCount(0)
       await waitForProbeSamples(page, beforeEvent)
       const current = await timelineState(page)

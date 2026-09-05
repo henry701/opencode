@@ -20,7 +20,7 @@ test("navigates to a subagent child session missing from the session list", asyn
   await setup(page)
   await openChildFromParent(page)
 
-  await expectSessionTitle(page, taskDescription)
+  await expect(page.getByRole("heading", { name: taskDescription, exact: true })).toBeVisible()
   await expect(page.getByRole("heading", { name: parentTitle })).toHaveCount(0)
 
   const titlebarRight = page.locator("#opencode-titlebar-right")
@@ -31,7 +31,7 @@ test("shows the not found fallback when the viewed session is deleted", async ({
   const events: EventPayload[] = []
   await setup(page, () => events.splice(0, 1))
   await openChildFromParent(page)
-  await expectSessionTitle(page, taskDescription)
+  await expect(page.getByRole("heading", { name: taskDescription, exact: true })).toBeVisible()
 
   events.push({
     directory,

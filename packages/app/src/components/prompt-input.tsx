@@ -1233,6 +1233,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       resetEditingQueueID: props.resetEditingQueueID,
       onQueue: props.onQueue,
       onAbort: props.onAbort,
+      onAbortComplete: props.onAbortComplete,
       revertMessageID: props.revertMessageID,
       onRevertSubmit: props.onRevertSubmit,
       onRevertSubmitComplete: props.onRevertSubmitComplete,

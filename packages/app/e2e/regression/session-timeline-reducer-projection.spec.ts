@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test"
 import {
   assistantMessage,
+  assistantID,
   completedAssistantInfo,
   messageUpdated,
   partUpdated,
@@ -29,7 +30,7 @@ test("groups singleton and separated context operations at correct boundaries", 
 })
 
 test("reducer-hardening: converges when idle arrives before final part and message completion", async ({ page }) => {
-  const textID = "prt_event_order_text"
+  const textID = `${assistantID}:text:0`
   const assistant = assistantMessage([textPart(textID, "Partial")], { completed: false })
   const timeline = await setupTimeline(page, { messages: [userMessage(), assistant] })
   // Hydrate already marks the incomplete assistant as busy; only force early idle.

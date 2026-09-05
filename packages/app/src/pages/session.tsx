@@ -1,4 +1,5 @@
 import type { FilePart, Project, Session, UserMessage, VcsFileDiff } from "@opencode-ai/sdk/v2"
+import { DateTime } from "effect"
 import { getFilename } from "@opencode-ai/core/util/path"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { createQuery, skipToken, useMutation, useQueryClient } from "@tanstack/solid-query"
@@ -528,11 +529,21 @@ export default function Page() {
       : sync().data.session_working(sessionID)
   createEffect(
     on(
-      () => [params.id, current.readiness(), current.busy()] as const,
-      ([id, readiness, active]) => {
+      () => [params.id, current.readiness(), current.busy(), current.retry()] as const,
+      ([id, readiness, active, retry]) => {
         if (!id || readiness !== "ready") return
-        const next = active ? ({ type: "busy" } as const) : ({ type: "idle" } as const)
-        if ((sync().data.session_status[id]?.type ?? "idle") === next.type) return
+        const next =
+          active && retry
+            ? {
+                type: "retry" as const,
+                attempt: retry.data.attempt,
+                message: retry.data.error.message,
+                next: DateTime.toEpochMillis(retry.data.timestamp),
+              }
+            : active
+              ? ({ type: "busy" } as const)
+              : ({ type: "idle" } as const)
+        if (next.type !== "retry" && (sync().data.session_status[id]?.type ?? "idle") === next.type) return
         sync().set("session_status", id, next)
       },
     ),
@@ -1173,6 +1184,10 @@ export default function Page() {
     setActiveMessage,
     focusInput,
     getMessageParts: timelineParts,
+    getUserMessages: userMessages,
+    getRevertMessageID: revertMessageID,
+    revert: (messageID) => (params.id ? revert({ sessionID: params.id, messageID }) : undefined),
+    restore: (messageID) => restore(messageID),
     review: reviewTab,
     fileBrowser: () => newSessionDesign() && isDesktop() && !!params.id,
   })
@@ -1869,6 +1884,7 @@ export default function Page() {
       const target = sync()
       const last = target.session.get(input.sessionID)?.revert
       const value = draft(input.messageID)
+      const owner = sessionOwnership.capture()
       await runPromptRollbackMutation({
         capturePrompt: prompt.capture,
         optimistic: (prompt) => {
@@ -1876,7 +1892,7 @@ export default function Page() {
           prompt.set(value)
         },
         request: () => halt(input.sessionID).then(() => session.revert.stage({ ...input, inclusive: true })),
-        complete: () => setEditingRevert(input.messageID),
+        complete: () => owner.run(() => setEditingRevert(input.messageID)),
         rollback: () => roll(input.sessionID, last, target),
         fail,
       })
@@ -1894,6 +1910,7 @@ export default function Page() {
       if (index < 0) return
       const next = userMessages()[index + 1]
       const last = target.session.get(sessionID)?.revert
+      const owner = sessionOwnership.capture()
 
       await runPromptRollbackMutation({
         capturePrompt: prompt.capture,
@@ -1911,7 +1928,7 @@ export default function Page() {
             : halt(sessionID).then(() =>
                 session.revert.stage({ sessionID, messageID: next.id, inclusive: true }).then(() => undefined),
               ),
-        complete: () => setEditingRevert(next?.id),
+        complete: () => owner.run(() => setEditingRevert(next?.id)),
         rollback: () => roll(sessionID, last, target),
         fail,
       })
@@ -2249,6 +2266,7 @@ export default function Page() {
                       onRevertSubmitComplete={() => setEditingRevert(undefined)}
                       shouldQueue={queueEnabled}
                       onQueue={queueFollowup}
+                      onAbortComplete={current.refresh}
                       onAbort={() => {
                         const id = params.id
                         if (!id) return Promise.resolve()
@@ -2292,6 +2310,7 @@ export default function Page() {
                       onRevertSubmitComplete: () => setEditingRevert(undefined),
                       shouldQueue: queueEnabled,
                       onQueue: queueFollowup,
+                      onAbortComplete: current.refresh,
                       onAbort: () => {
                         const id = params.id
                         if (!id) return Promise.resolve()

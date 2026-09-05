@@ -708,6 +708,9 @@ describe("prompt submit queue mode", () => {
       resetHistoryNavigation: () => undefined,
       setMode: () => undefined,
       setPopover: () => undefined,
+      onAbortComplete: () => {
+        abortOrder.push("complete")
+      },
       onAbort: async () => {
         await gate
         abortOrder.push("pause")
@@ -720,7 +723,7 @@ describe("prompt submit queue mode", () => {
     release()
     await pending
 
-    expect(abortOrder).toEqual(["pause", "interrupt"])
+    expect(abortOrder).toEqual(["pause", "interrupt", "complete"])
     expect(todoCleared).toEqual([])
     expect(promptAsyncCalls).toHaveLength(0)
   })

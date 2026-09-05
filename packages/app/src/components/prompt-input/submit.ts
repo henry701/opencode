@@ -92,6 +92,7 @@ type PromptSubmitInput = {
   resetEditingQueueID?: () => void
   onQueue?: (draft: FollowupDraft) => Promise<void> | void
   onAbort?: () => Promise<void> | void
+  onAbortComplete?: () => Promise<void> | void
   revertMessageID?: Accessor<string | undefined>
   onRevertSubmit?: (messageID: string) => Promise<void> | void
   onRevertSubmitComplete?: () => void
@@ -145,6 +146,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     }
     return serverSDK()
       .currentClient.sessions.interrupt({ sessionID })
+      .then(() => input.onAbortComplete?.())
       .catch((err) => {
         showToast({
           title: language.t("common.requestFailed"),

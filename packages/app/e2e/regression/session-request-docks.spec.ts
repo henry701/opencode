@@ -107,7 +107,7 @@ test("shows a pending permission dock", async ({ page }) => {
 test("restores the draft caret before typing after a request dock closes", async ({ page }) => {
   const transport = await installSseTransport(page, {
     server: `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`,
-    path: "/global/event",
+    path: "/api/event",
     retry: 20,
   })
   await mockServer(page, { questions: [] })
@@ -134,21 +134,21 @@ test("restores the draft caret before typing after a request dock closes", async
     )
     .toBe(cursor)
   await transport.send({
-    directory,
-    payload: {
-      type: "question.asked",
-      properties: {
-        id: "question-caret",
-        sessionID,
-        questions: [
-          {
-            header: "Continue",
-            question: "Continue?",
-            options: [{ label: "Yes", description: "Continue the session" }],
-          },
-        ],
-        tool: { messageID: "message-caret", callID: "call-caret" },
-      },
+    id: "evt_question_caret",
+    created: Date.now(),
+    location: { directory },
+    type: "question.v2.asked",
+    data: {
+      id: "question-caret",
+      sessionID,
+      questions: [
+        {
+          header: "Continue",
+          question: "Continue?",
+          options: [{ label: "Yes", description: "Continue the session" }],
+        },
+      ],
+      tool: { messageID: "msg_caret", callID: "call-caret" },
     },
   })
   const question = page.locator('[data-component="dock-prompt"][data-kind="question"]')
@@ -156,8 +156,11 @@ test("restores the draft caret before typing after a request dock closes", async
   await expect(editor).toHaveCount(0)
 
   await transport.send({
-    directory,
-    payload: { type: "question.rejected", properties: { sessionID, requestID: "question-caret" } },
+    id: "evt_question_caret_rejected",
+    created: Date.now(),
+    location: { directory },
+    type: "question.v2.rejected",
+    data: { sessionID, requestID: "question-caret" },
   })
   await expect(question).toHaveCount(0)
   await expect(editor).toBeVisible()
