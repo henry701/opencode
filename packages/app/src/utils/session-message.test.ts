@@ -96,6 +96,32 @@ describe("normalizeSessionMessages", () => {
     ])
   })
 
+  test("keeps admitted model metadata authoritative across a provider switch", () => {
+    const payload = {
+      version: 1,
+      agent: "plan",
+      model: { providerID: "anthropic", modelID: "sonnet", variant: "high" },
+      parts: [{ type: "text", text: "Admitted prompt" }],
+    }
+    const result = normalizeCurrentSessionMessages("ses_1", [
+      decodeCurrentMessage({ id: "user", type: "user", text: "Admitted prompt", payload, time: { created: 1 } }),
+      decodeCurrentMessage({
+        id: "assistant",
+        type: "assistant",
+        agent: "build",
+        model: { providerID: "openai", id: "gpt" },
+        content: [],
+        time: { created: 2, completed: 3 },
+      }),
+      decodeCurrentMessage({ id: "pending", type: "user", text: "Next prompt", payload, time: { created: 4 } }),
+    ])
+    expect(result.messages).toMatchObject([
+      { id: "user", agent: payload.agent, model: payload.model },
+      { id: "assistant", agent: "build", providerID: "openai", modelID: "gpt" },
+      { id: "pending", agent: payload.agent, model: payload.model },
+    ])
+  })
+
   test("preserves current user attachments and payload comments in the compatibility projection", () => {
     const text = "Use @explore with @src/a.ts"
     const parts = [
@@ -138,6 +164,7 @@ describe("normalizeSessionMessages", () => {
         payload: { version: 1, agent: "build", model: { providerID: "provider", modelID: "model" }, parts },
       }),
     ])
+    expect(result.messages[0]).toMatchObject({ agent: "build", model: { providerID: "provider", modelID: "model" } })
     expect(result.parts.get("msg_rich")).toMatchObject(parts)
     expect(
       result.parts.get("msg_rich")?.every((part) => part.sessionID === "ses_1" && part.messageID === "msg_rich"),

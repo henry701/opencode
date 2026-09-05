@@ -25,6 +25,8 @@ type PreparedAssistant = SessionMessageAssistant & {
   snapshot?: { diffs?: SnapshotFileDiff[] }
 }
 
+type PreparedUser = SessionMessageUser & { payload?: Extract<CurrentEncodedMessage, { type: "user" }>["payload"] }
+
 const emptyTokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
 const emptyModel: { id: string; providerID: string; variant?: string } = { id: "", providerID: "" }
 const decodeToolInput = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
@@ -145,6 +147,7 @@ export function normalizeSessionMessages(sessionID: string, source: readonly Ses
   let agent = ""
   let model = emptyModel
   let parentID: string | undefined
+  let parentHasPayload = false
 
   source.forEach((message) => {
     if (message.type === "agent-switched") {
@@ -156,12 +159,19 @@ export function normalizeSessionMessages(sessionID: string, source: readonly Ses
       return
     }
     if (message.type === "user") {
+      const payload = (message as PreparedUser).payload
+      parentHasPayload = !!payload
+      if (payload) {
+        agent = payload.agent
+        model = { providerID: payload.model.providerID, id: payload.model.modelID, variant: payload.model.variant }
+      }
       parentID = message.id
       messages.push(userMessage(sessionID, message, agent, model))
       parts.set(message.id, userParts(sessionID, message))
       return
     }
     if (message.type === "synthetic" && message.description?.trim()) {
+      parentHasPayload = false
       parentID = message.id
       messages.push({
         id: message.id,
@@ -187,11 +197,13 @@ export function normalizeSessionMessages(sessionID: string, source: readonly Ses
       if (!parentID) return
       const parent = messages.findLast((item) => item.id === parentID)
       if (parent?.role === "user") {
-        parent.agent = message.agent
-        parent.model = {
-          providerID: message.model.providerID,
-          modelID: message.model.id,
-          variant: message.model.variant,
+        if (!parentHasPayload) {
+          parent.agent = message.agent
+          parent.model = {
+            providerID: message.model.providerID,
+            modelID: message.model.id,
+            variant: message.model.variant,
+          }
         }
         const diffs = (message as PreparedAssistant).snapshot?.diffs
         if (diffs) parent.summary = { diffs }
@@ -298,10 +310,7 @@ function userMessage(
   }
 }
 
-function userParts(
-  sessionID: string,
-  message: SessionMessageUser & { payload?: Extract<CurrentEncodedMessage, { type: "user" }>["payload"] },
-): Part[] {
+function userParts(sessionID: string, message: PreparedUser): Part[] {
   if (message.payload) {
     const ordinals = { text: 0, file: 0, agent: 0, subtask: 0 }
     return message.payload.parts.map((part) => ({

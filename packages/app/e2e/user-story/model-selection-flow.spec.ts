@@ -105,8 +105,8 @@ test("creates a session in a new project, connects OpenCode Go, and selects its 
   await page.locator('[data-provider-id="opencode-go"]').click()
   await requested.promise
   expect(errors).toEqual([])
-  catalogue.resolve()
   await page.locator('[data-input="provider-api-key"]').fill("mock-go-api-key")
+  catalogue.resolve()
   await page.locator('[data-action="provider-connect-submit"]').click()
   await expect(page.locator('[data-component="dialog-v2"]')).toHaveCount(0)
   expect(connections).toEqual([{ integrationID: "opencode-go", body: { key: "mock-go-api-key" } }])

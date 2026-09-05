@@ -1,4 +1,4 @@
-import { Match, Show, Switch, createMemo, type ComponentProps, type JSX } from "solid-js"
+import { Match, Show, Switch, batch, createMemo, type ComponentProps, type JSX } from "solid-js"
 import { ProgressCircle } from "@opencode-ai/ui/progress-circle"
 import { ProgressCircleV2 } from "@opencode-ai/ui/v2/progress-circle-v2"
 import { Button } from "@opencode-ai/ui/button"
@@ -41,10 +41,12 @@ function openSessionContext(args: {
   layout: ReturnType<typeof useLayout>
   tabs: ReturnType<ReturnType<typeof useLayout>["tabs"]>
 }) {
-  args.view.reviewPanel.open(args.view.reviewPanel.opened() ? "other" : "context-button")
-  if (args.layout.fileTree.opened() && args.layout.fileTree.tab() !== "all") args.layout.fileTree.setTab("all")
-  void args.tabs.open("context")
-  args.tabs.setActive("context")
+  batch(() => {
+    args.view.reviewPanel.open(args.view.reviewPanel.opened() ? "other" : "context-button")
+    if (args.layout.fileTree.opened() && args.layout.fileTree.tab() !== "all") args.layout.fileTree.setTab("all")
+    void args.tabs.open("context")
+    args.tabs.setActive("context")
+  })
 }
 
 export function SessionContextUsage(props: SessionContextUsageProps) {
