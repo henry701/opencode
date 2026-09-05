@@ -19,6 +19,7 @@
     "./regression/session-timeline-context-resize.spec.ts",
     "./utils/**/*.ts",
     "./regression/session-pending-reload.spec.ts",
+    "./regression/session-context-usage.spec.ts",
     "./regression/session-rollback-queue.spec.ts",
     "./regression/session-model-selection.spec.ts",
     "./regression/session-timeline-reasoning-projection.spec.ts",
