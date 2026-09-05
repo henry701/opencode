@@ -34,7 +34,7 @@ const deferredAsPromise = <A>(deferred: Deferred.Deferred<A>): PromiseLike<A> =>
   },
 })
 
-describe("prompt queue TUI smoke (serve + script)", () => {
+describe.each([false, true])("prompt queue TUI smoke (skipAttach=%s)", (skipAttach) => {
   cliIt.live(
     "queues three deferred prompts in fifo via serve API and attach screencap",
     ({ llm, home, opencode }) =>
@@ -132,6 +132,7 @@ describe("prompt queue TUI smoke (serve + script)", () => {
               OPENCODE_ARTIFACT_DIR: artifactDir,
               OPENCODE_QUEUE_ONLY: "1",
               OPENCODE_EDIT_FIRST: "1",
+              OPENCODE_SKIP_ATTACH: skipAttach ? "1" : "0",
               OPENCODE_CLI_ENTRY: path.join(opencodeRoot, "src/index.ts"),
             },
             stdout: "pipe",
@@ -200,6 +201,7 @@ describe("prompt queue TUI smoke (serve + script)", () => {
           readFile(path.join(artifactDir, "tui-attach.txt"), "utf8").catch(() => "attach skipped"),
         )
         expect(attach.length).toBeGreaterThan(0)
+        if (skipAttach) expect(attach).toContain("queue edit exercised through API, not terminal")
       }),
     120_000,
   )
