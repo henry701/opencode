@@ -2,7 +2,7 @@ import { expect, test, type Page, type Route } from "@playwright/test"
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import { currentSession } from "../utils/mock-server"
 
-const server = "http://127.0.0.1:4096"
+const server = `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`
 const sessionA = session("ses_tab_a", "Tab A session")
 const sessionB = session("ses_tab_b", "Tab B session")
 const sessionC = session("ses_tab_c", "Tab C session")
@@ -92,7 +92,8 @@ async function mockServer(page: Page) {
     if (url.pathname === "/global/event" || url.pathname === "/event" || url.pathname === "/api/event")
       return sse(route)
     if (url.pathname === "/global/health") return json(route, { healthy: true })
-    if (url.pathname === "/api/session") return json(route, { data: sessions.map(currentSession), cursor: {} })
+    if (url.pathname === "/api/session")
+      return json(route, { data: sessions.map((session) => currentSession(session)), cursor: {} })
     if (url.pathname === "/api/session/active") return json(route, { data: {} })
     const currentSessionInfo = sessions.find((item) => url.pathname === `/api/session/${item.id}`)
     if (currentSessionInfo) return json(route, { data: currentSession(currentSessionInfo) })

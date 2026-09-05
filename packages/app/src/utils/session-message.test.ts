@@ -7,6 +7,40 @@ import { normalizeCurrentSessionMessages, normalizeSessionMessages } from "./ses
 const decodeCurrentMessage = Schema.decodeUnknownSync(SessionMessage.Message)
 
 describe("normalizeSessionMessages", () => {
+  test("maps current task child identities for navigation without replacing legacy metadata", () => {
+    for (const structured of [{ sessionID: "child" }, { sessionID: "child", sessionId: "legacy-child" }]) {
+      const result = normalizeCurrentSessionMessages("parent", [
+        decodeCurrentMessage({
+          id: "msg_user",
+          type: "user",
+          text: "Delegate",
+          files: [],
+          agents: [],
+          time: { created: 1 },
+        }),
+        decodeCurrentMessage({
+          id: "msg_assistant",
+          type: "assistant",
+          agent: "build",
+          model: { id: "model", providerID: "provider" },
+          time: { created: 2, completed: 3 },
+          content: [
+            {
+              id: "task",
+              type: "tool",
+              name: "task",
+              time: { created: 2, completed: 3 },
+              state: { status: "completed", input: { description: "Child task" }, structured, content: [] },
+            },
+          ],
+        }),
+      ])
+      expect(result.parts.get("msg_assistant")).toMatchObject([
+        { type: "tool", state: { metadata: { ...structured, sessionId: structured.sessionId ?? "child" } } },
+      ])
+    }
+  })
+
   test("adapts current messages for the compatibility timeline", () => {
     const result = normalizeCurrentSessionMessages("ses_1", [
       decodeCurrentMessage({
@@ -60,6 +94,54 @@ describe("normalizeSessionMessages", () => {
       { type: "text", text: "world" },
       { type: "tool", callID: "call_read", state: { status: "completed", output: "contents" } },
     ])
+  })
+
+  test("preserves current user attachments and payload comments in the compatibility projection", () => {
+    const text = "Use @explore with @src/a.ts"
+    const parts = [
+      {
+        type: "text",
+        text: "Comment context",
+        synthetic: true,
+        metadata: {
+          opencodeComment: { path: "src/a.ts", comment: "Keep stable", selection: { startLine: 4, endLine: 8 } },
+        },
+      },
+      { type: "text", text },
+      { type: "file", mime: "image/png", filename: "pixel.png", url: "data:image/png;base64,eA==" },
+      {
+        type: "file",
+        mime: "text/plain",
+        filename: "a.ts",
+        url: "src/a.ts",
+        source: { type: "file", path: "src/a.ts", text: { value: "@src/a.ts", start: 18, end: 27 } },
+      },
+      { type: "agent", name: "explore", source: { value: "@explore", start: 4, end: 12 } },
+    ]
+    const message = {
+      id: "msg_rich",
+      type: "user",
+      text,
+      files: [{ uri: "data:image/png;base64,eA==", mime: "image/png", name: "pixel.png" }],
+      agents: [{ name: "explore", source: { text: "@explore", start: 4, end: 12 } }],
+      time: { created: 1 },
+    }
+    const projected = normalizeCurrentSessionMessages("ses_1", [decodeCurrentMessage(message)])
+    expect(projected.parts.get("msg_rich")).toMatchObject([
+      { type: "text", text },
+      { type: "file", url: "data:image/png;base64,eA==", filename: "pixel.png" },
+      { type: "agent", source: { value: "@explore", start: 4, end: 12 } },
+    ])
+    const result = normalizeCurrentSessionMessages("ses_1", [
+      decodeCurrentMessage({
+        ...message,
+        payload: { version: 1, agent: "build", model: { providerID: "provider", modelID: "model" }, parts },
+      }),
+    ])
+    expect(result.parts.get("msg_rich")).toMatchObject(parts)
+    expect(
+      result.parts.get("msg_rich")?.every((part) => part.sessionID === "ses_1" && part.messageID === "msg_rich"),
+    ).toBe(true)
   })
 
   test("renders current synthetic text, structured tool metadata, and snapshot diffs", () => {

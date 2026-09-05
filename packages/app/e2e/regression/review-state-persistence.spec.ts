@@ -93,7 +93,11 @@ async function setup(page: Page) {
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ branch: "feature", default_branch: "dev" }),
+      body: JSON.stringify(
+        new URL(route.request().url()).pathname.startsWith("/api/")
+          ? { location: { directory }, data: { branch: "feature", defaultBranch: "dev" } }
+          : { branch: "feature", default_branch: "dev" },
+      ),
     }),
   )
   await page.route("**/vcs/diff**", (route) =>

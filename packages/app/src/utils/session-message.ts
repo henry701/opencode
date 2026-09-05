@@ -44,6 +44,18 @@ export function normalizeCurrentSessionMessages(sessionID: string, source: reado
 }
 
 function toLegacyMessage(message: CurrentEncodedMessage): SessionMessageInfo {
+  if (message.type === "user") {
+    return {
+      ...message,
+      files: message.files?.map((file) => ({
+        ...file,
+        data: "",
+        source: { type: "uri" as const, uri: file.uri },
+        mention: file.source,
+      })),
+      agents: message.agents?.map((agent) => ({ ...agent, mention: agent.source })),
+    } as SessionMessageInfo
+  }
   if (message.type === "shell") {
     return {
       ...message,
@@ -111,6 +123,8 @@ function normalizeToolInput(name: string, input: Record<string, unknown>) {
 }
 
 function normalizeToolMetadata(name: string, metadata: Record<string, unknown>) {
+  if (name === "task" && typeof metadata.sessionID === "string" && metadata.sessionId === undefined)
+    return { ...metadata, sessionId: metadata.sessionID }
   if (name !== "edit" || !Array.isArray(metadata.files)) return metadata
   const file = metadata.files.find(record)
   if (!file || typeof file.file !== "string") return metadata
@@ -284,7 +298,19 @@ function userMessage(
   }
 }
 
-function userParts(sessionID: string, message: SessionMessageUser): Part[] {
+function userParts(
+  sessionID: string,
+  message: SessionMessageUser & { payload?: Extract<CurrentEncodedMessage, { type: "user" }>["payload"] },
+): Part[] {
+  if (message.payload) {
+    const ordinals = { text: 0, file: 0, agent: 0, subtask: 0 }
+    return message.payload.parts.map((part) => ({
+      ...part,
+      id: `${message.id}:${part.type}:${ordinals[part.type]++}`,
+      sessionID,
+      messageID: message.id,
+    }))
+  }
   return [
     textPart(sessionID, message.id, 0, message.text),
     ...(message.files ?? []).map(
@@ -391,6 +417,12 @@ function textPart(sessionID: string, messageID: string, ordinal: number, text: s
 
 function toolPart(sessionID: string, messageID: string, tool: SessionMessageAssistantTool): ToolPart {
   const start = tool.time.ran ?? tool.time.created
+  const metadata =
+    "structured" in tool.state && record(tool.state.structured)
+      ? tool.state.structured
+      : "metadata" in tool.state
+        ? (tool.state.metadata ?? {})
+        : {}
   const state = (() => {
     if (tool.state.status === "streaming") {
       const value = Option.getOrUndefined(decodeToolInput(tool.state.input))
@@ -401,8 +433,7 @@ function toolPart(sessionID: string, messageID: string, tool: SessionMessageAssi
       return {
         status: "running" as const,
         input: normalizeToolInput(tool.name, tool.state.input),
-        // metadata: normalizeToolMetadata(tool.name, tool.state.structured),
-        metadata: normalizeToolMetadata(tool.name, tool.state.metadata ?? {}),
+        metadata: normalizeToolMetadata(tool.name, metadata),
         time: { start },
       }
     }
@@ -411,8 +442,7 @@ function toolPart(sessionID: string, messageID: string, tool: SessionMessageAssi
         status: "error" as const,
         input: normalizeToolInput(tool.name, tool.state.input),
         error: tool.state.error.message,
-        // metadata: normalizeToolMetadata(tool.name, tool.state.structured),
-        metadata: normalizeToolMetadata(tool.name, tool.state.metadata ?? {}),
+        metadata: normalizeToolMetadata(tool.name, metadata),
         time: { start, end: tool.time.completed ?? start },
       }
     }
@@ -436,8 +466,7 @@ function toolPart(sessionID: string, messageID: string, tool: SessionMessageAssi
       input: normalizeToolInput(tool.name, tool.state.input),
       output: tool.state.content.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n"),
       title: tool.name,
-      // metadata: normalizeToolMetadata(tool.name, tool.state.structured),
-      metadata: normalizeToolMetadata(tool.name, tool.state.metadata ?? {}),
+      metadata: normalizeToolMetadata(tool.name, metadata),
       time: { start, end: tool.time.completed ?? start },
       attachments: attachments.length ? attachments : undefined,
     }

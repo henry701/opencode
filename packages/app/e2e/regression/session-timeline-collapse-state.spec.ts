@@ -10,7 +10,7 @@ const sessionID = "ses_timeline_state_regression"
 const userMessageID = "msg_user_regression"
 const assistantMessageID = "msg_assistant_regression"
 const editPartID = "prt_0001_edit"
-const textPartID = "prt_9999_text"
+const textPartID = `${assistantMessageID}:text:0`
 const title = "Timeline collapse state regression"
 const model = { providerID: "opencode", modelID: "claude-opus-4-6", variant: "max" }
 
@@ -160,7 +160,7 @@ test.describe("regression: session timeline local row state", () => {
     expect(siblingProbe).toEqual({
       fileMarker: "before",
       frameMarker: "before",
-      rowKey: `assistant-part:${userMessageID}:current:${assistantMessageID}:${editPartID}`,
+      rowKey: `assistant-part:${userMessageID}:part:${assistantMessageID}:${editPartID}`,
       rowMarker: "before",
       shadowRoots: 0,
       toolMarker: "before",
@@ -187,7 +187,7 @@ test.describe("regression: session timeline local row state", () => {
     expect(await readDiffProbe(page)).toEqual({
       fileMarker: "before",
       frameMarker: "before",
-      rowKey: `assistant-part:${userMessageID}:current:${assistantMessageID}:${editPartID}`,
+      rowKey: `assistant-part:${userMessageID}:part:${assistantMessageID}:${editPartID}`,
       rowMarker: "before",
       shadowRoots: 0,
       toolMarker: "before",

@@ -304,9 +304,10 @@ export const loadPathQuery = (
   queryOptions<Path>({
     queryKey: [scope, directory, "path"],
     queryFn: async () => {
-      if ((await protocol) !== "v1")
-        return { state: "", config: "", worktree: "", directory: directory ?? "", home: "" }
-      return retry(() => sdk.path.get({ directory: directory ?? undefined }).then((result) => result.data!))
+      // Session protocol detection does not describe support for the shared path endpoint.
+      const paths = retry(() => sdk.path.get({ directory: directory ?? undefined }).then((result) => result.data!))
+      if ((await protocol) === "v1") return paths
+      return paths.catch(() => ({ state: "", config: "", worktree: "", directory: directory ?? "", home: "" }))
     },
   })
 
@@ -425,7 +426,7 @@ export async function bootstrapDirectory(input: {
             })),
       () =>
         retry(async () => {
-          if ((await input.protocol) !== "v1") return
+          // Branch metadata still comes from the compatibility endpoint on V2 servers.
           return input.sdk.vcs.get().then((result) => {
             const next = { branch: result.data?.branch, default_branch: result.data?.default_branch }
             input.setStore("vcs", next)

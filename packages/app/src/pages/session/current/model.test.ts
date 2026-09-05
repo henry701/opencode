@@ -83,6 +83,106 @@ function makePort(input?: {
 }
 
 describe("current session model", () => {
+  test("reloads authoritative messages and pending inputs after a committed replacement", async () => {
+    const commit = Promise.withResolvers<void>()
+    let committed = false
+    const port = makePort()
+    port.sessions.events = async function* (_input, options) {
+      await commit.promise
+      yield {
+        id: "evt_commit",
+        type: "session.next.revert.committed",
+        durable: { aggregateID: "ses_test", seq: 3, version: 1 },
+        data: { sessionID: "ses_test", messageID: "msg_old", timestamp: 3 },
+      }
+      await new Promise<void>((resolve) => options?.signal?.addEventListener("abort", () => resolve(), { once: true }))
+    }
+    port.messages.list = async () => ({
+      ...messages(committed ? [] : [{ id: "msg_old", text: "old", created: 1 }], undefined, committed ? 3 : 1),
+      pending: committed ? [] : [{ id: "msg_pending", type: "user", text: "pending", time: { created: 2 } }],
+    })
+    await new Promise<void>((resolve, reject) =>
+      createRoot((dispose) => {
+        const model = createCurrentSessionModel({ sessionID: () => "ses_test", client: () => port, autoStart: false })
+        model
+          .start()
+          .then(async () => {
+            expect(model.messages()).toHaveLength(2)
+            committed = true
+            commit.resolve()
+            await until(() => model.messages().length === 0)
+            model.dispose()
+            dispose()
+            resolve()
+          })
+          .catch(reject)
+      }),
+    )
+  })
+
+  test("independent clients converge after replacement without dropping later admission", async () => {
+    const commit = Promise.withResolvers<void>()
+    let committed = false
+    const port: CurrentSessionPort = {
+      ...makePort(),
+      sessions: {
+        ...makePort().sessions,
+        events: async function* (_input, options) {
+          await commit.promise
+          yield {
+            id: "evt_commit",
+            type: "session.next.revert.committed",
+            durable: { aggregateID: "ses_test", seq: 4, version: 1 },
+            data: { sessionID: "ses_test", messageID: "msg_old", timestamp: 4 },
+          }
+          await new Promise<void>((resolve) =>
+            options?.signal?.addEventListener("abort", () => resolve(), { once: true }),
+          )
+        },
+      },
+      messages: {
+        list: async () => ({
+          ...messages(committed ? [] : [{ id: "msg_old", text: "old", created: 1 }], undefined, committed ? 5 : 2),
+          pending: [
+            {
+              id: committed ? "msg_new" : "msg_pending",
+              type: "user",
+              text: committed ? "replacement" : "old steer",
+              time: { created: committed ? 5 : 2 },
+            },
+          ],
+        }),
+      },
+    }
+    await new Promise<void>((resolve, reject) =>
+      createRoot((dispose) => {
+        const clients = [0, 1].map(() =>
+          createCurrentSessionModel({ sessionID: () => "ses_test", client: () => port, autoStart: false }),
+        )
+        Promise.all(clients.map((client) => client.start()))
+          .then(async () => {
+            expect(clients.map((client) => client.messages().map((message) => String(message.id)))).toEqual([
+              ["msg_old", "msg_pending"],
+              ["msg_old", "msg_pending"],
+            ])
+            committed = true
+            commit.resolve()
+            await until(() =>
+              clients.every((client) => client.messages().length === 1 && client.messages()[0]?.id === "msg_new"),
+            )
+            expect(clients.map((client) => client.messages()[0])).toMatchObject([
+              { id: "msg_new", text: "replacement" },
+              { id: "msg_new", text: "replacement" },
+            ])
+            clients.forEach((client) => client.dispose())
+            dispose()
+            resolve()
+          })
+          .catch(reject)
+      }),
+    )
+  })
+
   test("buffers SSE during hydration and refreshes server-authoritative queue state", async () => {
     let queueReads = 0
     const event = prompted(4)
@@ -135,6 +235,29 @@ describe("current session model", () => {
             expect(model.messages().map((message) => String(message.id))).toEqual(["msg_steer"])
             expect(model.messages()[0]).toMatchObject({ type: "user", text: "steer now" })
             expect(model.busy()).toBe(true)
+            model.dispose()
+            dispose()
+            resolve()
+          })
+          .catch(reject)
+      })
+    })
+  })
+
+  test("rehydrates stopped steering from the snapshot without marking inference busy", async () => {
+    const page = {
+      ...messages([], undefined, 5),
+      pending: messages([{ id: "msg_steer", text: "admitted before reload", created: 2 }]).data,
+    }
+    const port = makePort({ pages: [page] })
+    await new Promise<void>((resolve, reject) => {
+      createRoot((dispose) => {
+        const model = createCurrentSessionModel({ sessionID: () => "ses_test", client: () => port, autoStart: false })
+        model
+          .start()
+          .then(() => {
+            expect(model.messages()).toMatchObject([{ id: "msg_steer", text: "admitted before reload" }])
+            expect(model.busy()).toBe(false)
             model.dispose()
             dispose()
             resolve()

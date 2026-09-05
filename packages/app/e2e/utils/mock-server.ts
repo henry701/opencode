@@ -25,6 +25,7 @@ export interface MockServerConfig {
     items: unknown[]
     cursor?: { previous?: string; next?: string }
     throughSeq: number
+    pending?: unknown[]
   }
   vcsDiff?: unknown[]
   status?: Record<string, unknown>
@@ -143,19 +144,22 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
         },
         data: [],
       })
-    if (path === "/api/provider") return json(route, { location: location(config), data: currentCatalog(config).providers })
+    if (path === "/api/provider")
+      return json(route, { location: location(config), data: currentCatalog(config).providers })
     if (path === "/api/model") return json(route, { location: location(config), data: currentCatalog(config).models })
-    if (path === "/api/model/default") return json(route, { location: location(config), data: currentCatalog(config).default })
+    if (path === "/api/model/default")
+      return json(route, { location: location(config), data: currentCatalog(config).default })
     if (path === "/api/fs/list" && config.fileList) {
       const files = await config.fileList(url.searchParams.get("path") ?? "")
       return json(route, {
         location: location(config),
-        data: files instanceof Array
-          ? files.map((entry) => {
-              const item = entry as { path: string; type: "file" | "directory" }
-              return { path: item.path, type: item.type }
-            })
-          : [],
+        data:
+          files instanceof Array
+            ? files.map((entry) => {
+                const item = entry as { path: string; type: "file" | "directory" }
+                return { path: item.path, type: item.type }
+              })
+            : [],
       })
     }
     if (path === "/api/fs/find" && config.findFiles) {
@@ -172,21 +176,30 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
     if (path === "/api/agent")
       return json(route, {
         location: location(config),
-        data: [
-          {
-            id: "build",
-            name: "Build",
-            mode: "primary",
-            hidden: false,
+        data: (config.agents ?? [{ name: "build", mode: "primary", hidden: false }]).map((value) => {
+          const agent = value as {
+            id?: string
+            name: string
+            mode?: string
+            hidden?: boolean
+            model?: { providerID: string; modelID: string }
+            variant?: string
+          }
+          return {
+            ...agent,
+            id: agent.id ?? agent.name,
             request: { settings: {}, headers: {}, body: {} },
             permissions: [],
-          },
-        ],
+            model: agent.model && { providerID: agent.model.providerID, id: agent.model.modelID },
+            variant: agent.variant,
+          }
+        }),
       })
     if (path === "/api/command") return json(route, { location: location(config), data: [] })
     if (path === "/api/mcp") return json(route, { location: location(config), data: [] })
     if (path === "/api/mcp/resource")
       return json(route, { location: location(config), data: { resources: [], templates: [] } })
+    if (path === "/api/integration") return json(route, { location: location(config), data: [] })
     const integration = path.match(/^\/api\/integration\/([^/]+)$/)?.[1]
     if (integration && route.request().method() === "GET")
       return json(route, {
@@ -230,6 +243,7 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
     if (/^\/api\/pty\/[^/]+\/connect-token$/.test(path))
       return json(route, { location: location(config), data: { ticket: "e2e-ticket", expires_in: 60 } })
     if (emptyObject.has(path)) return json(route, {})
+    if (path === "/vcs/diff") return json(route, config.vcsDiff ?? [])
     if (emptyList.has(path)) return json(route, [])
     if (path === "/api/session") {
       const directory = url.searchParams.get("directory")
@@ -257,7 +271,11 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
       })
     }
     if (path === "/api/session/active") {
-      const statuses = (config.sessionStatus ?? config.status ?? {}) as Record<string, { type?: string }>
+      const statuses = (
+        typeof config.sessionStatus === "function"
+          ? config.sessionStatus()
+          : (config.sessionStatus ?? config.status ?? {})
+      ) as Record<string, { type?: string }>
       return json(route, {
         data: Object.fromEntries(
           Object.entries(statuses).flatMap(([id, status]) =>
@@ -269,7 +287,9 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
     const queueMatch = path.match(/^\/api\/session\/([^/]+)\/queue$/)
     if (queueMatch && route.request().method() === "GET")
       return json(route, {
-        data: (config.queue?.[queueMatch[1]] ?? []).map((item, position) => queuedInput(queueMatch[1]!, item, position)),
+        data: (config.queue?.[queueMatch[1]] ?? []).map((item, position) =>
+          queuedInput(queueMatch[1]!, item, position),
+        ),
       })
     if (queueMatch && route.request().method() === "POST") return json(route, { data: { id: "msg_queue_mock" } })
     const queueSendMatch = path.match(/^\/api\/session\/([^/]+)\/queue\/([^/]+)\/send$/)
@@ -317,6 +337,20 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
     if (/^\/session\/[^/]+\/permissions\/[^/]+$/.test(path) && route.request().method() === "POST") {
       return json(route, true)
     }
+    const renameMatch = path.match(/^\/api\/session\/([^/]+)\/rename$/)
+    if (renameMatch && route.request().method() === "POST") {
+      const session = config.sessions.find((item) => item.id === renameMatch[1])
+      if (!session) return json(route, { error: "Session not found" }, undefined, 404)
+      session.title = route.request().postDataJSON().title
+      return route.fulfill({ status: 204, headers: { "access-control-allow-origin": "*" } })
+    }
+    const clearRevertMatch = path.match(/^\/api\/session\/([^/]+)\/revert\/clear$/)
+    if (clearRevertMatch && route.request().method() === "POST") {
+      const session = config.sessions.find((item) => item.id === clearRevertMatch[1])
+      if (!session) return json(route, { error: "Session not found" }, undefined, 404)
+      delete session.revert
+      return route.fulfill({ status: 204, headers: { "access-control-allow-origin": "*" } })
+    }
     if (
       /^\/api\/session\/[^/]+\/(archive|rename|interrupt|revert\/clear|revert\/commit)$/.test(path) &&
       route.request().method() === "POST"
@@ -328,6 +362,18 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
     }
     if (path in staticRoutes) return json(route, staticRoutes[path])
 
+    const revertMatch = path.match(/^\/api\/session\/([^/]+)\/revert\/stage$/)
+    if (revertMatch && route.request().method() === "POST") {
+      const session = config.sessions.find((item) => item.id === revertMatch[1])
+      if (!session) return json(route, { error: "Session not found" }, undefined, 404)
+      session.revert = { messageID: route.request().postDataJSON().messageID }
+      return json(route, { data: session.revert })
+    }
+    const contextMatch = path.match(/^\/api\/session\/([^/]+)\/context$/)
+    if (contextMatch) {
+      const messages = config.currentPageMessages?.(contextMatch[1]!, Number.MAX_SAFE_INTEGER)
+      return json(route, { data: messages?.items.toReversed() ?? [] })
+    }
     const currentSessionMatch = path.match(/^\/api\/session\/([^/]+)$/)
     if (currentSessionMatch) {
       const session = config.sessions.find((item) => item.id === currentSessionMatch[1])
@@ -379,7 +425,12 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
           token,
         ) ?? { items: [], throughSeq: 0 }
         config.onMessages?.({ sessionID: currentMessagesMatch[1]!, before: token, phase: "end" })
-        return json(route, { data: pageData.items, throughSeq: pageData.throughSeq, cursor: pageData.cursor ?? {} })
+        return json(route, {
+          data: pageData.items,
+          pending: pageData.pending,
+          throughSeq: pageData.throughSeq,
+          cursor: pageData.cursor ?? {},
+        })
       }
       const before = token ? cursors.get(token) : undefined
       if (token && !before) return json(route, { error: "Invalid cursor" }, undefined, 400)
@@ -387,7 +438,11 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
       await config.beforeMessagesResponse?.({ sessionID: currentMessagesMatch[1]!, before })
       if (config.messageDelay !== undefined) await new Promise((resolve) => setTimeout(resolve, config.messageDelay))
       config.onMessages?.({ sessionID: currentMessagesMatch[1], before, phase: "end" })
-      const pageData = config.pageMessages?.(currentMessagesMatch[1], Number(url.searchParams.get("limit") ?? 50), before) ?? {
+      const pageData = config.pageMessages?.(
+        currentMessagesMatch[1],
+        Number(url.searchParams.get("limit") ?? 50),
+        before,
+      ) ?? {
         items: [],
       }
       const cursor = pageData.cursor ? `cursor_${++nextCursor}` : undefined
@@ -445,14 +500,32 @@ function location(config: MockServerConfig) {
   }
 }
 
-function currentCatalog(config: MockServerConfig) {
+export function currentCatalog(config: Pick<MockServerConfig, "provider">) {
   const value = typeof config.provider === "function" ? config.provider() : config.provider
   if (!value || typeof value !== "object") return { providers: [], models: [], default: null }
   const catalog = value as {
-    all?: { id?: string; name?: string; package?: string; models?: Record<string, { id?: string; name?: string; limit?: unknown }> }[]
+    all?: {
+      id?: string
+      name?: string
+      package?: string
+      models?: Record<
+        string,
+        {
+          id?: string
+          name?: string
+          family?: string
+          release_date?: string
+          variants?: Record<string, Record<string, unknown>>
+          limit?: unknown
+        }
+      >
+    }[]
     default?: { providerID?: string; modelID?: string }
+    connected?: string[]
   }
-  const providers = catalog.all ?? []
+  const providers = (catalog.all ?? []).filter(
+    (provider) => !catalog.connected || catalog.connected.includes(provider.id ?? ""),
+  )
   const models = providers.flatMap((provider) =>
     Object.entries(provider.models ?? {}).map(([id, model]) => ({
       id: model.id ?? id,
@@ -461,8 +534,9 @@ function currentCatalog(config: MockServerConfig) {
       name: model.name ?? model.id ?? id,
       package: provider.package ?? "",
       capabilities: { tools: true, input: ["text"], output: ["text"] },
-      variants: [],
-      time: { released: 0 },
+      variants: Object.entries(model.variants ?? {}).map(([id, settings]) => ({ id, settings, headers: {}, body: {} })),
+      family: model.family ?? model.id ?? id,
+      time: { released: model.release_date ? Date.parse(model.release_date) : Date.now() },
       cost: [],
       status: "active" as const,
       enabled: true,
@@ -476,9 +550,10 @@ function currentCatalog(config: MockServerConfig) {
       package: provider.package ?? "",
     })),
     models,
-    default: models.find(
-      (model) => model.providerID === catalog.default?.providerID && model.id === catalog.default.modelID,
-    ) ?? null,
+    default:
+      models.find(
+        (model) => model.providerID === catalog.default?.providerID && model.id === catalog.default.modelID,
+      ) ?? null,
   }
 }
 

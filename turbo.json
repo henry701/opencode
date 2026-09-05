@@ -15,7 +15,8 @@
     },
     "@opencode-ai/core#test": {
       "dependsOn": ["^build"],
-      "outputs": []
+      "outputs": [],
+      "passThroughEnv": ["OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER", "OPENCODE_TEST_HOME", "XDG_*"]
     },
     "@opencode-ai/function#test": {
       "outputs": []
