@@ -2,11 +2,11 @@ name: Sync Upstream
 
 on:
   schedule:
-    - cron: '0 6 * * *'
+    - cron: "0 6 * * *"
   workflow_dispatch:
     inputs:
       force:
-        description: 'Force merge even if already up-to-date'
+        description: "Force merge even if already up-to-date"
         type: boolean
         default: false
 
@@ -90,6 +90,32 @@ jobs:
               echo "EOF"
             } >> "$GITHUB_OUTPUT"
           fi
+
+      # GITHUB_TOKEN pushes do not trigger the normal push workflows. Gate here.
+      - name: Setup validation tools
+        if: steps.merge.outputs.status == 'merged'
+        uses: ./.github/actions/setup-bun
+
+      - name: Validate merged types and unit tests
+        if: steps.merge.outputs.status == 'merged'
+        run: |
+          bun turbo typecheck --concurrency=2
+          bun --cwd packages/app run typecheck:e2e
+          GITHUB_ACTIONS=false bun turbo test --concurrency=2
+          bun --cwd packages/client run check:generated
+          bun --cwd packages/opencode run test:httpapi
+
+      - name: Install browser test dependencies
+        if: steps.merge.outputs.status == 'merged'
+        working-directory: packages/app
+        run: bunx playwright install --with-deps chromium firefox
+
+      - name: Validate merged browser behavior
+        if: steps.merge.outputs.status == 'merged'
+        working-directory: packages/app
+        env:
+          CI: true
+        run: bun run test:e2e:local
 
       - name: Push merged changes
         if: steps.merge.outputs.status == 'merged'
