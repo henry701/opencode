@@ -4,10 +4,20 @@ Updated: 2026-09-05.
 
 ## Release decision
 
-**Not ready to merge.** The integration branches contain upstream through
-`70b4ca8c181e4c1ac6d8993b86249d824487ec65` and verified fixes, but the full browser
-suite is not green. Keep production PR #7 and development PR #8 as drafts.
-No finite audit establishes that the entire fork is bug-free.
+**Merge authorized with known follow-ups.** On 2026-09-05 the repository owner
+explicitly requested committing and pushing every current improvement and merging
+production PR #7 and development PR #8, with remaining issues handled in follow-up
+PRs. This supersedes the earlier draft/release hold. It does not mean the full
+browser suite or hosted CI is green. The checkpoint below records the evidence
+and unresolved work without weakening or skipping failing tests.
+
+The owner also confirmed that the CPU was throttled during the slower benchmark.
+Those timings are not comparable to the earlier unthrottled baseline and are not
+established as a code-induced performance regression.
+
+Integrated upstream remains `70b4ca8c181e4c1ac6d8993b86249d824487ec65`;
+newer upstream work is explicitly tracked below. No finite audit establishes that
+the entire fork is bug-free.
 
 The deployed service on ports 4096/14096 and its binary were not changed. Tests
 used separate worktrees, loopback servers, synthetic sessions and isolated XDG
@@ -17,13 +27,13 @@ test asserting Basic-auth headers with dummy credentials.
 
 ## Comparison boundary
 
-| Ref                                                   | Commit                                     |
-| ----------------------------------------------------- | ------------------------------------------ |
-| Fork production baseline                              | `c94eb6133eca258cb06cc30d159aae7a76519d1b` |
-| Fork development baseline                             | `722450048f`                               |
-| Initial upstream production                           | `20a7743876`                               |
-| Initial upstream development                          | `79903a4cf7`                               |
-| Latest upstream fetched and integrated, both branches | `70b4ca8c181e4c1ac6d8993b86249d824487ec65` |
+| Ref                                  | Commit                                     |
+| ------------------------------------ | ------------------------------------------ |
+| Fork production baseline             | `c94eb6133eca258cb06cc30d159aae7a76519d1b` |
+| Fork development baseline            | `722450048f`                               |
+| Initial upstream production          | `20a7743876`                               |
+| Initial upstream development         | `79903a4cf7`                               |
+| Upstream integrated in both branches | `70b4ca8c181e4c1ac6d8993b86249d824487ec65` |
 
 The initial production delta was 510 files, 38,512 additions / 7,297 deletions.
 The latest upstream merge did not change app/session-ui runtime source relative
@@ -210,7 +220,7 @@ tooltip token count, and detail-screen total/percentage against explicit values.
   harmless. Repeat isolated performance measurements before release.
   No wrong-destination or review-host replacement samples were observed.
 
-## Remaining full-suite failure inventory
+## Historical full-suite failure inventory (before checkpoint)
 
 These are failing test cases, not 55 confirmed product bugs. Several fixtures still
 send mutation arrays as one SSE event or assert obsolete part IDs. Repair invalid
@@ -234,7 +244,7 @@ that remain against valid data.
 | New-project model-selection story  |     2 |
 | Review/terminal stacking (Firefox) |     1 |
 
-## Ordered remaining work
+## Historical work plan (superseded by checkpoint backlog)
 
 1. [x] Correct remote settings fixtures and verify cross-server auto-accept,
        including unfocused parent/child sessions. This was fixture protocol drift,
@@ -264,3 +274,164 @@ Keep fork behavior behind focused modules and optional protocol fields. Prefer
 small call-site adapters over editing vendored client archives or broadly rewriting
 upstream UI. Preserve upstream defaults. Every future sync must validate these
 boundaries, not merely resolve textual merge conflicts.
+
+## Saved-work checkpoint — 2026-09-05
+
+This is a reviewed **checkpoint with known unresolved issues**. The owner has
+authorized merging it and deferring the remaining work to follow-up PRs. No runtime features were removed to make the upstream diff smaller.
+The changes use existing adapters and optional call-site callbacks; they do not
+replace the session architecture. The user's live service and installed binary
+remain untouched.
+
+### Additional underlying fixes saved
+
+- **Stop before a provider turn:** interruption could succeed before any assistant
+  step existed, leaving no step-ended event to clear the composer's busy state.
+  After a successful interrupt, both composers now refresh the current session.
+  Queue draining is paused first. Admitted steering is neither deleted nor
+  resubmitted. The new browser case failed before this change and passes after it,
+  including reload. The submit test asserts pause → interrupt → refresh ordering.
+- **Native user projection:** compatibility conversion now preserves native file
+  URIs, agent mentions and original typed payload parts, including synthetic
+  comment context. Native rich prompts no longer depend on lossy legacy fields.
+- **Child-task navigation:** native task metadata uses `sessionID`, while legacy
+  cards read `sessionId`. The adapter supplies the alias without replacing an
+  existing legacy value, and reads native structured metadata. Child headings
+  resolve descriptions from the parent's cached parts, not the child-only current
+  message accessor.
+- **Retry display:** the current-to-compatibility status bridge now includes retry
+  metadata and updates attempts even when the status tag has not changed. Native
+  retry → recovery → idle browser coverage asserts both attempts.
+- **Supported shared endpoints:** V2 session detection no longer forces empty
+  todos or path metadata. The existing todo endpoint remains authoritative for
+  persisted tasks; live updates and forced refresh retain their existing behavior.
+  Path lookup retains an empty fallback only when unavailable on a V2 server.
+- **Keyboard rollback integration:** Undo/Redo now receive current user messages,
+  including pending steering, and delegate to the same rollback/restore mutations
+  as the timeline. Completion is guarded against session navigation. Undo reaches
+  the correct pending draft in the new regression; the full Redo interaction is
+  still blocked by the failure below and is not claimed fixed end-to-end.
+- **Provider discovery:** onboarding choices come from the integration catalogue,
+  separately from the connected-model catalogue. Missing/offline responses are
+  tolerated; models and connected/default selections are not invented. This fixes
+  the discovery boundary but exposes a remaining connection-dialog hydration
+  defect; the whole onboarding flow is still incomplete.
+- **Replacement consistency:** two independent current-session clients converge
+  after a committed replacement. Persistence tests cover a steer exactly at the
+  admission cutoff, a later replacement, explicit queues, and an unrelated session.
+
+### Test-fixture and CI improvements saved
+
+Native timeline fixtures now send individual events with the correct aggregate
+ID, durable sequence, normalized text/reasoning IDs and current endpoint envelopes.
+Reconnect tests assert the durable `after` cursor. Pagination distinguishes the
+current 100-message page from compatibility hydration. Browser assertions still
+check behavior, ordering, geometry, caret restoration and error absence; failing
+cases were not skipped or given relaxed assertions. Expanded e2e typechecking is
+explicitly enumerated, not comprehensive coverage of every Playwright file.
+
+The shared Bun setup action now honors its caller's Node version, so the existing
+Playwright Node 24.15 pin is no longer silently overwritten. Fork CI uses lower
+concurrency; upstream workflow concurrency is retained. CLI tests cap concurrent
+subprocess tests at two without increasing their timeouts. Windows fixtures use
+portable paths and shell syntax, ripgrep is preinstalled, and Turbo forwards the
+existing isolated-home/file-watcher environment into core tests.
+
+The earlier GitHub failures were **not established as quota exhaustion**:
+
+- Typecheck jobs exited 137 or were cancelled without TypeScript diagnostics.
+  Resource pressure is plausible, but OOM was not proven.
+- Linux subprocess timeout failures reproduced locally with cold concurrent
+  compilation. Pinned Bun 1.3.14 with concurrency two passed all 14 CLI cases with
+  the same deadlines (49 assertions).
+- Windows showed real portability/download issues as well as a distinct patched
+  Bun dependency installation `ENOTEMPTY` failure. The portability changes are
+  tested on Linux; a clean Windows pass is still required. A stock Windows smoke
+  VM was used for investigation, but its attempted install is not a passing result.
+
+### Checkpoint verification
+
+Commands below run from the named package directory, never root `bun test`.
+
+| Validation                                                                                        | Observed result                                                                                |
+| ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| App `bun run test`                                                                                | 800 unit + 51 browser-environment unit tests passed; zero failures                             |
+| App `bun typecheck` and `bun run typecheck:e2e`                                                   | Both passed                                                                                    |
+| Core `bun test test/command.test.ts test/session-prompt.test.ts test/session-replacement.test.ts` | 38 passed, 100 assertions                                                                      |
+| Timeline fixture unit test                                                                        | 4 passed, 8 assertions                                                                         |
+| Workflow `actionlint` (test and typecheck)                                                        | Passed                                                                                         |
+| Full pinned-Bun Linux Turbo unit run before the final focused additions                           | 10/10 tasks passed, uncached, 14m43s; core 1,142 tests; opencode 3,627 pass / 22 skip / 1 todo |
+| Seven timeline projection/lifecycle/geometry specs, Chromium + Firefox                            | 43 passed; 3 existing Firefox CDP skips                                                        |
+| Stop, pending reload, rollback and native transport focused run                                   | 24 passed, 2 failed; only command Undo/Redo failed                                             |
+| Recorded, rolled-back and live context usage                                                      | 6 passed across Chromium + Firefox                                                             |
+| Fresh request/todo/child/review/onboarding/smoke run                                              | 18 passed, 8 failed across Chromium + Firefox                                                  |
+
+These are separate runs with some overlapping cases, not an aggregate full-suite
+pass. The fresh 26-case run confirms request-dock caret, todo lifecycle, child
+navigation, prepend anchoring and cold-tab paint behavior. Its eight failures are
+listed below. A final full browser run on both exact branch heads remains follow-up work.
+
+### Actionable backlog for follow-up PRs
+
+| ID / priority   | Evidence and likely boundary                                                                                                                                                                                                                                                                                                            | Required next step / exit criterion                                                                                                                                                                                                                    |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| WEB-01 / P1     | New-project OpenCode Go discovery succeeds, but selecting it throws `Cannot read properties of undefined (reading 'name')` in `ProviderConnection` / `MethodSelection`, before the API-key field appears (both browsers). `provider()` assumes that a new hook instance already has either integration choices or a connected provider. | Make connection rendering safe during catalogue hydration without inventing connected models. Add a delayed-catalogue regression and complete key submission, refresh and model selection in both browsers.                                            |
+| WEB-02 / P1     | Command Undo selects/stages the pending message correctly; the subsequent Ctrl+P for Redo never produces a dialog textbox in either browser. No error page in the clean repro.                                                                                                                                                          | Separate command-dialog/focus teardown from a runtime hotkey defect; retain real keyboard activation. Require stage, clear, empty draft and restored single message assertions to pass.                                                                |
+| WEB-03 / P2     | Review/terminal stacking times out waiting for a tree to have positive height in both browsers in the fresh run. Native lifecycle events are now used.                                                                                                                                                                                  | Inspect layout readiness and fixture review mode before changing runtime. Verify tree/terminal geometry, scrolling, detail refresh and remount invariants, without fixed sleep inflation.                                                              |
+| WEB-04 / P2     | Cached-tab smoke reports one removed first-paint plain text `<span>` in both browsers; latest-message and bottom placement assertions already pass. Probe currently tracks every descendant, including `HighlightedText` leaves rebuilt during hydration.                                                                               | Establish whether a user-visible row/part remount occurs. Preserve semantic row identity and first-frame assertions; distinguish incidental leaf updates from structural replacement with a dedicated repro rather than blindly relaxing zero-removal. |
+| WEB-05 / P2     | Full-history smoke reaches its final error audit, then fails: Chromium logs a current-context transport error; Firefox logs a global event-stream failure. No forbidden text or error toast was observed.                                                                                                                               | Determine mock coverage/reconnect or cancellation logging versus a real transport failure; preserve the no-console-errors contract and full ordering checks.                                                                                           |
+| CI-01 / P1      | Windows patched dependency install failed with `ENOTEMPTY`; clean Windows validation is not established.                                                                                                                                                                                                                                | Reproduce using pinned Bun in the stock smoke VM or hosted runner, resolve install failures, then run affected core/MCP/ripgrep/LSP/CLI suites and Windows browser gates. Do not call this quota without evidence.                                     |
+| CI-02 / P1      | Both old PR heads have red GitHub checks. Local Linux full tests pass, but that does not establish hosted or Windows parity.                                                                                                                                                                                                            | Inspect new-head jobs and logs. Require compiler, unit and browser failures to be fixed; document decent local equivalents only for demonstrated infrastructure/config/quota problems.                                                                 |
+| SYNC-01 / P1    | Latest fetched upstream dev and production are `e2894562f8ba943d72172d10b727c24d5f650c16`; integration branches contain `70b4ca8c181e4c1ac6d8993b86249d824487ec65`. The extra commit changes console usage normalization/tier configuration, not the web session fixes.                                                                 | Merge this and any later upstream changes into both integration branches with affected console validation; recheck ancestry before merge. This checkpoint does not claim latest-upstream completion.                                                   |
+| RELEASE-01 / P1 | Owner-authorized merge accepts the documented failures; Basic-auth deployed-browser parity and final exact-head full browser validation remain outstanding.                                                                                                                                                                             | Complete the backlog in follow-up PRs and rerun both branches. Reinstall/deploy separately when explicitly requested.                                                                                                                                  |
+
+### Reproduction commands
+
+From `packages/app`, against the task-owned mock-test Vite server (currently
+14449, backend request origin 14999):
+
+```sh
+PLAYWRIGHT_BASE_URL=http://127.0.0.1:14449 PLAYWRIGHT_PORT=14449 \
+PLAYWRIGHT_SERVER_PORT=14999 PLAYWRIGHT_WORKERS=2 bun run test:e2e \
+  e2e/regression/session-rollback-queue.spec.ts \
+  e2e/regression/review-terminal-stacked.spec.ts \
+  e2e/user-story/model-selection-flow.spec.ts \
+  e2e/smoke/session-timeline.spec.ts
+```
+
+The tests install synthetic API routes; these ports are not the deployed service.
+If no task server is listening, use the repository Playwright configuration's own
+server lifecycle on an unused port. Never restart the user's service for this.
+
+Production benchmark (builds its own temporary preview; run without other test
+workloads):
+
+```sh
+PLAYWRIGHT_PORT=14448 PLAYWRIGHT_WORKERS=1 bun run test:e2e \
+  --config e2e/performance/playwright.config.ts --project=chromium \
+  e2e/performance/timeline/session-tab-switch-benchmark.spec.ts
+```
+
+### Checkpoint performance result — CPU-throttled comparison
+
+The final production-build benchmark passed its two structural test cases, but
+**did not establish performance parity**. V2 median stable times (five samples per
+scenario) increased relative to the earlier baseline:
+
+| Scenario            | Earlier baseline (ms) | Checkpoint (ms) |
+| ------------------- | --------------------: | --------------: |
+| Review closed, cold |                 136.2 |           406.0 |
+| Review closed, hot  |                 103.7 |           314.0 |
+| Review open, cold   |                 120.6 |           354.2 |
+| Review open, hot    |                 112.6 |           324.0 |
+
+No wrong-destination or review-file-host replacement samples were observed. The
+owner subsequently confirmed that CPU throttling caused the slower timings.
+The focused browser run finished before benchmark sampling; its tail overlapped
+the benchmark build startup. Because CPU conditions differed, these measurements
+cannot establish either performance parity or a code-induced regression.
+
+**PERF-01 / P2 (follow-up):** rerun baseline and checkpoint alternately with matching
+CPU throttling and machine load. Retain first-frame/latest-message and review-host
+identity checks. Investigate code only if a slowdown reproduces under comparable
+conditions; the throttled comparison is not a merge blocker.
