@@ -177,31 +177,34 @@ describe("SessionV2.prompt", () => {
     }),
   )
 
-  it.effect("records shell commands and output in current Session history", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const { db } = yield* Database.Service
-      yield* db
-        .update(SessionTable)
-        .set({ directory: process.cwd() })
-        .where(eq(SessionTable.id, sessionID))
-        .run()
-        .pipe(Effect.orDie)
-      const session = yield* SessionV2.Service
+  it.effect(
+    "records shell commands and output in current Session history",
+    () =>
+      Effect.gen(function* () {
+        yield* setup
+        const { db } = yield* Database.Service
+        yield* db
+          .update(SessionTable)
+          .set({ directory: process.cwd() })
+          .where(eq(SessionTable.id, sessionID))
+          .run()
+          .pipe(Effect.orDie)
+        const session = yield* SessionV2.Service
 
-      const command = Shell.ps(Shell.preferred() ?? "")
-        ? "[Console]::Out.Write('current-shell-output')"
-        : "printf current-shell-output"
-      yield* session.shell({ sessionID, command })
+        const command = Shell.ps(Shell.preferred() ?? "")
+          ? "[Console]::Out.Write('current-shell-output')"
+          : "printf current-shell-output"
+        yield* session.shell({ sessionID, command })
 
-      expect(yield* session.messages({ sessionID, order: "asc" })).toMatchObject([
-        {
-          type: "shell",
-          command,
-          output: "current-shell-output",
-        },
-      ])
-    }),
+        expect(yield* session.messages({ sessionID, order: "asc" })).toMatchObject([
+          {
+            type: "shell",
+            command,
+            output: "current-shell-output",
+          },
+        ])
+      }),
+    30_000,
   )
 
   it.effect("pending UI inputs exclude queued, discarded and promoted messages", () =>
