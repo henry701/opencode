@@ -1,6 +1,7 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { GetPromptRequestSchema, ListPromptsRequestSchema } from "@modelcontextprotocol/sdk/types.js"
+import path from "node:path"
 
 const server = new Server({ name: "core-mcp-stdio-test", version: "1.0.0" }, { capabilities: { prompts: {} } })
 
@@ -14,7 +15,7 @@ server.setRequestHandler(GetPromptRequestSchema, (request) =>
     messages: [
       {
         role: "user",
-        content: { type: "text", text: `${process.cwd()}/${request.params.arguments?.suffix ?? ""}` },
+        content: { type: "text", text: path.join(process.cwd(), request.params.arguments?.suffix ?? "") },
       },
     ],
   }),

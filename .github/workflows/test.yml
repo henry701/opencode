@@ -55,6 +55,10 @@ jobs:
           git config --global user.email "bot@opencode.ai"
           git config --global user.name "opencode"
 
+      - name: Install ripgrep
+        if: runner.os == 'Windows'
+        run: choco install ripgrep --version 15.1.0 --yes --no-progress
+
       - name: Cache Turbo
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -66,7 +70,7 @@ jobs:
 
       - name: Run unit tests
         timeout-minutes: 20
-        run: GITHUB_ACTIONS=false bun turbo test
+        run: GITHUB_ACTIONS=false bun turbo test --concurrency=${{ github.repository == 'anomalyco/opencode' && '10' || '2' }}
         env:
           OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
@@ -93,6 +97,7 @@ jobs:
     runs-on: ${{ github.repository == 'anomalyco/opencode' && matrix.settings.host || (matrix.settings.name == 'windows' && 'windows-latest' || 'ubuntu-latest') }}
     env:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
+      PLAYWRIGHT_WORKERS: ${{ github.repository == 'anomalyco/opencode' && '5' || '2' }}
     defaults:
       run:
         shell: bash
@@ -102,14 +107,11 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
         with:
           # Playwright 1.59 hangs while extracting Chromium with Node 24.16.
           node-version: "24.15"
-
-      - name: Setup Bun
-        uses: ./.github/actions/setup-bun
 
       - name: Read Playwright version
         id: playwright-version

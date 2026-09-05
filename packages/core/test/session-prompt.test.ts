@@ -24,7 +24,10 @@ import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { Config } from "@opencode-ai/core/config"
+import { Shell } from "@opencode-ai/core/shell"
 import { SessionInputPayload } from "@opencode-ai/schema/session-input-payload"
+import os from "node:os"
+import path from "node:path"
 import { testEffect } from "./lib/effect"
 
 const executionCalls: SessionV2.ID[] = []
@@ -186,12 +189,15 @@ describe("SessionV2.prompt", () => {
         .pipe(Effect.orDie)
       const session = yield* SessionV2.Service
 
-      yield* session.shell({ sessionID, command: "printf current-shell-output" })
+      const command = Shell.ps(Shell.preferred() ?? "")
+        ? "[Console]::Out.Write('current-shell-output')"
+        : "printf current-shell-output"
+      yield* session.shell({ sessionID, command })
 
       expect(yield* session.messages({ sessionID, order: "asc" })).toMatchObject([
         {
           type: "shell",
-          command: "printf current-shell-output",
+          command,
           output: "current-shell-output",
         },
       ])
@@ -738,10 +744,16 @@ describe("SessionV2.command", () => {
       const command = yield* CommandV2.Service.pipe(Effect.provide(locations.get(location)))
       const agents = yield* AgentV2.Service.pipe(Effect.provide(locations.get(location)))
       yield* agents.transform((draft) => draft.update(AgentV2.ID.make("build"), () => undefined))
-      const sideEffect = `/tmp/opencode-command-retry-${crypto.randomUUID()}`
+      const sideEffect = path.join(os.tmpdir(), `opencode-command-retry-${crypto.randomUUID()}`)
+      yield* Effect.addFinalizer(() => Effect.promise(() => Bun.file(sideEffect).delete()).pipe(Effect.ignore))
       yield* command.transform((draft) =>
         draft.update("retry-safe", (item) => {
-          item.template = `!` + "`" + `printf x >> '${sideEffect}'; printf expanded` + "`"
+          item.template =
+            "!`" +
+            (Shell.ps(Shell.preferred() ?? "")
+              ? `[IO.File]::AppendAllText('${sideEffect.replaceAll("'", "''")}', 'x'); [Console]::Out.Write('expanded')`
+              : `printf x >> '${sideEffect.replaceAll("'", "'\\''")}'; printf expanded`) +
+            "`"
         }),
       )
       const id = SessionMessage.ID.create()
@@ -789,7 +801,6 @@ describe("SessionV2.command", () => {
       expect(conflict._tag).toBe("Session.PromptConflictError")
       expect(yield* Effect.promise(() => Bun.file(sideEffect).text())).toBe("x")
       expect(yield* eventCount("session.next.command.executed.1")).toBe(1)
-      yield* Effect.promise(() => Bun.file(sideEffect).delete())
     }),
   )
 
@@ -1001,9 +1012,7 @@ describe("SessionV2.queue", () => {
         id: second.id,
         discardedSeq: expect.any(Number),
       })
-      expect(
-        (yield* session.history({ sessionID, limit: 20 })).events.map((event) => event.type),
-      ).toEqual([
+      expect((yield* session.history({ sessionID, limit: 20 })).events.map((event) => event.type)).toEqual([
         "session.next.prompt.admitted",
         "session.next.prompt.admitted",
         "session.next.prompt.revised",
