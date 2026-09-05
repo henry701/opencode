@@ -48,13 +48,13 @@ test("shows and expands a running shell command without shimmering it", async ({
   await expect(tool.locator('[data-slot="bash-pre"]')).toContainText("still running")
 })
 
-test("transitions thinking and hidden reasoning through busy to idle", async ({ page }) => {
-  const reasoningID = "prt_reasoning_hidden"
+test("transitions thinking and hidden reasoning through busy to idle", async ({ page, browserName }) => {
+  const reasoningID = "msg_1001_timeline_assistant:reasoning:0"
   const assistant = assistantMessage([reasoningPart(reasoningID, "## Inspecting stability")], { completed: false })
   const timeline = await setupTimeline(page, {
     messages: [userMessage(), assistant],
     settings: { showReasoningSummaries: false },
-    cpuRate: 4,
+    cpuRate: browserName === "chromium" ? 4 : undefined,
   })
   await timeline.sendStatus("busy", 150)
 
@@ -91,7 +91,10 @@ test("moves busy through retry and recovery to final idle content", async ({ pag
   await expect(page.locator('[data-timeline-row="Thinking"]')).toBeVisible()
   await expect(page.locator('[data-timeline-row="DiffSummary"]')).toHaveCount(0)
   await timeline.sendStatus("retry", 180)
-  await expect(page.locator('[data-timeline-row="Retry"]')).toBeVisible()
+  await expect(page.locator('[data-timeline-row="Retry"]')).toContainText("Rate limited")
+  await expect(page.locator('[data-timeline-row="Retry"]')).toContainText("attempt #1")
+  await timeline.sendStatus("retry", 100, 2)
+  await expect(page.locator('[data-timeline-row="Retry"]')).toContainText("attempt #2")
   await expect(page.locator('[data-timeline-row="Thinking"]')).toHaveCount(0)
   await timeline.sendStatus("busy", 180, 2)
   await expect(page.locator('[data-timeline-row="Thinking"]')).toBeVisible()

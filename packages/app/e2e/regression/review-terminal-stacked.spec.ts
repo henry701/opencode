@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test"
 import { mockOpenCodeServer } from "../utils/mock-server"
+import { installSseTransport } from "../utils/sse-transport"
 import { expectSessionTitle } from "../utils/waits"
 
 const directory = "C:/OpenCode/ReviewTerminalStacked"
@@ -19,13 +20,16 @@ const branchDiffs = [
 
 test("keeps the review tree and terminal sized when both panels are open", async ({ page }) => {
   test.setTimeout(120_000)
-  const events: Array<{ directory: string; payload: Record<string, unknown> }> = []
+  const transport = await installSseTransport(page, {
+    server: `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`,
+    path: `/api/session/${sessionID}/event`,
+  })
   const sessionStatus = { [sessionID]: { type: "idle" as "busy" | "idle" } }
   let detailVersion = 1
   let detailFailures = 1
   await page.setViewportSize({ width: 1400, height: 900 })
   await mockOpenCodeServer(page, {
-    protocol: "v1",
+    protocol: "v2",
     directory,
     project: {
       id: projectID,
@@ -58,9 +62,19 @@ test("keeps the review tree and terminal sized when both panels are open", async
       },
     ],
     sessionStatus: () => sessionStatus,
-    pageMessages: () => ({ items: [] }),
-    events: () => events.splice(0, 1),
-    eventRetry: 16,
+    currentPageMessages: () => ({
+      items: [
+        {
+          id: "msg_review_user",
+          type: "user",
+          text: "Review changes",
+          files: [],
+          agents: [],
+          time: { created: 1700000000000 },
+        },
+      ],
+      throughSeq: 0,
+    }),
   })
   await page.route(/\/vcs(?:\?.*)?$/, (route) =>
     route.fulfill({
@@ -148,6 +162,7 @@ test("keeps the review tree and terminal sized when both panels are open", async
 
   await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
   await expectSessionTitle(page, title)
+  await transport.waitForConnection()
   await expect(page.locator("#review-panel")).toBeVisible()
   await expectTree(page, 8, "git-0.ts")
 
@@ -159,8 +174,7 @@ test("keeps the review tree and terminal sized when both panels are open", async
   await expectStackGeometry(page)
 
   const treeViewport = page.locator('#review-panel [data-slot="session-review-v2-sidebar-tree"] .scroll-view__viewport')
-  await treeViewport.hover()
-  await page.mouse.wheel(0, 100_000)
+  await treeViewport.evaluate((element) => element.scrollTo({ top: element.scrollHeight, behavior: "instant" }))
   await expect
     .poll(() => treeViewport.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop))
     .toBeLessThanOrEqual(1)
@@ -185,7 +199,7 @@ test("keeps the review tree and terminal sized when both panels are open", async
   await expect(preview).toContainText("after-1")
   detailVersion = 2
   sessionStatus[sessionID] = { type: "busy" }
-  events.push(statusEvent("busy"))
+  await transport.send(statusEvent("busy"))
   await expect(page.getByRole("button", { name: "Stop" })).toBeVisible()
   const refreshedDiff = page.waitForRequest((request) => {
     const url = new URL(request.url())
@@ -195,7 +209,7 @@ test("keeps the review tree and terminal sized when both panels are open", async
     )
   })
   sessionStatus[sessionID] = { type: "idle" }
-  events.push(statusEvent("idle"))
+  await transport.send(statusEvent("idle"))
   await refreshedDiff
   await expect(preview).toContainText("after-2")
   await selectMode(page, "Branch changes", "Git changes")
@@ -288,8 +302,21 @@ function base64Encode(value: string) {
 
 function statusEvent(type: "busy" | "idle") {
   return {
-    directory,
-    payload: { type: "session.status", properties: { sessionID, status: { type } } },
+    id: `evt_review_${type}`,
+    type: type === "busy" ? "session.next.step.started" : "session.next.step.ended",
+    durable: { aggregateID: sessionID, seq: type === "busy" ? 1 : 2, version: type === "busy" ? 1 : 2 },
+    data: {
+      timestamp: 1700000001000,
+      sessionID,
+      assistantMessageID: "msg_review_assistant",
+      ...(type === "busy"
+        ? { agent: "build", model: { providerID: "opencode", id: "test" } }
+        : {
+            finish: "stop",
+            cost: 0,
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          }),
+    },
   }
 }
 

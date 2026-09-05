@@ -330,7 +330,7 @@ export function MessageTimeline(props: {
     const id = sessionID()
     if (!id) return
     return parentMessages()
-      .flatMap((message) => getMsgParts(message.id))
+      .flatMap((message) => sync().data.part[message.id] ?? emptyParts)
       .map((part) => taskDescription(part, id))
       .findLast((value): value is string => !!value)
   })

@@ -153,3 +153,48 @@ test("does not stage rollback when inference interruption fails", async ({ page 
   await expect(input).toContainText("Keep my existing draft")
   await expect(page.locator('[data-component="session-revert-dock"]')).toHaveCount(0)
 })
+
+test("command undo and redo use the current pending input and replacement draft", async ({ page }) => {
+  const stages: unknown[] = []
+  let cleared = 0
+  await mockOpenCodeServer(page, {
+    directory,
+    findFiles: () => [],
+    fileList: () => [],
+    project: { id: projectID, worktree: directory, time: { created: 1, updated: 1 }, sandboxes: [] },
+    provider: {
+      all: [{ id: "opencode", name: "OpenCode", models: { "test-model": { id: "test-model", name: "Test Model" } } }],
+      connected: ["opencode"],
+      default: model,
+    },
+    sessions: [{ ...session }],
+    currentPageMessages: () => ({
+      items: messages.slice(0, 2).toReversed(),
+      throughSeq: 5,
+      pending: [messages[2]!],
+    }),
+  })
+  page.on("request", (request) => {
+    if (request.url().endsWith("/revert/stage")) stages.push(request.postDataJSON())
+    if (request.url().endsWith("/revert/clear")) cleared++
+  })
+  await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
+  await expectSessionTitle(page, session.title)
+  await expect(page.getByText("second user prompt", { exact: true })).toHaveCount(1)
+  const select = async (command: string) => {
+    await page.keyboard.press("Control+p")
+    const dialog = page.getByRole("dialog")
+    await dialog.getByRole("textbox").fill(command)
+    await dialog.getByText(command, { exact: true }).click()
+  }
+  const input = page.locator('[data-component="prompt-input"]')
+  await select("Undo")
+  await expect(input).toContainText("second user prompt")
+  await expect(page.locator('[data-component="session-revert-dock"]')).toContainText("second user prompt")
+  expect(stages).toEqual([{ messageID: "msg_user_0002", inclusive: true }])
+  await select("Redo")
+  await expect.poll(() => cleared).toBe(1)
+  await expect(input).toHaveText("")
+  await expect(page.locator('[data-component="session-revert-dock"]')).toHaveCount(0)
+  await expect(page.getByText("second user prompt", { exact: true })).toHaveCount(1)
+})

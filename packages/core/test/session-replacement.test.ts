@@ -40,6 +40,18 @@ for (const promoted of [true, false]) {
             version: "test",
           })
           .run()
+        const otherSessionID = SessionV2.ID.make("ses_unrelated")
+        yield* database.db
+          .insert(SessionTable)
+          .values({
+            id: otherSessionID,
+            project_id: Project.ID.global,
+            slug: "unrelated",
+            directory: "/project",
+            title: "unrelated",
+            version: "test",
+          })
+          .run()
         yield* database.db
           .insert(SessionInputTable)
           .values([
@@ -64,6 +76,20 @@ for (const promoted of [true, false]) {
               prompt: { text: "queue" },
               delivery: "queue",
               admitted_seq: 4,
+            },
+            {
+              id: SessionMessage.ID.make("msg_at_cutoff"),
+              session_id: sessionID,
+              prompt: { text: "last pre-stage steer" },
+              delivery: "steer",
+              admitted_seq: 5,
+            },
+            {
+              id: SessionMessage.ID.make("msg_unrelated"),
+              session_id: otherSessionID,
+              prompt: { text: "other session" },
+              delivery: "steer",
+              admitted_seq: 3,
             },
             {
               id: SessionMessage.ID.make("msg_replacement"),
@@ -93,9 +119,9 @@ for (const promoted of [true, false]) {
               ),
             })
             .run()
-        const revert = { messageID: id, inclusive: true, inputThroughSeq: 4 }
+        const revert = { messageID: id, inclusive: true, inputThroughSeq: 5 }
         yield* events.publish(SessionEvent.RevertEvent.Staged, { sessionID, timestamp: DateTime.makeUnsafe(1), revert })
-        expect((yield* database.db.select().from(SessionInputTable).all()).length).toBe(4)
+        expect((yield* database.db.select().from(SessionInputTable).all()).length).toBe(6)
         yield* events.publish(SessionEvent.RevertEvent.Committed, {
           sessionID,
           messageID: id,
@@ -103,7 +129,7 @@ for (const promoted of [true, false]) {
         })
         expect(yield* database.db.select().from(SessionMessageTable).all()).toEqual([])
         expect((yield* database.db.select().from(SessionInputTable).all()).map((row) => String(row.id)).sort()).toEqual(
-          ["msg_queue", "msg_replacement"],
+          ["msg_queue", "msg_replacement", "msg_unrelated"],
         )
       }),
   )

@@ -1,3 +1,5 @@
+import { sessionMessagePartID } from "../../src/utils/session-message"
+
 const words = [
   "alpha",
   "bravo",
@@ -21,7 +23,7 @@ const words = [
   "vector",
 ]
 
-const serverKey = "http://127.0.0.1:4096"
+const serverKey = `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`
 const sourceID = "ses_smoke_source"
 const targetID = "ses_smoke_target"
 const directory = "C:/OpenCode/SmokeProject"
@@ -239,9 +241,14 @@ function renderable(part: MessagePart) {
 }
 
 function orderedParts(message: Message) {
-  if (message.type === "user") return [{ id: message.id, type: "user" }]
+  if (message.type === "user") return [{ id: sessionMessagePartID(message.id, "text", 0), type: "user" }]
   // Match native timeline projection: content array order, not id-sort.
-  return message.content.slice()
+  const ordinals = { text: 0, reasoning: 0 }
+  return message.content.map((part) =>
+    part.type === "text" || part.type === "reasoning"
+      ? { ...part, id: sessionMessagePartID(message.id, part.type, ordinals[part.type]++) }
+      : part,
+  )
 }
 
 export const fixture = {
@@ -286,8 +293,8 @@ export const fixture = {
       time: { created: 1700000001000, updated: 1700000001000 },
     },
   ],
-  sourceID,
-  targetID,
+  sourceID: sourceID as typeof sourceID,
+  targetID: targetID as typeof targetID,
   messages: { [sourceID]: sourceMessages, [targetID]: targetMessages },
   expected: {
     sourceTitle: "Uncommitted changes inquiry",

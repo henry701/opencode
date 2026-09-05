@@ -99,11 +99,10 @@ test.describe("session timeline projection", () => {
     })
     const nextAssistant = assistantMessage([{ id: "prt_second_text", type: "text", text: "Second response" }], {
       id: "msg_2001_second_assistant",
-      parentID: "msg_2000_second_user",
       created: 1700000006000,
     })
     const timeline = await setupTimeline(page, {
-      messages: [firstUser, aborted, compactionMessage(), failed, nextUser, nextAssistant],
+      messages: [firstUser, aborted, failed, nextUser, compactionMessage({ created: 1700000005001 }), nextAssistant],
     })
     await timeline.sendStatus("idle", 100)
     const scroller = page.locator(".scroll-view__viewport", { has: page.locator("[data-timeline-row]") })
@@ -134,7 +133,6 @@ test.describe("session timeline projection", () => {
     const nextUser = userMessage(undefined, { id: "msg_2000_diff_next_user", created: 1700000010000 })
     const nextAssistant = assistantMessage([], {
       id: "msg_2001_diff_next_assistant",
-      parentID: "msg_2000_diff_next_user",
       created: 1700000011000,
     })
     await setupTimeline(page, {

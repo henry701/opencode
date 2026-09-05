@@ -57,6 +57,7 @@ export interface PromptInputProps {
   shouldQueue?: () => boolean
   onQueue?: (draft: FollowupDraft) => Promise<void> | void
   onAbort?: () => Promise<void> | void
+  onAbortComplete?: () => Promise<void> | void
   revertMessageID?: () => string | undefined
   onRevertSubmit?: (messageID: string) => Promise<void> | void
   onRevertSubmitComplete?: () => void
