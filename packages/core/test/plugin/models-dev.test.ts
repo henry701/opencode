@@ -27,6 +27,86 @@ const layer = AppNodeBuilder.build(LayerNode.group([Catalog.node, Integration.no
 const it = testEffect(layer)
 
 describe("ModelsDevPlugin", () => {
+  for (const input of [
+    {
+      name: "Muse Spark Responses",
+      npm: "@ai-sdk/openai",
+      values: ["minimal", "high", "xhigh"],
+      bodies: [
+        { reasoning: { effort: "minimal" } },
+        { reasoning: { effort: "high" } },
+        { reasoning: { effort: "xhigh" } },
+      ],
+    },
+    {
+      name: "inherited Chat API",
+      npm: "@ai-sdk/openai-compatible",
+      values: [null, "high"],
+      bodies: [{ reasoning_effort: "none" }, { reasoning_effort: "high" }],
+    },
+    {
+      name: "model transport override",
+      npm: "@ai-sdk/openai-compatible",
+      provider: { npm: "@ai-sdk/openai" },
+      values: ["high"],
+      bodies: [{ reasoning: { effort: "high" } }],
+    },
+    { name: "explicitly empty controls", npm: "@ai-sdk/openai", values: [], bodies: [] },
+    { name: "unsupported transport", npm: "unknown-sdk", values: ["high"], bodies: [] },
+  ]) {
+    it.effect("projects declared reasoning efforts for " + input.name, () =>
+      Effect.gen(function* () {
+        const catalog = yield* Catalog.Service
+        const integrations = yield* Integration.Service
+        yield* ModelsDevPlugin.effect(
+          host({ catalog: catalogHost(catalog), integration: integrationHost(integrations) }),
+        ).pipe(
+          Effect.provideService(
+            ModelsDev.Service,
+            ModelsDev.Service.of({
+              get: () =>
+                Effect.succeed({
+                  acme: {
+                    id: "acme",
+                    name: "Acme",
+                    env: [],
+                    npm: input.npm,
+                    api: "https://acme.test/v1",
+                    models: {
+                      muse: {
+                        id: "muse",
+                        name: "Muse Spark",
+                        release_date: "2026-09-01",
+                        attachment: false,
+                        reasoning: true,
+                        temperature: true,
+                        tool_call: true,
+                        provider: input.provider,
+                        limit: { context: 100000, output: 4096 },
+                        reasoning_options: [{ type: "effort", values: input.values }],
+                        experimental: { modes: { fast: { provider: { body: { service_tier: "priority" } } } } },
+                      },
+                    },
+                  },
+                }),
+              refresh: () => Effect.void,
+            }),
+          ),
+        )
+        for (const id of ["muse", "muse-fast"]) {
+          const model = yield* catalog.model.get(ProviderV2.ID.make("acme"), ModelV2.ID.make(id))
+          expect(model?.variants).toEqual(
+            input.bodies.map((body, index) => ({
+              id: ModelV2.VariantID.make(input.values[index] ?? "none"),
+              headers: {},
+              body,
+            })),
+          )
+        }
+      }),
+    )
+  }
+
   it.effect("projects models.dev modes as separate models instead of variants", () =>
     Effect.gen(function* () {
       const integrations = yield* Integration.Service

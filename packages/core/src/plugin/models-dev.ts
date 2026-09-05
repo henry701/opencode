@@ -73,12 +73,28 @@ function modeName(model: ModelsDev.Model, mode: string) {
   return `${model.name} ${mode.charAt(0).toUpperCase()}${mode.slice(1)}`
 }
 
+function reasoningVariants(model: ModelsDev.Model, provider: ModelsDev.Provider): ModelV2Info["variants"] {
+  const effort = model.reasoning_options?.find((option) => option.type === "effort")
+  if (!effort) return []
+  const npm = model.provider?.npm ?? provider.npm
+  return effort.values.flatMap((value) => {
+    const id = value ?? "none"
+    // V2 variants are wire request bodies, not legacy AI SDK provider options.
+    const body = (() => {
+      if (npm === "@ai-sdk/openai") return { reasoning: { effort: id } }
+      if (npm === "@ai-sdk/openai-compatible") return { reasoning_effort: id }
+    })()
+    return body ? [{ id, headers: {}, body }] : []
+  })
+}
+
 function applyModel(
   draft: ModelV2Info,
   model: ModelsDev.Model,
   input: {
     readonly name?: string
     readonly cost?: ModelV2Info["cost"]
+    readonly variants?: ModelV2Info["variants"]
     readonly request?: NonNullable<NonNullable<ModelsDev.Model["experimental"]>["modes"]>[string]["provider"]
   } = {},
 ) {
@@ -102,7 +118,7 @@ function applyModel(
     input: [...(model.modalities?.input ?? [])],
     output: [...(model.modalities?.output ?? [])],
   }
-  draft.variants = []
+  draft.variants = input.variants ?? []
   draft.time.released = released(model.release_date)
   draft.cost = input.cost ?? cost(model.cost)
   draft.status = model.status ?? "active"
@@ -161,12 +177,15 @@ export const ModelsDevPlugin = define({
 
           for (const model of Object.values(item.models)) {
             const baseCost = cost(model.cost)
-            catalog.model.update(providerID, model.id, (draft) => applyModel(draft, model, { cost: baseCost }))
+            catalog.model.update(providerID, model.id, (draft) =>
+              applyModel(draft, model, { cost: baseCost, variants: reasoningVariants(model, item) }),
+            )
             for (const [mode, options] of Object.entries(model.experimental?.modes ?? {})) {
               catalog.model.update(providerID, `${model.id}-${mode}`, (draft) =>
                 applyModel(draft, model, {
                   name: modeName(model, mode),
                   cost: mergeCost(baseCost, options.cost),
+                  variants: reasoningVariants(model, item),
                   request: options.provider,
                 }),
               )
