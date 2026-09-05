@@ -279,6 +279,8 @@ export type SessionsListOutput = {
     readonly subpath?: string
     readonly revert?: {
       readonly messageID: string
+      readonly inclusive?: boolean
+      readonly inputThroughSeq?: number
       readonly partID?: string
       readonly snapshot?: string
       readonly diff?: string
@@ -354,6 +356,8 @@ export type SessionsCreateOutput = {
     readonly subpath?: string
     readonly revert?: {
       readonly messageID: string
+      readonly inclusive?: boolean
+      readonly inputThroughSeq?: number
       readonly partID?: string
       readonly snapshot?: string
       readonly diff?: string
@@ -405,6 +409,8 @@ export type SessionsGetOutput = {
     readonly subpath?: string
     readonly revert?: {
       readonly messageID: string
+      readonly inclusive?: boolean
+      readonly inputThroughSeq?: number
       readonly partID?: string
       readonly snapshot?: string
       readonly diff?: string
@@ -457,6 +463,8 @@ export type SessionsUpdateOutput = {
     readonly subpath?: string
     readonly revert?: {
       readonly messageID: string
+      readonly inclusive?: boolean
+      readonly inputThroughSeq?: number
       readonly partID?: string
       readonly snapshot?: string
       readonly diff?: string
@@ -509,6 +517,8 @@ export type SessionsForkOutput = {
     readonly subpath?: string
     readonly revert?: {
       readonly messageID: string
+      readonly inclusive?: boolean
+      readonly inputThroughSeq?: number
       readonly partID?: string
       readonly snapshot?: string
       readonly diff?: string
@@ -558,6 +568,8 @@ export type SessionsShareOutput = {
     readonly subpath?: string
     readonly revert?: {
       readonly messageID: string
+      readonly inclusive?: boolean
+      readonly inputThroughSeq?: number
       readonly partID?: string
       readonly snapshot?: string
       readonly diff?: string
@@ -607,6 +619,8 @@ export type SessionsUnshareOutput = {
     readonly subpath?: string
     readonly revert?: {
       readonly messageID: string
+      readonly inclusive?: boolean
+      readonly inputThroughSeq?: number
       readonly partID?: string
       readonly snapshot?: string
       readonly diff?: string
@@ -2623,13 +2637,28 @@ export type SessionsWaitOutput = void
 
 export type SessionsStageInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
-  readonly messageID: { readonly messageID: string; readonly files?: boolean | undefined }["messageID"]
-  readonly files?: { readonly messageID: string; readonly files?: boolean | undefined }["files"]
+  readonly messageID: {
+    readonly messageID: string
+    readonly files?: boolean | undefined
+    readonly inclusive?: boolean | undefined
+  }["messageID"]
+  readonly files?: {
+    readonly messageID: string
+    readonly files?: boolean | undefined
+    readonly inclusive?: boolean | undefined
+  }["files"]
+  readonly inclusive?: {
+    readonly messageID: string
+    readonly files?: boolean | undefined
+    readonly inclusive?: boolean | undefined
+  }["inclusive"]
 }
 
 export type SessionsStageOutput = {
   readonly data: {
     readonly messageID: string
+    readonly inclusive?: boolean
+    readonly inputThroughSeq?: number
     readonly partID?: string
     readonly snapshot?: string
     readonly diff?: string
@@ -3988,6 +4017,8 @@ export type SessionsHistoryOutput = {
           readonly sessionID: string
           readonly revert: {
             readonly messageID: string
+            readonly inclusive?: boolean
+            readonly inputThroughSeq?: number
             readonly partID?: string
             readonly snapshot?: string
             readonly diff?: string
@@ -5110,6 +5141,8 @@ export type SessionsEventsOutput =
         readonly sessionID: string
         readonly revert: {
           readonly messageID: string
+          readonly inclusive?: boolean
+          readonly inputThroughSeq?: number
           readonly partID?: string
           readonly snapshot?: string
           readonly diff?: string
@@ -5653,6 +5686,99 @@ export type MessagesListOutput = {
         readonly time: { readonly created: number }
       }
   >
+  readonly pending?: ReadonlyArray<{
+    readonly id: string
+    readonly metadata?: { readonly [x: string]: JsonValue }
+    readonly time: { readonly created: number }
+    readonly text: string
+    readonly files?: ReadonlyArray<{
+      readonly uri: string
+      readonly mime: string
+      readonly name?: string
+      readonly description?: string
+      readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly agents?: ReadonlyArray<{
+      readonly name: string
+      readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly payload?: {
+      readonly version: 1
+      readonly agent: string
+      readonly model: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+      readonly tools?: { readonly [x: string]: boolean }
+      readonly system?: string
+      readonly format?:
+        | { readonly type: "text" }
+        | {
+            readonly type: "json_schema"
+            readonly schema: { readonly [x: string]: JsonValue }
+            readonly retryCount?: number | null | null
+          }
+      readonly parts: ReadonlyArray<
+        | {
+            readonly id?: string
+            readonly type: "text"
+            readonly text: string
+            readonly synthetic?: boolean
+            readonly ignored?: boolean
+            readonly time?: { readonly start: number; readonly end?: number }
+            readonly metadata?: { readonly [x: string]: JsonValue }
+          }
+        | {
+            readonly id?: string
+            readonly type: "file"
+            readonly mime: string
+            readonly filename?: string
+            readonly url: string
+            readonly source?:
+              | {
+                  readonly type: "file"
+                  readonly path: string
+                  readonly text: { readonly value: string; readonly start: number; readonly end: number }
+                }
+              | {
+                  readonly type: "symbol"
+                  readonly path: string
+                  readonly range: {
+                    readonly start: { readonly line: number; readonly character: number }
+                    readonly end: { readonly line: number; readonly character: number }
+                  }
+                  readonly name: string
+                  readonly kind: number
+                  readonly text: { readonly value: string; readonly start: number; readonly end: number }
+                }
+              | {
+                  readonly type: "resource"
+                  readonly clientName: string
+                  readonly uri: string
+                  readonly text: { readonly value: string; readonly start: number; readonly end: number }
+                }
+          }
+        | {
+            readonly id?: string
+            readonly type: "agent"
+            readonly name: string
+            readonly source?: { readonly value: string; readonly start: number; readonly end: number }
+          }
+        | {
+            readonly id?: string
+            readonly type: "subtask"
+            readonly prompt: string
+            readonly description: string
+            readonly agent: string
+            readonly model?: { readonly providerID: string; readonly modelID: string; readonly variant?: string }
+            readonly command?: string
+          }
+      >
+      readonly permissions?: ReadonlyArray<{
+        readonly permission: string
+        readonly pattern: string
+        readonly action: "allow" | "deny" | "ask"
+      }>
+    }
+    readonly type: "user"
+  }> | null
   readonly throughSeq: number
   readonly cursor: { readonly previous?: string | null; readonly next?: string | null }
 }

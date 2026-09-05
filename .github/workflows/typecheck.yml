@@ -2,14 +2,14 @@ name: typecheck
 
 on:
   push:
-    branches: [dev]
+    branches: [dev, production]
   pull_request:
-    branches: [dev]
+    branches: [dev, production]
   workflow_dispatch:
 
 jobs:
   typecheck:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ github.repository == 'anomalyco/opencode' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -18,4 +18,8 @@ jobs:
         uses: ./.github/actions/setup-bun
 
       - name: Run typecheck
-        run: bun typecheck
+        run: bun typecheck --concurrency=${{ github.repository == 'anomalyco/opencode' && '10' || '2' }}
+
+      - name: Typecheck browser regression fixtures
+        working-directory: packages/app
+        run: bun run typecheck:e2e

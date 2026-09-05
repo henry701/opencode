@@ -44,3 +44,39 @@ test("applies message latency after a list response gate is released", async () 
   expect(performance.now() - released).toBeGreaterThanOrEqual(20)
   expect(events).toEqual(["start", "before", "page", "end", "fulfill"])
 })
+
+test("V2 fixtures preserve configured reasoning variants and custom agents", async () => {
+  let handler: ((route: Route) => Promise<void>) | undefined
+  const page = {
+    route: (_url: string, callback: typeof handler) => {
+      handler = callback
+      return Promise.resolve()
+    },
+  } as unknown as Page
+  await mockOpenCodeServer(page, {
+    directory: "/fixture",
+    project: {},
+    sessions: [],
+    provider: {
+      all: [{ id: "test", models: { muse: { id: "muse", variants: { high: { reasoningEffort: "high" } } } } }],
+      connected: ["test"],
+      default: { providerID: "test", modelID: "muse" },
+    },
+    agents: [{ name: "reviewer", mode: "primary" }],
+  })
+  const request = async (path: string) => {
+    let body = ""
+    await handler!({
+      request: () => ({ url: () => `http://127.0.0.1:4096${path}`, method: () => "GET" }),
+      fulfill: (response: { body: string }) => {
+        body = response.body
+        return Promise.resolve()
+      },
+    } as unknown as Route)
+    return JSON.parse(body)
+  }
+  expect((await request("/api/model")).data[0].variants).toEqual([
+    { id: "high", settings: { reasoningEffort: "high" }, headers: {}, body: {} },
+  ])
+  expect((await request("/api/agent")).data[0].id).toBe("reviewer")
+})

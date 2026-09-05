@@ -51,10 +51,11 @@ describe("timeline fixture validation", () => {
     })
     const second = event("session.next.retried", {
       timestamp: 2,
-      sessionID: "ses_timeline_stability",
+      sessionID: "ses_other_timeline",
       attempt: 2,
       error: { message: "retry", isRetryable: true },
     })
+    expect(second.durable?.aggregateID).toBe("ses_other_timeline")
     expect(first.id).toMatch(/^evt_timeline_\d{4}$/)
     expect(Number(second.id.slice(-4))).toBe(Number(first.id.slice(-4)) + 1)
   })

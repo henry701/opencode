@@ -1,6 +1,7 @@
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import { expect, test, type Page } from "@playwright/test"
 import { mockOpenCodeServer } from "../utils/mock-server"
+import { installSseTransport } from "../utils/sse-transport"
 import { expectSessionTitle } from "../utils/waits"
 
 const directory = "C:/OpenCode/TodoDockNavigation"
@@ -17,17 +18,23 @@ const activeTodos = [
 ]
 
 type EventPayload = {
-  directory: string
-  payload: Record<string, unknown>
+  id: string
+  created: number
+  location: { directory: string }
+  type: string
+  data: Record<string, unknown>
 }
 
-test.use({ viewport: { width: 1440, height: 900 }, reducedMotion: "no-preference" })
+test.use({ viewport: { width: 1440, height: 900 }, contextOptions: { reducedMotion: "no-preference" } })
 
 test("animates todo lifecycle without replaying it across session tabs", async ({ page }) => {
   test.setTimeout(90_000)
-  const events: EventPayload[] = []
+  const transport = await installSseTransport<EventPayload>(page, {
+    server: `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`,
+    path: "/api/event",
+  })
   const todos: Record<string, typeof activeTodos> = { [sourceID]: [], [otherID]: [] }
-  const sessionStatus: Record<string, { type: "busy" | "idle" }> = {}
+  const sessionStatus: Record<string, { type: "busy" | "idle" }> = { [sourceID]: { type: "busy" } }
 
   await mockOpenCodeServer(page, {
     directory,
@@ -57,10 +64,30 @@ test("animates todo lifecycle without replaying it across session tabs", async (
       default: { providerID: "opencode", modelID: "claude-opus-4-6" },
     },
     sessions: [session(sourceID, sourceTitle, 1700000000000), session(otherID, otherTitle, 1700000001000)],
-    sessionStatus: { [sourceID]: { type: "busy" } },
-    pageMessages: () => ({ items: [] }),
-    events: () => events.splice(0, 1),
-    eventRetry: 16,
+    currentPageMessages: (id) => ({
+      items:
+        id === sourceID
+          ? [
+              {
+                id: "msg_todo_assistant",
+                type: "assistant",
+                agent: "build",
+                model: { providerID: "opencode", id: "claude-opus-4-6" },
+                time: { created: 1700000000001 },
+                content: [{ id: "txt_todo", type: "text", text: "Working on the task list" }],
+              },
+              {
+                id: "msg_todo_user",
+                type: "user",
+                text: "Track these tasks",
+                files: [],
+                agents: [],
+                time: { created: 1700000000000 },
+              },
+            ]
+          : [],
+      throughSeq: 0,
+    }),
     sessionStatus: () => sessionStatus,
     todos: (sessionID) => todos[sessionID] ?? [],
   })
@@ -68,17 +95,16 @@ test("animates todo lifecycle without replaying it across session tabs", async (
 
   await page.goto(sessionHref(sourceID))
   await expectSessionTitle(page, sourceTitle)
+  await transport.waitForConnection()
   const dock = page.locator('[data-component="session-todo-dock"]')
   await expect(dock).toHaveCount(0)
 
-  sessionStatus[sourceID] = { type: "busy" }
-  events.push(statusEvent(sourceID, "busy"))
   await expect(page.getByRole("button", { name: "Stop" })).toBeVisible()
 
   await page.waitForTimeout(700)
   const opening = sampleDock(page, 1_000)
   todos[sourceID] = activeTodos
-  events.push(todoEvent(sourceID, activeTodos))
+  await transport.send(todoEvent(sourceID, activeTodos))
   await expect(dock).toBeVisible()
   await expect(dock.locator('[data-state="in_progress"]')).toHaveCount(1)
   expect((await opening).some((sample) => sample.opacity > 0.05 && sample.opacity < 0.95)).toBe(true)
@@ -97,11 +123,12 @@ test("animates todo lifecycle without replaying it across session tabs", async (
   const completedTodos = activeTodos.map((todo) => ({ ...todo, status: "completed" }))
   const closing = sampleDock(page, 1_000)
   todos[sourceID] = completedTodos
-  events.push(todoEvent(sourceID, completedTodos))
+  await transport.send(todoEvent(sourceID, completedTodos))
   await expect(dock).toHaveCount(0)
-  expect((await closing).some((sample) => sample.opacity > 0.05 && sample.opacity < 0.95)).toBe(true)
+  const closeSamples = await closing
+  expect(closeSamples.some((sample) => sample.opacity > 0.05 && sample.opacity < 0.95)).toBe(true)
   todos[sourceID] = []
-  events.push(todoEvent(sourceID, []))
+  await transport.send(todoEvent(sourceID, []))
 
   await switchSession(page, otherID, otherTitle)
   const returningEmpty = sampleDock(page, 700)
@@ -122,17 +149,13 @@ function session(id: string, title: string, created: number) {
   }
 }
 
-function statusEvent(sessionID: string, type: "busy" | "idle"): EventPayload {
-  return {
-    directory,
-    payload: { type: "session.status", properties: { sessionID, status: { type } } },
-  }
-}
-
 function todoEvent(sessionID: string, next: typeof activeTodos): EventPayload {
   return {
-    directory,
-    payload: { type: "todo.updated", properties: { sessionID, todos: next } },
+    id: `evt_todo_${Date.now()}`,
+    created: Date.now(),
+    location: { directory },
+    type: "todo.updated",
+    data: { sessionID, todos: next },
   }
 }
 

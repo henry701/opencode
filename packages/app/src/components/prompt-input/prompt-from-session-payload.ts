@@ -1,11 +1,9 @@
 import type { SessionInputPayload } from "@opencode-ai/schema/session-input-payload"
-import type {
-  AgentPart,
-  FileAttachmentPart,
-  ImageAttachmentPart,
-  Prompt,
-} from "@/context/prompt"
+import type { SessionMessage } from "@opencode-ai/schema/session-message"
+import type { Part } from "@opencode-ai/sdk/v2"
+import type { AgentPart, FileAttachmentPart, ImageAttachmentPart, Prompt } from "@/context/prompt"
 import { createLegacyBlobReference } from "@/utils/draft-store"
+import { extractPromptFromParts } from "@/utils/prompt"
 
 type Inline =
   | {
@@ -25,16 +23,10 @@ type Inline =
     }
 
 type Payload = SessionInputPayload.Payload | SessionInputPayload.Encoded
-export function promptFromSessionPayload(
-  payload: Payload,
-  options?: { directory?: string; attachmentName?: string },
-) {
-  const text =
-    payload.parts
-      .flatMap((part) =>
-        part.type === "text" && part.synthetic !== true && part.ignored !== true ? [part.text] : [],
-      )
-      .reduce((longest, part) => (part.length > longest.length ? part : longest), "")
+export function promptFromSessionPayload(payload: Payload, options?: { directory?: string; attachmentName?: string }) {
+  const text = payload.parts
+    .flatMap((part) => (part.type === "text" && part.synthetic !== true && part.ignored !== true ? [part.text] : []))
+    .reduce((longest, part) => (part.length > longest.length ? part : longest), "")
   const relative = (value: string) => {
     const directory = options?.directory
     if (!directory) return value
@@ -134,4 +126,13 @@ export function promptFromSessionPayload(
   pushText(text.slice(cursor))
   if (result.length === 0) result.push({ type: "text", content: "", start: 0, end: 0 })
   return images.length === 0 ? result : [...result, ...images]
+}
+
+export function promptFromSessionMessage(
+  message: SessionMessage.Message | undefined,
+  parts: Part[],
+  options?: { directory?: string; attachmentName?: string },
+) {
+  if (message?.type === "user" && message.payload) return promptFromSessionPayload(message.payload, options)
+  return extractPromptFromParts(parts, options)
 }

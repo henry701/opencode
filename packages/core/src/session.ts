@@ -250,6 +250,7 @@ export interface Interface {
       sessionID: SessionSchema.ID
       messageID: SessionMessage.ID
       files?: boolean
+      inclusive?: boolean
     }) => Effect.Effect<Revert.State, NotFoundError | MessageNotFoundError | Snapshot.Error>
     readonly clear: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | Snapshot.Error>
     readonly commit: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
@@ -942,7 +943,12 @@ const layer = Layer.effect(
       revert: {
         stage: Effect.fn("V2Session.revert.stage")(function* (input) {
           const session = yield* result.get(input.sessionID)
-          return yield* SessionRevert.stage({ session, messageID: input.messageID, files: input.files }).pipe(
+          return yield* SessionRevert.stage({
+            session,
+            messageID: input.messageID,
+            files: input.files,
+            inclusive: input.inclusive,
+          }).pipe(
             Effect.provideService(Database.Service, database),
             Effect.provideService(EventV2.Service, events),
             Effect.provide(locations.get(session.location)),

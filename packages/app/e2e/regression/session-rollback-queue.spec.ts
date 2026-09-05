@@ -62,7 +62,13 @@ const messages = [
 ]
 
 test("preserves visible queued follow-ups when rolling back a message", async ({ page }) => {
+  const prompts: unknown[] = []
+  const stages: unknown[] = []
+  page.on("request", (request) => {
+    if (request.url().endsWith("/revert/stage")) stages.push(request.postDataJSON())
+  })
   await mockOpenCodeServer(page, {
+    onPrompt: ({ body }) => prompts.push(body),
     directory,
     project: {
       id: projectID,
@@ -83,7 +89,7 @@ test("preserves visible queued follow-ups when rolling back a message", async ({
       connected: ["opencode"],
       default: model,
     },
-    sessions: [session],
+    sessions: [{ ...session }],
     status: { [sessionID]: { type: "busy" } },
     queue: { [sessionID]: [{ id: "msg_queue_web_rollback", text: queuedText }] },
     currentPageMessages: () => ({ items: messages.toReversed(), throughSeq: 0 }),
@@ -97,5 +103,98 @@ test("preserves visible queued follow-ups when rolling back a message", async ({
   await page.getByRole("button", { name: "Revert message", exact: true }).first().click({ force: true })
 
   await expectAppVisible(page.locator('[data-component="session-revert-dock"]'))
+  await expect(page.locator('[data-component="session-revert-dock"]')).toContainText("first user prompt")
+  const input = page.locator('[data-component="prompt-input"]')
+  await expect(input).toContainText("first user prompt")
+  await input.fill("edited first user prompt")
+  await input.press("Enter")
+  await expect.poll(() => prompts.length).toBe(1)
+  expect(stages).toEqual([
+    { messageID: "msg_user_0001", inclusive: true },
+    { messageID: "msg_user_0001", inclusive: true },
+  ])
+  expect(prompts[0]).toMatchObject({
+    payload: { parts: [expect.objectContaining({ type: "text", text: "edited first user prompt" })] },
+  })
   await expect(page.locator('[data-component="session-followup-dock"]')).toContainText(queuedText)
+})
+
+test("does not stage rollback when inference interruption fails", async ({ page }) => {
+  let staged = 0
+  await mockOpenCodeServer(page, {
+    directory,
+    project: { id: projectID, worktree: directory, time: { created: 1, updated: 1 }, sandboxes: [] },
+    provider: {
+      all: [{ id: "opencode", name: "OpenCode", models: { "test-model": { id: "test-model", name: "Test Model" } } }],
+      connected: ["opencode"],
+      default: model,
+    },
+    sessions: [{ ...session }],
+    status: { [sessionID]: { type: "busy" } },
+    currentPageMessages: () => ({ items: messages.toReversed(), throughSeq: 0 }),
+  })
+  page.on("request", (request) => {
+    if (request.url().endsWith("/revert/stage")) staged++
+  })
+  await page.route(/\/interrupt(?:\?.*)?$/, (route) =>
+    route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ _tag: "UnknownError", message: "Cannot interrupt", ref: "test" }),
+    }),
+  )
+  await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
+  await expectSessionTitle(page, session.title)
+  const input = page.locator('[data-component="prompt-input"]')
+  await input.fill("Keep my existing draft")
+  await page.getByRole("button", { name: "Revert message", exact: true }).first().click({ force: true })
+  await expect(page.getByText("Request failed", { exact: true })).toBeVisible()
+  expect(staged).toBe(0)
+  await expect(input).toContainText("Keep my existing draft")
+  await expect(page.locator('[data-component="session-revert-dock"]')).toHaveCount(0)
+})
+
+test("command undo and redo use the current pending input and replacement draft", async ({ page }) => {
+  const stages: unknown[] = []
+  let cleared = 0
+  await mockOpenCodeServer(page, {
+    directory,
+    findFiles: () => [],
+    fileList: () => [],
+    project: { id: projectID, worktree: directory, time: { created: 1, updated: 1 }, sandboxes: [] },
+    provider: {
+      all: [{ id: "opencode", name: "OpenCode", models: { "test-model": { id: "test-model", name: "Test Model" } } }],
+      connected: ["opencode"],
+      default: model,
+    },
+    sessions: [{ ...session }],
+    currentPageMessages: () => ({
+      items: messages.slice(0, 2).toReversed(),
+      throughSeq: 5,
+      pending: [messages[2]!],
+    }),
+  })
+  page.on("request", (request) => {
+    if (request.url().endsWith("/revert/stage")) stages.push(request.postDataJSON())
+    if (request.url().endsWith("/revert/clear")) cleared++
+  })
+  await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
+  await expectSessionTitle(page, session.title)
+  await expect(page.getByText("second user prompt", { exact: true })).toHaveCount(1)
+  const select = async (command: string) => {
+    await page.keyboard.press("Control+p")
+    const dialog = page.getByRole("dialog")
+    await dialog.getByRole("textbox").fill(command)
+    await dialog.getByText(command, { exact: true }).click()
+  }
+  const input = page.locator('[data-component="prompt-input"]')
+  await select("Undo")
+  await expect(input).toContainText("second user prompt")
+  await expect(page.locator('[data-component="session-revert-dock"]')).toContainText("second user prompt")
+  expect(stages).toEqual([{ messageID: "msg_user_0002", inclusive: true }])
+  await select("Redo")
+  await expect.poll(() => cleared).toBe(1)
+  await expect(input).toHaveText("")
+  await expect(page.locator('[data-component="session-revert-dock"]')).toHaveCount(0)
+  await expect(page.getByText("second user prompt", { exact: true })).toHaveCount(1)
 })

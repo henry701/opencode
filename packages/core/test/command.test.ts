@@ -7,6 +7,7 @@ import { Location } from "@opencode-ai/core/location"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { AbsolutePath } from "@opencode-ai/core/schema"
+import { Shell } from "@opencode-ai/core/shell"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 
@@ -14,13 +15,7 @@ const directory = AbsolutePath.make(process.cwd())
 const it = testEffect(
   AppNodeBuilder.build(CommandV2.node, [
     [Config.node, Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) }))],
-    [
-      Location.node,
-      Layer.succeed(
-        Location.Service,
-        Location.Service.of(location(Location.Ref.make({ directory }))),
-      ),
-    ],
+    [Location.node, Layer.succeed(Location.Service, Location.Service.of(location(Location.Ref.make({ directory }))))],
   ]),
 )
 
@@ -80,7 +75,12 @@ describe("CommandV2", () => {
       const command = yield* CommandV2.Service
       yield* command.transform((editor) => {
         editor.update("review", (item) => {
-          item.template = "First=$1 Rest=$2 Shell=!`printf ' value '; printf 'ignored' >&2`"
+          item.template =
+            "First=$1 Rest=$2 Shell=!`" +
+            (Shell.ps(Shell.preferred() ?? "")
+              ? "[Console]::Out.Write(' value '); [Console]::Error.Write('ignored')"
+              : "printf ' value '; printf 'ignored' >&2") +
+            "`"
           item.source = "command"
         })
       })

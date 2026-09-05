@@ -1,3 +1,5 @@
+import { sessionMessagePartID } from "../../src/utils/session-message"
+
 const words = [
   "alpha",
   "bravo",
@@ -21,7 +23,7 @@ const words = [
   "vector",
 ]
 
-const serverKey = "http://127.0.0.1:4096"
+const serverKey = `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`
 const sourceID = "ses_smoke_source"
 const targetID = "ses_smoke_target"
 const directory = "C:/OpenCode/SmokeProject"
@@ -30,7 +32,15 @@ const model = { providerID: "opencode", modelID: "claude-opus-4-6", variant: "ma
 
 type MessagePart = Record<string, unknown> & { id: string; type: string; text?: string; name?: string }
 type Message =
-  | { id: string; type: "user"; text: string; payload: Record<string, unknown>; time: { created: number } }
+  | {
+      id: string
+      type: "user"
+      text: string
+      files: unknown[]
+      agents: unknown[]
+      payload: Record<string, unknown>
+      time: { created: number }
+    }
   | {
       id: string
       type: "assistant"
@@ -225,15 +235,20 @@ const sourceMessages = Array.from({ length: 12 }, (_, index) => [
 
 function renderable(part: MessagePart) {
   if (part.type === "tool" && part.name === "todowrite") return false
-  if (part.type === "text") return !!part.text.trim()
-  if (part.type === "reasoning") return !!part.text.trim()
+  if (part.type === "text") return !!part.text?.trim()
+  if (part.type === "reasoning") return !!part.text?.trim()
   return part.type !== "step-start" && part.type !== "step-finish" && part.type !== "patch"
 }
 
 function orderedParts(message: Message) {
-  if (message.type === "user") return [{ id: message.id, type: "user" }]
+  if (message.type === "user") return [{ id: sessionMessagePartID(message.id, "text", 0), type: "user" }]
   // Match native timeline projection: content array order, not id-sort.
-  return message.content.slice()
+  const ordinals = { text: 0, reasoning: 0 }
+  return message.content.map((part) =>
+    part.type === "text" || part.type === "reasoning"
+      ? { ...part, id: sessionMessagePartID(message.id, part.type, ordinals[part.type]++) }
+      : part,
+  )
 }
 
 export const fixture = {
@@ -278,15 +293,13 @@ export const fixture = {
       time: { created: 1700000001000, updated: 1700000001000 },
     },
   ],
-  sourceID,
-  targetID,
+  sourceID: sourceID as typeof sourceID,
+  targetID: targetID as typeof targetID,
   messages: { [sourceID]: sourceMessages, [targetID]: targetMessages },
   expected: {
     sourceTitle: "Uncommitted changes inquiry",
     targetTitle: "Example Game: sample jump movement & sample physics analysis",
-    targetMessageIDs: targetMessages
-      .filter((message) => message.type === "user")
-      .map((message) => message.id),
+    targetMessageIDs: targetMessages.filter((message) => message.type === "user").map((message) => message.id),
     targetPartIDs: targetMessages.flatMap((message) =>
       orderedParts(message)
         .filter(renderable)

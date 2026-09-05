@@ -26,6 +26,7 @@ export type PromptInputControls = {
   }
   session: {
     id?: string
+    working?: () => boolean
     tabs: {
       active: () => string | undefined
       all: () => string[]
@@ -55,6 +56,10 @@ export interface PromptInputProps {
   resetEditingQueueID?: () => void
   shouldQueue?: () => boolean
   onQueue?: (draft: FollowupDraft) => Promise<void> | void
-  onAbort?: () => void
+  onAbort?: () => Promise<void> | void
+  onAbortComplete?: () => Promise<void> | void
+  revertMessageID?: () => string | undefined
+  onRevertSubmit?: (messageID: string) => Promise<void> | void
+  onRevertSubmitComplete?: () => void
   onSubmit?: () => void
 }

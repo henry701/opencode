@@ -71,8 +71,11 @@ for (const deviceScaleFactor of [1.25, 1.5]) {
 test("keeps the patch card inside a fractionally short virtual row", async ({ page }) => {
   const patchID = "prt_patch_outline"
   const file = {
-    file: "src/outline.ts",
-    status: "modified",
+    filePath: "src/outline.ts",
+    relativePath: "src/outline.ts",
+    type: "update",
+    before: "const outline = false\n",
+    after: "const outline = true\n",
     additions: 1,
     deletions: 1,
     patch: "@@ -1 +1 @@\n-const outline = false\n+const outline = true",
@@ -81,7 +84,7 @@ test("keeps the patch card inside a fractionally short virtual row", async ({ pa
     messages: [
       userMessage(),
       assistantMessage([
-        toolPart(patchID, "apply_patch", "completed", { files: [file.file] }, { metadata: { files: [file] } }),
+        toolPart(patchID, "apply_patch", "completed", { files: [file.filePath] }, { metadata: { files: [file] } }),
       ]),
     ],
     settings: { editToolPartsExpanded: true, newLayoutDesigns: true },
@@ -142,7 +145,6 @@ test("allows paint rounding for every framed row but not fixed turn gaps", async
       userMessage(undefined, { id: secondUserID, created: 1700000010000 }),
       assistantMessage([], {
         id: "msg_outline_second_assistant",
-        parentID: secondUserID,
         created: 1700000011000,
       }),
     ],

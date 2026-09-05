@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { SessionInputPayload } from "@opencode-ai/schema/session-input-payload"
-import { promptFromSessionPayload } from "./prompt-from-session-payload"
+import { promptFromSessionMessage, promptFromSessionPayload } from "./prompt-from-session-payload"
 
 describe("promptFromSessionPayload", () => {
   test("restores native text, file, agent, and image parts without an SDK message adapter", () => {
@@ -64,5 +64,27 @@ describe("promptFromSessionPayload", () => {
     } as unknown as SessionInputPayload.Payload
 
     expect(promptFromSessionPayload(payload)).toEqual([{ type: "text", content: "Visible", start: 0, end: 7 }])
+  })
+
+  test("prefers the durable user payload over stale normalized parts", () => {
+    const payload = {
+      version: 1,
+      agent: "reviewer",
+      model: { providerID: "openai", modelID: "gpt-5" },
+      parts: [{ type: "text", text: "durable prompt" }],
+    } as unknown as SessionInputPayload.Payload
+    const message = {
+      id: "msg_1",
+      type: "user",
+      text: "durable prompt",
+      files: [],
+      agents: [],
+      payload,
+      time: { created: 1 },
+    } as never
+
+    expect(promptFromSessionMessage(message, [{ id: "stale", type: "text", text: "[attachment]" } as never])).toEqual([
+      { type: "text", content: "durable prompt", start: 0, end: 14 },
+    ])
   })
 })

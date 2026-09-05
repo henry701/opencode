@@ -91,7 +91,11 @@ type PromptSubmitInput = {
   editingQueuePayload?: Accessor<SessionsPromptInput["payload"] | undefined>
   resetEditingQueueID?: () => void
   onQueue?: (draft: FollowupDraft) => Promise<void> | void
-  onAbort?: () => void
+  onAbort?: () => Promise<void> | void
+  onAbortComplete?: () => Promise<void> | void
+  revertMessageID?: Accessor<string | undefined>
+  onRevertSubmit?: (messageID: string) => Promise<void> | void
+  onRevertSubmitComplete?: () => void
   onSubmit?: () => void
   model?: ModelSelection
 }
@@ -125,9 +129,12 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     const sessionID = params.id
     if (!sessionID) return Promise.resolve()
 
-    serverSync().session.set("todo", sessionID, [])
-
-    input.onAbort?.()
+    await Promise.resolve(input.onAbort?.()).catch((err) => {
+      showToast({
+        title: language.t("common.requestFailed"),
+        description: errorMessage(err),
+      })
+    })
 
     const key = pendingKey(sessionID)
     const queued = pending.get(key)
@@ -137,7 +144,15 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       pending.delete(key)
       return Promise.resolve()
     }
-    return serverSDK().currentClient.sessions.interrupt({ sessionID }).catch(() => {})
+    return serverSDK()
+      .currentClient.sessions.interrupt({ sessionID })
+      .then(() => input.onAbortComplete?.())
+      .catch((err) => {
+        showToast({
+          title: language.t("common.requestFailed"),
+          description: errorMessage(err),
+        })
+      })
   }
 
   const restoreCommentItems = (
@@ -259,8 +274,8 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
     let session = input.info() ?? (params.id ? { id: params.id } : undefined)
     if (!session && isNewSession) {
-      const created = await serverSDK().currentClient.sessions
-        .create({
+      const created = await serverSDK()
+        .currentClient.sessions.create({
           agent,
           model: { id: model.modelID, providerID: model.providerID, variant },
           location: { directory: sessionDirectory },
@@ -302,8 +317,8 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     const commandInput = mode === "normal" ? text.match(/^\/(\S+)(?:[ \t]+([\s\S]*))?$/) : undefined
     const commandName = commandInput?.[1]
     const commands = commandName
-      ? await serverSDK().currentClient.commands
-          .list({ location: { directory: sessionDirectory } })
+      ? await serverSDK()
+          .currentClient.commands.list({ location: { directory: sessionDirectory } })
           .then((result) => result.data)
           .catch((err) => {
             showToast({
@@ -325,9 +340,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       variant,
       queueID: input.editingQueueID?.(),
       queuePayload: input.editingQueuePayload?.(),
-      ...(customCommand && commandName
-        ? { command: { name: commandName, arguments: commandInput?.[2] ?? "" } }
-        : {}),
+      ...(customCommand && commandName ? { command: { name: commandName, arguments: commandInput?.[2] ?? "" } } : {}),
     }
 
     const clearInput = () => {
@@ -353,7 +366,26 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       return true
     }
 
-    if (!isNewSession && mode === "normal" && (draft.queueID || input.shouldQueue?.() || queueMode)) {
+    const revertMessageID = input.revertMessageID?.()
+    if (!isNewSession && mode === "normal" && revertMessageID) {
+      const reverted = await Promise.resolve(input.onRevertSubmit?.(revertMessageID))
+        .then(() => true)
+        .catch((err) => {
+          showToast({
+            title: language.t("common.requestFailed"),
+            description: errorMessage(err),
+          })
+          return false
+        })
+      if (!reverted) return
+    }
+
+    if (
+      !revertMessageID &&
+      !isNewSession &&
+      mode === "normal" &&
+      (draft.queueID || input.shouldQueue?.() || queueMode)
+    ) {
       const saved = await Promise.resolve(input.onQueue?.(draft))
         .then(() => true)
         .catch((err) => {
@@ -373,14 +405,16 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
     input.resetQueueMode?.()
 
-    void serverSDK().currentClient.sessions.queueDrainResume({ sessionID: session.id }).catch(() => {})
+    void serverSDK()
+      .currentClient.sessions.queueDrainResume({ sessionID: session.id })
+      .catch(() => {})
 
     input.onSubmit?.()
 
     if (mode === "shell") {
       clearInput()
-      serverSDK().currentClient.sessions
-        .shell({ sessionID: session.id, command: text })
+      serverSDK()
+        .currentClient.sessions.shell({ sessionID: session.id, command: text })
         .catch((err) => {
           showToast({
             title: language.t("prompt.toast.shellSendFailed.title"),
@@ -396,8 +430,8 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       const payload = draft.prompt.some((part) => part.type === "image")
         ? await createSessionPayloadWithImages(draft)
         : createSessionPayload(draft)
-      serverSDK().currentClient.sessions
-        .command({
+      serverSDK()
+        .currentClient.sessions.command({
           id: Identifier.ascending("message"),
           sessionID: session.id,
           name: draft.command.name,
@@ -492,18 +526,22 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       draft,
       messageID,
       before: waitForWorktree,
-    }).catch((err) => {
-      pending.delete(pendingKey(session.id))
-      if (sessionDirectory === projectDirectory) {
-        sync().set("session_status", session.id, { type: "idle" })
-      }
-      showToast({
-        title: language.t("prompt.toast.promptSendFailed.title"),
-        description: errorMessage(err),
-      })
-      removeOptimisticMessage()
-      if (restoreInput()) restoreCommentItems(submission.target(), commentItems)
     })
+      .then((sent) => {
+        if (sent) input.onRevertSubmitComplete?.()
+      })
+      .catch((err) => {
+        pending.delete(pendingKey(session.id))
+        if (sessionDirectory === projectDirectory) {
+          sync().set("session_status", session.id, { type: "idle" })
+        }
+        showToast({
+          title: language.t("prompt.toast.promptSendFailed.title"),
+          description: errorMessage(err),
+        })
+        removeOptimisticMessage()
+        if (restoreInput()) restoreCommentItems(submission.target(), commentItems)
+      })
   }
 
   return {

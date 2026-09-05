@@ -1,11 +1,46 @@
 import { expect, test } from "bun:test"
 import type { NormalizedProviderListResponse } from "@opencode-ai/session-ui/context"
-import { resolveDefaultModel, selectProviderCatalog } from "./provider-catalog"
+import {
+  loadProviderChoices,
+  mergeProviderChoices,
+  resolveDefaultModel,
+  selectProviderCatalog,
+} from "./provider-catalog"
 
 const catalog = (id: string): NormalizedProviderListResponse => ({
   all: new Map([[id, { id, name: id, source: "api", env: [], options: {}, models: {} }]]),
   connected: [id],
   default: { [id]: `${id}-model` },
+})
+
+test("offers disconnected integrations without replacing configured provider models", () => {
+  const connected = catalog("opencode")
+  const all = mergeProviderChoices(connected.all, [
+    { id: "opencode", name: "Generic" },
+    { id: "opencode-go", name: "OpenCode Go" },
+  ])
+  expect(all.get("opencode")).toBe(connected.all.get("opencode"))
+  expect(all.get("opencode-go")).toMatchObject({ id: "opencode-go", name: "OpenCode Go", models: {} })
+  expect(connected.all.has("opencode-go")).toBe(false)
+  expect(connected.connected).toEqual(["opencode"])
+  expect(mergeProviderChoices(connected.all, [])).toBe(connected.all)
+})
+
+test("loads current integration choices and tolerates an unavailable catalogue", async () => {
+  const data = [{ id: "opencode-go", name: "OpenCode Go" }]
+  expect(await loadProviderChoices(Promise.resolve("v2"), async () => ({ data }))).toEqual(data)
+  expect(await loadProviderChoices(Promise.resolve("v2"), async () => ({}))).toEqual([])
+  expect(await loadProviderChoices(Promise.resolve("v2"), async () => ({ data: [] }))).toEqual([])
+  expect(
+    await loadProviderChoices(Promise.resolve("v2"), async () => {
+      throw new Error("offline")
+    }),
+  ).toEqual([])
+  expect(
+    await loadProviderChoices(Promise.resolve("v1"), async () => {
+      throw new Error("legacy should not request integration API")
+    }),
+  ).toEqual([])
 })
 
 test("selects the ready catalog for an explicit directory", () => {

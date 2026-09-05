@@ -2909,6 +2909,7 @@ export type SessionDurableEventStream = string
 
 export type SessionMessagesResponse = {
   data: Array<SessionMessage>
+  pending?: Array<SessionMessageUser>
   throughSeq: number
   cursor: {
     previous?: string
@@ -3595,6 +3596,8 @@ export type FileDiff = {
 
 export type RevertState = {
   messageID: string
+  inclusive?: boolean
+  inputThroughSeq?: number
   partID?: string
   snapshot?: string
   diff?: string
@@ -12969,6 +12972,7 @@ export type V2SessionRevertStageData = {
   body: {
     messageID: string
     files?: boolean
+    inclusive?: boolean
   }
   path: {
     sessionID: string

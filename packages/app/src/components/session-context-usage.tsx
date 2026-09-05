@@ -12,6 +12,7 @@ import { useLanguage } from "@/context/language"
 import { useProviders } from "@/hooks/use-providers"
 import { useSDK } from "@/context/sdk"
 import { getSessionContext } from "@/components/session/session-context-metrics"
+import { selectSessionContextMessages } from "@/components/session/session-context-system"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { createSessionTabs } from "@/pages/session/helpers"
 import { useSettings } from "@/context/settings"
@@ -22,8 +23,8 @@ interface SessionContextUsageProps {
   variant?: "button" | "indicator"
   buttonAppearance?: "default" | "v2"
   placement?: ComponentProps<typeof TooltipV2>["placement"]
-  messages?: () => readonly SessionMessage.Message[]
-  session?: () => Session.Info | undefined
+  messages: () => readonly SessionMessage.Message[]
+  session: () => Session.Info | undefined
 }
 
 function ContextTooltipRow(props: { name: JSX.Element; value: JSX.Element }) {
@@ -72,9 +73,13 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
       }),
   )
 
-  const context = createMemo(() => getSessionContext(props.messages?.() ?? [], [...providers.all().values()]))
+  const context = createMemo(() =>
+    getSessionContext(selectSessionContextMessages(props.messages(), props.session()?.revert), [
+      ...providers.all().values(),
+    ]),
+  )
   const cost = createMemo(() => {
-    return usd().format(props.session?.()?.cost ?? 0)
+    return usd().format(props.session()?.cost ?? 0)
   })
   const contextVisible = createMemo(() => view().reviewPanel.opened() && tabState.activeTab() === "context")
   const hasOtherTabs = createMemo(() =>

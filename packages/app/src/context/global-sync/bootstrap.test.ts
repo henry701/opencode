@@ -77,6 +77,13 @@ function directoryState() {
 }
 
 describe("bootstrapDirectory", () => {
+  test("loads supported path metadata for current session servers", async () => {
+    const paths = { state: "/state", config: "/config", worktree: "/repo", directory: "/repo", home: "/home/user" }
+    const client = { path: { get: async () => ({ data: paths }) } } as unknown as OpencodeClient
+    const query = new QueryClient()
+    expect(await query.fetchQuery(loadPathQuery(ServerScope.local, null, client, Promise.resolve("v2")))).toEqual(paths)
+  })
+
   test("uses legacy MCP endpoints while refreshing a v1 directory", async () => {
     const legacyConfigReads: string[] = []
     const mcpReads: string[] = []
@@ -168,6 +175,7 @@ describe("bootstrapDirectory", () => {
         provider,
       },
       sdk: {
+        vcs: { get: async () => ({ data: { branch: "feature", default_branch: "dev" } }) },
         config: {
           get: async () => {
             throw new Error("legacy directory config should not be called")
@@ -189,6 +197,7 @@ describe("bootstrapDirectory", () => {
     await new Promise((resolve) => setTimeout(resolve, 80))
 
     expect(store.status).toBe("complete")
+    expect(store.vcs).toEqual({ branch: "feature", default_branch: "dev" })
   })
 })
 

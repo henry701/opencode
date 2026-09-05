@@ -301,11 +301,12 @@ type Endpoint3_23Input = {
   readonly sessionID: Endpoint3_23Request["params"]["sessionID"]
   readonly messageID: Endpoint3_23Request["payload"]["messageID"]
   readonly files?: Endpoint3_23Request["payload"]["files"]
+  readonly inclusive?: Endpoint3_23Request["payload"]["inclusive"]
 }
 const Endpoint3_23 = (raw: RawClient["server.session"]) => (input: Endpoint3_23Input) =>
   raw["session.revert.stage"]({
     params: { sessionID: input["sessionID"] },
-    payload: { messageID: input["messageID"], files: input["files"] },
+    payload: { messageID: input["messageID"], files: input["files"], inclusive: input["inclusive"] },
   }).pipe(
     Effect.mapError(mapClientError),
     Effect.map((value) => value.data),

@@ -112,7 +112,9 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
     }, [])
   })
   const info = createMemo(() => (props.controls.session.id ? sync().session.get(props.controls.session.id) : undefined))
-  const working = createMemo(() => sync().data.session_working(props.controls.session.id ?? ""))
+  const working = createMemo(
+    () => props.controls.session.working?.() ?? sync().data.session_working(props.controls.session.id ?? ""),
+  )
   const attachments = createMemo(() =>
     prompt.current().filter((part): part is ImageAttachmentPart => part.type === "image"),
   )
@@ -223,6 +225,10 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
     resetEditingQueueID: props.resetEditingQueueID,
     onQueue: props.onQueue,
     onAbort: props.onAbort,
+    onAbortComplete: props.onAbortComplete,
+    revertMessageID: props.revertMessageID,
+    onRevertSubmit: props.onRevertSubmit,
+    onRevertSubmitComplete: props.onRevertSubmitComplete,
     onSubmit: props.onSubmit,
     model: props.controls.model.selection,
   })

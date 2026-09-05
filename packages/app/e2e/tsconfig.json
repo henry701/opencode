@@ -3,7 +3,9 @@
   "compilerOptions": {
     "noEmit": true,
     "rootDir": "..",
-    "types": ["node", "bun"]
+    "types": ["node", "bun"],
+    "composite": false,
+    "emitDeclarationOnly": false
   },
   "include": [
     "./performance/timeline-stability/**/*.spec.ts",
@@ -15,6 +17,33 @@
     "../src/pages/session/timeline/observe-element-offset.ts",
     "./regression/new-session-panel-corner.spec.ts",
     "./regression/session-timeline-context-resize.spec.ts",
-    "./utils/**/*.ts"
+    "./utils/**/*.ts",
+    "./regression/session-pending-reload.spec.ts",
+    "./regression/session-context-usage.spec.ts",
+    "./regression/session-rollback-queue.spec.ts",
+    "./regression/session-model-selection.spec.ts",
+    "./regression/session-timeline-reasoning-projection.spec.ts",
+    "./regression/review-state-persistence.spec.ts",
+    "./regression/session-rename.spec.ts",
+    "./regression/project-picker-recent-search.spec.ts",
+    "./regression/session-model-timeline-scroll.spec.ts",
+    "./regression/cross-server-tab-close.spec.ts",
+    "./regression/remote-session-settings.spec.ts",
+    "./regression/remote-tab-busy.spec.ts",
+    "./regression/review-line-comment.spec.ts",
+    "./regression/tab-navigate-mousedown.spec.ts",
+    "./regression/session-request-docks.spec.ts",
+    "./regression/session-todo-dock-navigation.spec.ts",
+    "./regression/subagent-child-navigation.spec.ts",
+    "./regression/review-terminal-stacked.spec.ts",
+    "./regression/session-timeline-collapse-state.spec.ts",
+    "./regression/session-timeline-history-root.spec.ts",
+    "./regression/session-timeline-lifecycle-state.spec.ts",
+    "./regression/session-timeline-projection.spec.ts",
+    "./regression/session-timeline-reducer-projection.spec.ts",
+    "./regression/session-timeline-shell-outline.spec.ts",
+    "./regression/session-timeline-transport.spec.ts",
+    "./user-story/model-selection-flow.spec.ts",
+    "./smoke/session-timeline.spec.ts"
   ]
 }

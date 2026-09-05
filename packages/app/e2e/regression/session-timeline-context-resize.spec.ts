@@ -25,7 +25,7 @@ const sessionID = "ses_context_resize_regression"
 const title = "Context resize regression"
 const model = { providerID: "opencode", modelID: "claude-opus-4-6", variant: "max" }
 const contextIDs = ["prt_0100_read", "prt_0101_glob", "prt_0102_grep", "prt_0103_list"]
-const followingTextID = "prt_0104_text"
+const followingTextID = "msg_assistant_0010:text:0"
 
 const messages = [...Array.from({ length: 8 }, (_, index) => turn(index, false)).flat(), ...turn(10, true)]
 
@@ -232,19 +232,9 @@ function turn(index: number, target: boolean, status: "running" | "completed" = 
     assistantMessage(
       target
         ? [
-            contextTool(
-              contextIDs[0]!,
-              "read",
-              { filePath: "src/recent-a.ts", offset: 0, limit: 120 },
-              status,
-            ),
+            contextTool(contextIDs[0]!, "read", { filePath: "src/recent-a.ts", offset: 0, limit: 120 }, status),
             contextTool(contextIDs[1]!, "glob", { path: directory, pattern: "**/*.ts" }, status),
-            contextTool(
-              contextIDs[2]!,
-              "grep",
-              { path: directory, pattern: "Explored", include: "*.ts" },
-              status,
-            ),
+            contextTool(contextIDs[2]!, "grep", { path: directory, pattern: "Explored", include: "*.ts" }, status),
             contextTool(contextIDs[3]!, "list", { path: "src" }, status),
             textPart(followingTextID, "This assistant text is immediately after the explored context group."),
           ]
@@ -265,11 +255,7 @@ function contextTool(
   return toolPart(partID, tool, status, input, { title, output: `Completed ${tool}.\n${"detail line\n".repeat(8)}` })
 }
 
-async function mockServer(
-  page: Page,
-  events: TimelineEvent[] = [],
-  fixtureMessages = messages,
-) {
+async function mockServer(page: Page, events: TimelineEvent[] = [], fixtureMessages = messages) {
   await mockOpenCodeServer(page, {
     directory,
     project: project(),

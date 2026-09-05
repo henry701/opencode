@@ -7,6 +7,7 @@ import { EventV2 } from "../event"
 import { RelativePath } from "../schema"
 import { Snapshot } from "../snapshot"
 import { SessionEvent } from "./event"
+import { SessionInput } from "./input"
 import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
 import { SessionMessageTable } from "./sql"
@@ -22,6 +23,7 @@ export class MessageNotFoundError extends Schema.TaggedErrorClass<MessageNotFoun
 interface BoundaryInput {
   readonly sessionID: SessionSchema.ID
   readonly messageID: SessionMessage.ID
+  readonly inclusive?: boolean
 }
 
 const plan = Effect.fn("SessionRevert.plan")(function* (input: BoundaryInput) {
@@ -32,7 +34,17 @@ const plan = Effect.fn("SessionRevert.plan")(function* (input: BoundaryInput) {
     .where(and(eq(SessionMessageTable.session_id, input.sessionID), eq(SessionMessageTable.id, input.messageID)))
     .get()
     .pipe(Effect.orDie)
-  if (!boundary) return yield* new MessageNotFoundError(input)
+  if (!boundary) {
+    const pending = input.inclusive ? yield* SessionInput.find(db, input.messageID) : undefined
+    if (
+      pending?.sessionID === input.sessionID &&
+      pending.delivery === "steer" &&
+      pending.promotedSeq === undefined &&
+      pending.discardedSeq === undefined
+    )
+      return new Map<RelativePath, Snapshot.ID>()
+    return yield* new MessageNotFoundError(input)
+  }
   const rows = yield* db
     .select()
     .from(SessionMessageTable)
@@ -61,13 +73,16 @@ export const stage = Effect.fn("SessionRevert.stage")(function* (input: {
   readonly session: SessionSchema.Info
   readonly messageID: SessionMessage.ID
   readonly files?: boolean
+  readonly inclusive?: boolean
 }) {
+  const db = (yield* Database.Service).db
+  const inputThroughSeq = input.inclusive ? yield* EventV2.latestSequence(db, input.session.id) : undefined
   const snapshot = yield* Snapshot.Service
   const events = yield* EventV2.Service
   const original = input.session.revert?.snapshot
     ? Snapshot.ID.make(input.session.revert.snapshot)
     : yield* snapshot.capture()
-  const next = yield* plan({ sessionID: input.session.id, messageID: input.messageID })
+  const next = yield* plan({ sessionID: input.session.id, messageID: input.messageID, inclusive: input.inclusive })
   const restore = new Map<RelativePath, Snapshot.ID>()
   if (original) {
     for (const file of input.session.revert?.files ?? []) restore.set(file.path, original)
@@ -80,6 +95,8 @@ export const stage = Effect.fn("SessionRevert.stage")(function* (input: {
     : []
   const revert = {
     messageID: input.messageID,
+    inclusive: input.inclusive,
+    inputThroughSeq,
     snapshot: original,
     diff: files
       .map((file) => file.patch)

@@ -26,6 +26,11 @@ export type SessionCommandContext = {
   navigateMessageByOffset: (offset: number) => void
   setActiveMessage: (message: UserMessage | undefined) => void
   focusInput: () => void
+  getMessageParts?: (messageID: string) => Part[]
+  getUserMessages?: () => UserMessage[]
+  getRevertMessageID?: () => string | undefined
+  revert?: (messageID: string) => Promise<unknown> | undefined
+  restore?: (messageID: string) => Promise<unknown> | undefined
   review?: () => boolean
   fileBrowser?: () => boolean
 }
@@ -98,9 +103,11 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     if (!id) return []
     return sync().data.message[id] ?? []
   }
-  const userMessages = () => messages().filter((m) => m.role === "user") as UserMessage[]
+  const userMessages = () =>
+    actions.getUserMessages?.() ?? (messages().filter((m) => m.role === "user") as UserMessage[])
+  const revertMessageID = () => (actions.getRevertMessageID ? actions.getRevertMessageID() : info()?.revert?.messageID)
   const visibleUserMessages = () => {
-    const revert = info()?.revert?.messageID
+    const revert = revertMessageID()
     if (!revert) return userMessages()
     const boundary = userMessages().findIndex((message) => message.id === revert)
     return boundary < 0 ? userMessages() : userMessages().slice(0, boundary)
@@ -338,22 +345,24 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     const session = sdk().api.session
     const directory = sdk().directory
     const promptSession = prompt.capture()
-    const revert = info()?.revert?.messageID
+    const revert = revertMessageID()
     const messages = userMessages()
     const boundary = revert ? messages.findIndex((message) => message.id === revert) : messages.length
     if (boundary < 0) return
     const message = messages[boundary - 1]
     if (!message) return
-    const parts = sync().data.part[message.id]
+    if (actions.revert) return actions.revert(message.id)
+    const projectedParts = actions.getMessageParts?.(message.id)
+    const parts = projectedParts?.length ? projectedParts : sync().data.part[message.id]
 
     if (sync().data.session_working(sessionID)) {
-      await session.interrupt({ sessionID }).catch(() => {})
+      await session.interrupt({ sessionID })
     }
 
     await runCommand({
       owner,
       prompt: promptSession,
-      request: () => session.revert.stage({ sessionID, messageID: message.id }),
+      request: () => session.revert.stage({ sessionID, messageID: message.id, inclusive: true }),
       updatePrompt: (promptSession) => {
         if (parts) promptSession.set(extractPromptFromParts(parts, { directory }))
       },
@@ -369,10 +378,11 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     const messages = userMessages()
     const promptSession = prompt.capture()
 
-    const revertMessageID = info()?.revert?.messageID
-    if (!revertMessageID) return
+    const reverted = revertMessageID()
+    if (!reverted) return
+    if (actions.restore) return actions.restore(reverted)
 
-    const boundary = messages.findIndex((message) => message.id === revertMessageID)
+    const boundary = messages.findIndex((message) => message.id === reverted)
     if (boundary < 0) return
     const next = messages[boundary + 1]
     if (!next) {
@@ -389,7 +399,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     await runCommand({
       owner,
       prompt: promptSession,
-      request: () => session.revert.stage({ sessionID, messageID: next.id }),
+      request: () => session.revert.stage({ sessionID, messageID: next.id, inclusive: true }),
       updatePrompt: () => undefined,
       updateViewport: () => setActiveMessage(messages[boundary]),
     })
@@ -472,7 +482,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       title: language.t("command.session.redo"),
       description: language.t("command.session.redo.description"),
       slash: "redo",
-      disabled: !params.id || !info()?.revert?.messageID,
+      disabled: !params.id || !revertMessageID(),
       onSelect: redo,
     }),
     sessionCommand({

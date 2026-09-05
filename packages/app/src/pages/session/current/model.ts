@@ -8,6 +8,7 @@ import { Schema } from "effect"
 import { createEffect, createSignal, on, onCleanup, type Accessor } from "solid-js"
 import {
   currentSessionInitialState,
+  currentSessionMessages,
   reduceCurrentSession,
   type CurrentSessionAction,
   type CurrentSessionState,
@@ -16,6 +17,7 @@ import {
 const pageSize = 100
 const decodeSession = Schema.decodeUnknownSync(Session.Info)
 const decodeMessages = Schema.decodeUnknownSync(Schema.Array(SessionMessage.Message))
+const decodePending = Schema.decodeUnknownSync(Schema.Array(SessionMessage.User))
 const decodeQueue = Schema.decodeUnknownSync(Schema.Array(SessionInput.Queued))
 const decodeEvent = Schema.decodeUnknownSync(SessionEvent.All)
 
@@ -107,6 +109,7 @@ export function createCurrentSessionModel(input: {
     const page = await client.messages.list({ sessionID, order: "desc", limit: pageSize }, { signal })
     return {
       messages: decodeMessages(page.data).toReversed(),
+      pending: "pending" in page ? decodePending(page.pending) : undefined,
       cursor: page.cursor.next ?? undefined,
       throughSeq: page.throughSeq,
     }
@@ -122,6 +125,17 @@ export function createCurrentSessionModel(input: {
     const session = events.some(eventRefreshesSession)
     const active = events.some(eventRefreshesActive)
     const context = events.some(eventRefreshesContext)
+    if (events.some((event) => event.type === "session.next.revert.committed")) {
+      const page = await newest(client, sessionID, signal)
+      if (signal?.aborted || input.sessionID() !== sessionID) return
+      dispatch({
+        type: "newest-merged",
+        messages: page.messages,
+        pending: page.pending,
+        sequence: page.throughSeq,
+        hasOlder: page.cursor !== undefined,
+      })
+    }
     await Promise.all([
       queue ? refreshQueue(client, sessionID, signal) : undefined,
       session ? refreshSession(client, sessionID, signal) : undefined,
@@ -226,6 +240,7 @@ export function createCurrentSessionModel(input: {
         dispatch({
           type: "hydrated",
           messages: page.messages,
+          pending: page.pending,
           cursor: page.cursor ?? undefined,
           sequence: page.throughSeq,
         })
@@ -235,7 +250,13 @@ export function createCurrentSessionModel(input: {
           const events = buffered.splice(0)
           const page = await newest(client, sessionID, controller.signal)
           if (controller.signal.aborted || generation !== activeGeneration) return
-          dispatch({ type: "newest-merged", messages: page.messages, hasOlder: page.cursor !== undefined })
+          dispatch({
+            type: "newest-merged",
+            messages: page.messages,
+            pending: page.pending,
+            sequence: page.throughSeq,
+            hasOlder: page.cursor !== undefined,
+          })
           events.forEach((event) => dispatch({ type: "event", event }))
           if (events.some((event) => event.type === "session.next.step.started"))
             dispatch({ type: "active-updated", active: true })
@@ -289,7 +310,13 @@ export function createCurrentSessionModel(input: {
       refreshActive(client, sessionID, controller.signal),
       refreshContext(client, sessionID, controller.signal),
     ])
-    dispatch({ type: "newest-merged", messages: page.messages, hasOlder: page.cursor !== undefined })
+    dispatch({
+      type: "newest-merged",
+      messages: page.messages,
+      pending: page.pending,
+      sequence: page.throughSeq,
+      hasOlder: page.cursor !== undefined,
+    })
   }
 
   const dispose = () => {
@@ -312,7 +339,7 @@ export function createCurrentSessionModel(input: {
 
   return {
     state,
-    messages: () => state().messages,
+    messages: () => currentSessionMessages(state()),
     context: () => state().context,
     queue: () => state().queue,
     session: () => state().session,

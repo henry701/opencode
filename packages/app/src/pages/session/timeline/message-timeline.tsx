@@ -53,6 +53,8 @@ import type {
   UserMessage,
 } from "@opencode-ai/sdk/v2"
 import type { SessionMessageInfo } from "@opencode-ai/client/promise"
+import type { Session } from "@opencode-ai/schema/session"
+import type { SessionMessage } from "@opencode-ai/schema/session-message"
 import { showToast } from "@/utils/toast"
 import { downloadSessionExport, fetchSessionExport, sessionExportFilename } from "@/utils/session-export"
 import { getDirectory, getFilename } from "@opencode-ai/core/util/path"
@@ -252,6 +254,8 @@ export function MessageTimeline(props: {
   centered: boolean
   messages?: Accessor<MessageType[]>
   sessionMessages?: Accessor<SessionMessageInfo[]>
+  contextMessages: Accessor<readonly SessionMessage.Message[]>
+  contextSession: Accessor<Session.Info | undefined>
   getMessageParts?: (messageID: string) => PartType[]
   setContentRef: (el: HTMLDivElement) => void
   userMessages: UserMessage[]
@@ -326,7 +330,7 @@ export function MessageTimeline(props: {
     const id = sessionID()
     if (!id) return
     return parentMessages()
-      .flatMap((message) => getMsgParts(message.id))
+      .flatMap((message) => sync().data.part[message.id] ?? emptyParts)
       .map((part) => taskDescription(part, id))
       .findLast((value): value is string => !!value)
   })
@@ -1485,6 +1489,8 @@ export function MessageTimeline(props: {
                     <SessionContextUsage
                       placement="bottom"
                       buttonAppearance={settings.general.newLayoutDesigns() ? "v2" : "default"}
+                      messages={props.contextMessages}
+                      session={props.contextSession}
                     />
                     <Show when={!parentID()}>
                       <Show

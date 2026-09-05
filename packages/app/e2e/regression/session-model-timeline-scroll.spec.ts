@@ -21,11 +21,13 @@ const messages = Array.from({ length: 80 }, (_, index) => {
       id: userID,
       created: 1700000000000 + index * 10_000,
     }),
-    assistantMessage([textPart(`prt_history_${index}_assistant`, `Assistant reply ${index}. ${"response ".repeat(40)}`)], {
-      id: `msg_history_${index}_assistant`,
-      parentID: userID,
-      created: 1700000001000 + index * 10_000,
-    }),
+    assistantMessage(
+      [textPart(`prt_history_${index}_assistant`, `Assistant reply ${index}. ${"response ".repeat(40)}`)],
+      {
+        id: `msg_history_${index}_assistant`,
+        created: 1700000001000 + index * 10_000,
+      },
+    ),
   ]
 }).flat()
 
@@ -211,12 +213,16 @@ test("keeps scrolled timeline when switching between variant and non-variant mod
   const modelDialog = () => page.getByRole("dialog", { name: /Select model/i })
 
   await composer.locator('[data-action="prompt-model"]').click()
-  await modelDialog().getByRole("button", { name: /Big Pickle/ }).click()
+  await modelDialog()
+    .getByRole("button", { name: /Big Pickle/ })
+    .click()
   await expect(composer.locator('[data-action="prompt-model"]')).toContainText("Big Pickle")
   await page.waitForTimeout(200)
 
   await composer.locator('[data-action="prompt-model"]').click()
-  await modelDialog().getByRole("button", { name: /Claude Opus 4.6/ }).click()
+  await modelDialog()
+    .getByRole("button", { name: /Claude Opus 4.6/ })
+    .click()
   await expect(composer.locator('[data-action="prompt-model"]')).toContainText("Claude Opus 4.6")
   await page.waitForTimeout(200)
 
@@ -226,7 +232,9 @@ test("keeps scrolled timeline when switching between variant and non-variant mod
   expect(withVariant.visible.length).toBeGreaterThan(2)
 
   await composer.locator('[data-action="prompt-model"]').click()
-  await modelDialog().getByRole("button", { name: /DeepSeek V4 Flash Free/ }).click()
+  await modelDialog()
+    .getByRole("button", { name: /DeepSeek V4 Flash Free/ })
+    .click()
   await expect(composer.locator('[data-action="prompt-model"]')).toContainText("DeepSeek V4 Flash Free")
   await page.waitForTimeout(200)
 

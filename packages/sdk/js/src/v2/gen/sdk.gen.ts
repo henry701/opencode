@@ -3169,6 +3169,7 @@ export class Revert extends HeyApiClient {
       sessionID: string
       messageID?: string
       files?: boolean
+      inclusive?: boolean
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -3180,6 +3181,7 @@ export class Revert extends HeyApiClient {
             { in: "path", key: "sessionID" },
             { in: "body", key: "messageID" },
             { in: "body", key: "files" },
+            { in: "body", key: "inclusive" },
           ],
         },
       ],
