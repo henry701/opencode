@@ -22,6 +22,29 @@ function dispatch(actions: CurrentSessionAction[]) {
 }
 
 describe("current session reducer", () => {
+  test("does not restore discarded pending input from a stale refresh", () => {
+    const pending = Schema.decodeUnknownSync(SessionMessage.User)({
+      id: "msg_steer",
+      type: "user",
+      text: "pending",
+      time: { created: 1 },
+    })
+    const state = dispatch([
+      { type: "hydrated", messages: [], pending: [pending], sequence: 1 },
+      {
+        type: "event",
+        event: decodeEvent({
+          id: "evt_discarded",
+          type: "session.next.prompt.discarded",
+          durable: { aggregateID: "ses_test", seq: 2, version: 1 },
+          data: { sessionID: "ses_test", messageID: "msg_steer", timestamp: 2 },
+        }),
+      },
+      { type: "newest-merged", messages: [], pending: [pending], sequence: 1, hasOlder: false },
+    ])
+    expect(state.pending).toEqual([])
+  })
+
   test("hydrates a chronological native projection and preserves prepared provider context", () => {
     const state = dispatch([
       {

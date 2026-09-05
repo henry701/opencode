@@ -29,6 +29,7 @@ export const MessageGroup = HttpApiGroup.make("server.message")
       query: SessionMessagesQuery,
       success: Schema.Struct({
         data: Schema.Array(SessionMessage.Message),
+        pending: Schema.optional(Schema.Array(SessionMessage.User)),
         throughSeq: NonNegativeInt,
         cursor: Schema.Struct({
           previous: Schema.String.pipe(Schema.optional),

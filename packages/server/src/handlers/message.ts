@@ -1,10 +1,13 @@
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionInput } from "@opencode-ai/core/session/input"
+import { Database } from "@opencode-ai/core/database/database"
 import { Effect, Schema } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { InvalidCursorError, SessionNotFoundError, UnknownError } from "@opencode-ai/protocol/errors"
 import { firstPreparedMessageID, stripRepeatedPreparedContext } from "./prepared-context"
+import { pendingInputMessages } from "./pending-inputs"
 
 const DefaultMessagesLimit = 50
 
@@ -28,6 +31,7 @@ const cursor = {
 export const MessageHandler = HttpApiBuilder.group(Api, "server.message", (handlers) =>
   Effect.gen(function* () {
     const session = yield* SessionV2.Service
+    const database = yield* Database.Service
 
     return handlers.handle(
       "session.messages",
@@ -88,8 +92,10 @@ export const MessageHandler = HttpApiBuilder.group(Api, "server.message", (handl
         const projected = messages.map((message) => stripRepeatedPreparedContext(message, firstPreparedID))
         const first = projected[0]
         const last = projected.at(-1)
+        const pending = pendingInputMessages(yield* SessionInput.listPending(database.db, ctx.params.sessionID))
         return {
           data: projected,
+          pending,
           throughSeq,
           cursor: {
             previous: first ? cursor.encode(first, order, "previous") : undefined,

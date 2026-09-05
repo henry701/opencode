@@ -19,7 +19,7 @@ import type {
 type LegacyClient = OpencodeClient
 type LegacyFor = (directory?: string) => LegacyClient
 type CompatibleSessionApi = Omit<
-  SessionApi,
+  ServerApi["session"],
   "prompt" | "command" | "shell" | "compact" | "rename" | "archive" | "remove"
 > & {
   prompt: (input: SessionPromptInput & LegacyPrompt) => Promise<SessionPromptOutput>
@@ -85,7 +85,8 @@ function sessionInfo(session: Session): SessionInfo {
 
 export function createCompatibleApi(input: CompatibleInput): CompatibleApi {
   const v1 = createV1Api(input)
-  const current = createCurrentApi(input.current, input.legacy)
+  // Current session support does not imply that the server implements /api/vcs.
+  const current = { ...createCurrentApi(input.current, input.legacy), vcs: v1.vcs }
   return lazyApi(
     input.protocol.then((protocol) => (protocol === "v1" ? v1 : current)),
     current,

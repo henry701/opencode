@@ -168,6 +168,7 @@ describe("bootstrapDirectory", () => {
         provider,
       },
       sdk: {
+        vcs: { get: async () => ({ data: { branch: "feature", default_branch: "dev" } }) },
         config: {
           get: async () => {
             throw new Error("legacy directory config should not be called")
@@ -189,6 +190,7 @@ describe("bootstrapDirectory", () => {
     await new Promise((resolve) => setTimeout(resolve, 80))
 
     expect(store.status).toBe("complete")
+    expect(store.vcs).toEqual({ branch: "feature", default_branch: "dev" })
   })
 })
 

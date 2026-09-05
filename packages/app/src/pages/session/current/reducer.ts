@@ -27,6 +27,7 @@ export type CurrentSessionAction =
   | {
       readonly type: "hydrated"
       readonly messages: ReadonlyArray<SessionMessage.Message>
+      readonly pending?: ReadonlyArray<SessionMessage.User>
       readonly sequence?: number
       readonly cursor?: string
     }
@@ -39,6 +40,8 @@ export type CurrentSessionAction =
   | {
       readonly type: "newest-merged"
       readonly messages: ReadonlyArray<SessionMessage.Message>
+      readonly pending?: ReadonlyArray<SessionMessage.User>
+      readonly sequence?: number
       readonly hasOlder: boolean
     }
   | { readonly type: "event"; readonly event: SessionEvent.Event }
@@ -73,7 +76,7 @@ export function reduceCurrentSession(state: CurrentSessionState, action: Current
       return {
         ...state,
         messages: [...action.messages],
-        pending: reconcilePending(state.pending, action.messages),
+        pending: reconcilePending(action.pending ?? state.pending, action.messages),
         readiness: "ready" as const,
         cursor: action.cursor,
         hasOlder: action.cursor !== undefined,
@@ -104,7 +107,12 @@ export function reduceCurrentSession(state: CurrentSessionState, action: Current
       return {
         ...state,
         messages: Array.from(messages.values()).toSorted((left, right) => order(left).localeCompare(order(right))),
-        pending: reconcilePending(state.pending, action.messages),
+        pending: reconcilePending(
+          action.sequence !== undefined && action.sequence >= (state.lastEventSequence ?? -1)
+            ? (action.pending ?? state.pending)
+            : state.pending,
+          action.messages,
+        ),
       }
     }
     case "message-replaced": {
