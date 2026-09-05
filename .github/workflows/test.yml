@@ -78,7 +78,7 @@ jobs:
 
       - name: Run unit tests
         timeout-minutes: ${{ github.repository != 'anomalyco/opencode' && runner.os == 'Windows' && 60 || 20 }}
-        run: GITHUB_ACTIONS=false bun turbo test --log-order=stream --concurrency=${{ github.repository == 'anomalyco/opencode' && '10' || '2' }}
+        run: GITHUB_ACTIONS=false bun turbo test --log-order=stream --concurrency=${{ github.repository == 'anomalyco/opencode' && '10' || (runner.os == 'Windows' && '1' || '2') }}
         env:
           OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
