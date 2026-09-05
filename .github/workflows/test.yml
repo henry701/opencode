@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - dev
+      - production
   pull_request:
   workflow_dispatch:
 
@@ -31,7 +32,7 @@ jobs:
             host: blacksmith-4vcpu-ubuntu-2404
           - name: windows
             host: blacksmith-4vcpu-windows-2025
-    runs-on: ${{ matrix.settings.host }}
+    runs-on: ${{ github.repository == 'anomalyco/opencode' && matrix.settings.host || (matrix.settings.name == 'windows' && 'windows-latest' || 'ubuntu-latest') }}
     defaults:
       run:
         shell: bash
@@ -89,7 +90,7 @@ jobs:
             host: blacksmith-4vcpu-ubuntu-2404
           - name: windows
             host: blacksmith-4vcpu-windows-2025
-    runs-on: ${{ matrix.settings.host }}
+    runs-on: ${{ github.repository == 'anomalyco/opencode' && matrix.settings.host || (matrix.settings.name == 'windows' && 'windows-latest' || 'ubuntu-latest') }}
     env:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
     defaults:
