@@ -104,21 +104,21 @@ describe("normalizeSessionMessages", () => {
       parts: [{ type: "text", text: "Admitted prompt" }],
     }
     const result = normalizeCurrentSessionMessages("ses_1", [
-      decodeCurrentMessage({ id: "user", type: "user", text: "Admitted prompt", payload, time: { created: 1 } }),
+      decodeCurrentMessage({ id: "msg_user", type: "user", text: "Admitted prompt", payload, time: { created: 1 } }),
       decodeCurrentMessage({
-        id: "assistant",
+        id: "msg_assistant",
         type: "assistant",
         agent: "build",
         model: { providerID: "openai", id: "gpt" },
         content: [],
         time: { created: 2, completed: 3 },
       }),
-      decodeCurrentMessage({ id: "pending", type: "user", text: "Next prompt", payload, time: { created: 4 } }),
+      decodeCurrentMessage({ id: "msg_pending", type: "user", text: "Next prompt", payload, time: { created: 4 } }),
     ])
     expect(result.messages).toMatchObject([
-      { id: "user", agent: payload.agent, model: payload.model },
-      { id: "assistant", agent: "build", providerID: "openai", modelID: "gpt" },
-      { id: "pending", agent: payload.agent, model: payload.model },
+      { id: "msg_user", agent: payload.agent, model: payload.model },
+      { id: "msg_assistant", agent: "build", providerID: "openai", modelID: "gpt" },
+      { id: "msg_pending", agent: payload.agent, model: payload.model },
     ])
   })
 
