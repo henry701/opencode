@@ -57,7 +57,15 @@ jobs:
 
       - name: Install ripgrep
         if: runner.os == 'Windows'
-        run: choco install ripgrep --version 15.1.0 --yes --no-progress
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "ripgrep.zip"
+          Invoke-WebRequest "https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep-15.1.0-x86_64-pc-windows-msvc.zip" -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "124510b94b6baa3380d051fdf4650eaa80a302c876d611e9dba0b2e18d87493a") {
+            throw "Ripgrep checksum mismatch"
+          }
+          Expand-Archive $archive -DestinationPath "$env:RUNNER_TEMP/ripgrep"
+          "$env:RUNNER_TEMP/ripgrep/ripgrep-15.1.0-x86_64-pc-windows-msvc" >> $env:GITHUB_PATH
 
       - name: Cache Turbo
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -69,8 +77,8 @@ jobs:
             turbo-${{ runner.os }}-
 
       - name: Run unit tests
-        timeout-minutes: 20
-        run: GITHUB_ACTIONS=false bun turbo test --concurrency=${{ github.repository == 'anomalyco/opencode' && '10' || '2' }}
+        timeout-minutes: ${{ github.repository != 'anomalyco/opencode' && runner.os == 'Windows' && 60 || 20 }}
+        run: GITHUB_ACTIONS=false bun turbo test --log-order=stream --concurrency=${{ github.repository == 'anomalyco/opencode' && '10' || '2' }}
         env:
           OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 

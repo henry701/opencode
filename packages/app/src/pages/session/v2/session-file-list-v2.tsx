@@ -5,7 +5,7 @@ import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
 import { kindChange, kindLabel, type Kind } from "@/components/file-tree-v2"
 import { normalizePath } from "@/pages/session/v2/review-diff-kinds"
 import { createVirtualizer, defaultRangeExtractor } from "@tanstack/solid-virtual"
-import { virtualScrollElement } from "@/components/virtual-scroll-element"
+import { createVirtualScrollElement } from "@/components/virtual-scroll-element"
 
 // Drives the highlight/selection of the flat search-result list from the filter
 // input's keyboard events.
@@ -53,12 +53,13 @@ export function SessionFileListV2(props: {
   const highlighted = () => normalizePath(props.highlighted ?? "")
   const normalized = createMemo(() => props.files.map(normalizePath))
   const [root, setRoot] = createSignal<HTMLDivElement>()
+  const scrollElement = createVirtualScrollElement(root)
   const [focused, setFocused] = createSignal<string>()
   const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>({
     get count() {
       return props.files.length
     },
-    getScrollElement: () => virtualScrollElement(root()),
+    getScrollElement: scrollElement,
     initialRect: { width: 0, height: 600 },
     estimateSize: () => 28,
     gap: 2,
