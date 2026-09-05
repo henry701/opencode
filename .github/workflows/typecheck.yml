@@ -18,7 +18,7 @@ jobs:
         uses: ./.github/actions/setup-bun
 
       - name: Run typecheck
-        run: bun typecheck
+        run: bun typecheck --concurrency=${{ github.repository == 'anomalyco/opencode' && '10' || '2' }}
 
       - name: Typecheck browser regression fixtures
         working-directory: packages/app
