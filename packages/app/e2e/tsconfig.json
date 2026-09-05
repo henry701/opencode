@@ -25,6 +25,11 @@
     "./regression/review-state-persistence.spec.ts",
     "./regression/session-rename.spec.ts",
     "./regression/project-picker-recent-search.spec.ts",
-    "./regression/session-model-timeline-scroll.spec.ts"
+    "./regression/session-model-timeline-scroll.spec.ts",
+    "./regression/cross-server-tab-close.spec.ts",
+    "./regression/remote-session-settings.spec.ts",
+    "./regression/remote-tab-busy.spec.ts",
+    "./regression/review-line-comment.spec.ts",
+    "./regression/tab-navigate-mousedown.spec.ts"
   ]
 }
