@@ -12,7 +12,7 @@ import { ServerConnection, serverName } from "@/context/server"
 import { displayName, projectForSession } from "@/pages/layout/helpers"
 import { SessionTabAvatar } from "@/pages/layout/session-tab-avatar"
 import type { Session } from "@opencode-ai/sdk/v2"
-import { canOpenTabRename, forwardTabRef } from "./titlebar-tab-gesture"
+import { canOpenTabRename, forwardTabRef, openTabContextMenu } from "./titlebar-tab-gesture"
 import { TabPreviewPopover } from "./titlebar-tab-popover"
 import "./titlebar-tab-nav.css"
 
@@ -209,6 +209,10 @@ export function TabNavItem(props: {
         data-titlebar-tab-link
         href={props.href}
         draggable={false}
+        onKeyDown={(event) => {
+          if (editing() || props.dragging) return
+          openTabContextMenu(event)
+        }}
         onDragStart={(event) => {
           event.preventDefault()
           event.stopPropagation()

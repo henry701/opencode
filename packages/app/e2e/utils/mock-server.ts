@@ -242,6 +242,7 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
     if (/^\/api\/pty\/[^/]+\/connect-token$/.test(path))
       return json(route, { location: location(config), data: { ticket: "e2e-ticket", expires_in: 60 } })
     if (emptyObject.has(path)) return json(route, {})
+    if (path === "/vcs/diff") return json(route, config.vcsDiff ?? [])
     if (emptyList.has(path)) return json(route, [])
     if (path === "/api/session") {
       const directory = url.searchParams.get("directory")
@@ -334,6 +335,13 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
     }
     if (/^\/session\/[^/]+\/permissions\/[^/]+$/.test(path) && route.request().method() === "POST") {
       return json(route, true)
+    }
+    const renameMatch = path.match(/^\/api\/session\/([^/]+)\/rename$/)
+    if (renameMatch && route.request().method() === "POST") {
+      const session = config.sessions.find((item) => item.id === renameMatch[1])
+      if (!session) return json(route, { error: "Session not found" }, undefined, 404)
+      session.title = route.request().postDataJSON().title
+      return route.fulfill({ status: 204, headers: { "access-control-allow-origin": "*" } })
     }
     if (
       /^\/api\/session\/[^/]+\/(archive|rename|interrupt|revert\/clear|revert\/commit)$/.test(path) &&
@@ -484,7 +492,7 @@ function location(config: MockServerConfig) {
   }
 }
 
-function currentCatalog(config: MockServerConfig) {
+export function currentCatalog(config: Pick<MockServerConfig, "provider">) {
   const value = typeof config.provider === "function" ? config.provider() : config.provider
   if (!value || typeof value !== "object") return { providers: [], models: [], default: null }
   const catalog = value as {
