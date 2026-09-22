@@ -50,7 +50,8 @@ export function useProviders(directory: Accessor<string | undefined>) {
   }
 
   const all = createMemo(() => {
-    const value = choices.latest
+    // Optional connection choices must not suspend the session while a picker mounts.
+    const value = choices.state === "ready" || choices.state === "refreshing" ? choices.latest : undefined
     return mergeProviderChoices(
       providers().all,
       value?.server === serverSDK() && value.directory === dir() ? value.items : [],
