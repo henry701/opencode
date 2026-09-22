@@ -38,6 +38,8 @@ for (const newLayoutDesigns of [false, true]) {
     test(`context circle and detail agree with ${mode} usage (${newLayoutDesigns ? "v2" : "legacy"})`, async ({
       page,
     }) => {
+      // Exercise the legacy layout before its upstream retirement date.
+      if (!newLayoutDesigns) await page.clock.setFixedTime(new Date(2026, 8, 1))
       await page.addInitScript((newLayoutDesigns) => {
         localStorage.setItem("settings.v3", JSON.stringify({ general: { newLayoutDesigns } }))
       }, newLayoutDesigns)
