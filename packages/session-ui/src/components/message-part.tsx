@@ -423,7 +423,7 @@ function CurrentHighlightedText(props: { text: string; references: CurrentUserFi
     if (start < props.text.length) result.push({ text: props.text.slice(start) })
     return result
   })
-  return <For each={segments()}>{(segment) => <span data-highlight={segment.type}>{segment.text}</span>}</For>
+  return <Index each={segments()}>{(segment) => <span data-highlight={segment().type}>{segment().text}</span>}</Index>
 }
 
 export interface MessagePartProps {
@@ -1672,7 +1672,7 @@ function HighlightedText(props: { text: string; references: FilePart[]; agents: 
     return result
   })
 
-  return <For each={segments()}>{(segment) => <span data-highlight={segment.type}>{segment.text}</span>}</For>
+  return <Index each={segments()}>{(segment) => <span data-highlight={segment().type}>{segment().text}</span>}</Index>
 }
 
 export function Part(props: MessagePartProps) {

@@ -23,7 +23,7 @@ import {
   normalizeFileTreeV2Path,
   type FileTreeV2Node,
 } from "@/components/file-tree-v2-model"
-import { virtualScrollElement } from "@/components/virtual-scroll-element"
+import { createVirtualScrollElement } from "@/components/virtual-scroll-element"
 
 export type { Kind } from "@/components/file-tree"
 
@@ -142,12 +142,13 @@ export default function FileTreeV2(props: {
     return flattenFileTreeV2(model()!, expanded)
   })
   const [root, setRoot] = createSignal<HTMLDivElement>()
+  const scrollElement = createVirtualScrollElement(root)
   const [focused, setFocused] = createSignal<string>()
   const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>({
     get count() {
       return rows().length
     },
-    getScrollElement: () => virtualScrollElement(root()),
+    getScrollElement: scrollElement,
     initialRect: { width: 0, height: 600 },
     estimateSize: () => 28,
     gap: 2,

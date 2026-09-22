@@ -408,7 +408,9 @@ function ProviderConnection(props: {
   })
 
   const provider = createMemo(
-    () => providers.all().get(props.provider) ?? serverSync().data.provider.all.get(props.provider)!,
+    () =>
+      providers.all().get(props.provider) ??
+      serverSync().data.provider.all.get(props.provider) ?? { id: props.provider, name: props.provider },
   )
   const fallback = createMemo<ConnectMethod[]>(() => [
     {
