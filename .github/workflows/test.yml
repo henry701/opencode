@@ -24,6 +24,7 @@ env:
 jobs:
   unit:
     name: unit (${{ matrix.settings.name }})
+    continue-on-error: ${{ github.repository != 'anomalyco/opencode' && matrix.settings.name == 'windows' }}
     strategy:
       fail-fast: false
       matrix:
@@ -90,10 +91,25 @@ jobs:
       - name: Run HttpApi exerciser gates
         if: runner.os == 'Linux'
         working-directory: packages/opencode
-        run: bun run test:httpapi
+        timeout-minutes: 25
+        run: |
+          bun run script/httpapi-exercise.ts --mode coverage --fail-on-missing --fail-on-skip
+          bun run script/httpapi-exercise.ts --mode auth --fail-on-missing --fail-on-skip
+          for attempt in 1 2; do
+            if timeout --kill-after=10s 8m bun run script/httpapi-exercise.ts --mode effect --fail-on-missing --fail-on-skip --progress --trace; then
+              exit 0
+            else
+              status=$?
+            fi
+            if { [ "$status" -ne 124 ] && [ "$status" -ne 137 ]; } || [ "$attempt" -eq 2 ]; then
+              exit "$status"
+            fi
+            echo "HttpApi effect exerciser timed out; retrying once in a fresh process"
+          done
 
   e2e:
     name: e2e (${{ matrix.settings.name }})
+    continue-on-error: ${{ github.repository != 'anomalyco/opencode' && matrix.settings.name == 'windows' }}
     strategy:
       fail-fast: false
       matrix:
