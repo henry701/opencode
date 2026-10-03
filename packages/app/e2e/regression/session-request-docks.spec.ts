@@ -5,6 +5,7 @@ import { installSseTransport } from "../utils/sse-transport"
 import { expectSessionTitle } from "../utils/waits"
 
 const directory = "C:/OpenCode/RequestDocks"
+const server = `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`
 const projectID = "proj_request_docks"
 const sessionID = "ses_request_docks"
 const title = "Request dock regression"
@@ -29,7 +30,7 @@ test("shows a pending question dock", async ({ page }) => {
     ],
   })
 
-  await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
+  await page.goto(`/server/${base64Encode(server)}/session/${sessionID}`)
   await expectSessionTitle(page, title)
 
   const question = page.locator('[data-component="dock-prompt"][data-kind="question"]')
@@ -87,7 +88,7 @@ test("shows a pending permission dock", async ({ page }) => {
     ],
   })
 
-  await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
+  await page.goto(`/server/${base64Encode(server)}/session/${sessionID}`)
   await expectSessionTitle(page, title)
 
   const permission = page.locator('[data-component="dock-prompt"][data-kind="permission"]')
@@ -106,33 +107,31 @@ test("shows a pending permission dock", async ({ page }) => {
 
 test("restores the draft caret before typing after a request dock closes", async ({ page }) => {
   const transport = await installSseTransport(page, {
-    server: `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`,
+    server,
     path: "/api/event",
     retry: 20,
   })
   await mockServer(page, { questions: [] })
-  await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
+  await page.goto(`/server/${base64Encode(server)}/session/${sessionID}`)
   await transport.waitForConnection()
   await expectSessionTitle(page, title)
 
-  const editor = page.locator('[data-component="prompt-input"][contenteditable="true"]')
+  const editor = page.getByRole("textbox", { name: "Prompt", exact: true })
+  const caret = () =>
+    editor.evaluate((element) => {
+      const selection = window.getSelection()
+      if (!selection?.rangeCount || !element.contains(selection.anchorNode)) return -1
+      const range = selection.getRangeAt(0).cloneRange()
+      range.selectNodeContents(element)
+      range.setEnd(selection.anchorNode!, selection.anchorOffset)
+      return range.toString().length
+    })
   const draft = "keep the caret at the end"
   await editor.fill(draft)
-  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+  await expect.poll(caret).toBe(draft.length)
   for (let index = 0; index < 4; index++) await page.keyboard.press("ArrowLeft")
   const cursor = draft.length - 4
-  await expect
-    .poll(() =>
-      editor.evaluate((element) => {
-        const selection = window.getSelection()
-        if (!selection?.rangeCount || !element.contains(selection.anchorNode)) return -1
-        const range = selection.getRangeAt(0).cloneRange()
-        range.selectNodeContents(element)
-        range.setEnd(selection.anchorNode!, selection.anchorOffset)
-        return range.toString().length
-      }),
-    )
-    .toBe(cursor)
+  await expect.poll(caret).toBe(cursor)
   await transport.send({
     id: "evt_question_caret",
     created: Date.now(),
