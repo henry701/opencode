@@ -17,8 +17,8 @@ export interface Interface {
   readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   /** Holds automatic queued-input promotion for this process. Steers remain eligible. */
   readonly pauseQueueDrain: (sessionID: SessionSchema.ID) => Effect.Effect<void>
-  /** Releases a queue hold and wakes eligible work. */
-  readonly resumeQueueDrain: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  /** Releases a queue hold; queue editors pass false to avoid starting idle work. */
+  readonly resumeQueueDrain: (sessionID: SessionSchema.ID, wake?: boolean) => Effect.Effect<void>
   /** Reads process-local queue hold state. */
   readonly queueDrainPaused: (sessionID: SessionSchema.ID) => Effect.Effect<boolean>
 }

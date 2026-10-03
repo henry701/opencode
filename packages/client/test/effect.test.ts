@@ -258,3 +258,19 @@ const modelSwitchedEvent = {
     model: { id: "claude", providerID: "anthropic" },
   },
 }
+
+for (const wake of [undefined, false, true]) {
+  test(`Effect queue drain release serializes wake=${wake}`, async () => {
+    const httpClient = HttpClient.make((request) => {
+      expect(request.url).toBe("http://localhost:3000/api/session/ses_test/queue/drain-resume")
+      expect(Object.fromEntries(request.urlParams.params)).toEqual(wake === undefined ? {} : { wake: String(wake) })
+      expect(request.method).toBe("POST")
+      expect(request.body._tag).toBe("Empty")
+      return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status: 204 })))
+    })
+    await Effect.gen(function* () {
+      const client = yield* OpenCode.make({ baseUrl: "http://localhost:3000" })
+      yield* client.sessions.queueDrainResume({ sessionID: Session.ID.make("ses_test"), wake })
+    }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
+  })
+}

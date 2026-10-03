@@ -214,7 +214,7 @@ export interface Interface {
       payload?: SessionInputPayload.Payload
     }) => Effect.Effect<SessionInput.Admitted, NotFoundError | QueueItemNotFoundError>
     readonly pauseDrain: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
-    readonly resumeDrain: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
+    readonly resumeDrain: (sessionID: SessionSchema.ID, wake?: boolean) => Effect.Effect<void, NotFoundError>
   }
   readonly shell: (input: {
     id?: EventV2.ID
@@ -675,9 +675,9 @@ const layer = Layer.effect(
           yield* result.get(sessionID)
           yield* execution.pauseQueueDrain(sessionID)
         }),
-        resumeDrain: Effect.fn("V2Session.queue.resumeDrain")(function* (sessionID) {
+        resumeDrain: Effect.fn("V2Session.queue.resumeDrain")(function* (sessionID, wake) {
           yield* result.get(sessionID)
-          yield* execution.resumeQueueDrain(sessionID)
+          yield* execution.resumeQueueDrain(sessionID, wake)
         }),
       },
       command: Effect.fn("V2Session.command")(function* (input) {

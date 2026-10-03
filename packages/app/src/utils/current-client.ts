@@ -6,6 +6,7 @@ export type {
   SessionsEventsOutput,
   SessionsGetOutput,
   SessionsPromptInput,
+  SessionsQueueDrainResumeInput,
   SessionsQueueEnqueueInput,
   SessionsQueueEnqueueOutput,
   SessionsQueueListOutput,

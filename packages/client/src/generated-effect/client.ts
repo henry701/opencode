@@ -224,9 +224,14 @@ const Endpoint3_14 = (raw: RawClient["server.session"]) => (input: Endpoint3_14I
   raw["session.queueDrainPause"]({ params: { sessionID: input["sessionID"] } }).pipe(Effect.mapError(mapClientError))
 
 type Endpoint3_15Request = Parameters<RawClient["server.session"]["session.queueDrainResume"]>[0]
-type Endpoint3_15Input = { readonly sessionID: Endpoint3_15Request["params"]["sessionID"] }
+type Endpoint3_15Input = {
+  readonly sessionID: Endpoint3_15Request["params"]["sessionID"]
+  readonly wake?: Endpoint3_15Request["query"]["wake"]
+}
 const Endpoint3_15 = (raw: RawClient["server.session"]) => (input: Endpoint3_15Input) =>
-  raw["session.queueDrainResume"]({ params: { sessionID: input["sessionID"] } }).pipe(Effect.mapError(mapClientError))
+  raw["session.queueDrainResume"]({ params: { sessionID: input["sessionID"] }, query: { wake: input["wake"] } }).pipe(
+    Effect.mapError(mapClientError),
+  )
 
 type Endpoint3_16Request = Parameters<RawClient["server.session"]["session.queueGet"]>[0]
 type Endpoint3_16Input = {

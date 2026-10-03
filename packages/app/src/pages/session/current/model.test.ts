@@ -247,7 +247,9 @@ describe("current session model", () => {
   test("rehydrates stopped steering from the snapshot without marking inference busy", async () => {
     const page = {
       ...messages([], undefined, 5),
-      pending: messages([{ id: "msg_steer", text: "admitted before reload", created: 2 }]).data,
+      pending: messages([{ id: "msg_steer", text: "admitted before reload", created: 2 }]).data.filter(
+        (message) => message.type === "user",
+      ),
     }
     const port = makePort({ pages: [page] })
     await new Promise<void>((resolve, reject) => {

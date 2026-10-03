@@ -124,7 +124,14 @@ test("sends queued follow-ups with an explicit JSON body", async ({ page }) => {
   })
 })
 
-test("Enter saves a queued message edit without sending it", async ({ page }) => {
+test("Enter saves a stopped queued message edit without waking inference", async ({ page }) => {
+  const releases: string[] = []
+  page.on("request", (request) => {
+    const url = new URL(request.url())
+    if (url.pathname === `/api/session/${sessionID}/queue/drain-resume` && request.method() === "POST") {
+      releases.push(url.searchParams.get("wake") ?? "default")
+    }
+  })
   const updates: Array<{ sessionID: string; queueID: string; raw: string | null; body: unknown }> = []
   const sends: unknown[] = []
   const prompts: unknown[] = []
@@ -151,7 +158,7 @@ test("Enter saves a queued message edit without sending it", async ({ page }) =>
       default: model,
     },
     sessions: [session],
-    status: { [sessionID]: { type: "busy" } },
+    status: { [sessionID]: { type: "idle" } },
     queue: { [sessionID]: [{ id: "msg_queue_edit", text: "queued draft" }] },
     currentPageMessages: () => ({ items: [], throughSeq: 0 }),
     onQueueUpdate: (input) => updates.push(input),
@@ -179,6 +186,7 @@ test("Enter saves a queued message edit without sending it", async ({ page }) =>
   await expect.poll(() => updates.length).toBe(1)
   expect(updates[0]).toMatchObject({ sessionID, queueID: "msg_queue_edit" })
   expect(updates[0]?.raw).toContain("edited queued draft")
+  await expect.poll(() => releases).toEqual(["false"])
   expect(sends).toHaveLength(0)
   expect(prompts).toHaveLength(0)
 })

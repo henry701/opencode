@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test"
+import { base64Encode } from "@opencode-ai/core/util/encode"
 import { mockOpenCodeServer } from "../utils/mock-server"
 import { installSseTransport } from "../utils/sse-transport"
 import { expectSessionTitle } from "../utils/waits"
@@ -7,6 +8,7 @@ const directory = "C:/OpenCode/ReviewTerminalStacked"
 const projectID = "proj_review_terminal_stacked"
 const sessionID = "ses_review_terminal_stacked"
 const title = "Review terminal stacked"
+const server = `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`
 const branchDiffs = [
   fileDiff(".github/actions/setup-bun/action.yml", 7),
   ...Array.from({ length: 2_739 }, (_, index) =>
@@ -21,7 +23,7 @@ const branchDiffs = [
 test("keeps the review tree and terminal sized when both panels are open", async ({ page }) => {
   test.setTimeout(120_000)
   const transport = await installSseTransport(page, {
-    server: `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`,
+    server,
     path: `/api/session/${sessionID}/event`,
   })
   const sessionStatus = { [sessionID]: { type: "idle" as "busy" | "idle" } }
@@ -151,7 +153,7 @@ test("keeps the review tree and terminal sized when both panels are open", async
       }),
     }),
   )
-  await page.routeWebSocket("**/pty/pty_review_terminal/connect", () => undefined)
+  await page.routeWebSocket(new RegExp("/api/pty/pty_review_terminal/connect"), () => undefined)
   await page.addInitScript(() => {
     localStorage.setItem("settings.v3", JSON.stringify({ general: { newLayoutDesigns: true } }))
     localStorage.setItem(
@@ -160,7 +162,7 @@ test("keeps the review tree and terminal sized when both panels are open", async
     )
   })
 
-  await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
+  await page.goto(`/server/${base64Encode(server)}/session/${sessionID}`)
   await expectSessionTitle(page, title)
   await transport.waitForConnection()
   await expect(page.locator("#review-panel")).toBeVisible()
@@ -294,10 +296,6 @@ async function expectStackGeometry(page: Page) {
   })
   expect(Math.abs(geometry.review - geometry.reviewParent)).toBeLessThanOrEqual(1)
   expect(Math.abs(geometry.terminal - geometry.terminalParent)).toBeLessThanOrEqual(1)
-}
-
-function base64Encode(value: string) {
-  return Buffer.from(value, "utf8").toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "")
 }
 
 function statusEvent(type: "busy" | "idle") {

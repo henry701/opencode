@@ -152,8 +152,8 @@ describe("session durable queue save", () => {
     expect(calls[0]).not.toHaveProperty("resume")
   })
 
-  test("updates an edited item before resuming the server drain", async () => {
-    const calls: Array<SessionsQueueUpdateInput | { sessionID: string; resume: true }> = []
+  test("updates an edited item and releases its queue hold without waking inference", async () => {
+    const calls: Array<SessionsQueueUpdateInput | { sessionID: string; wake?: boolean }> = []
 
     await saveQueuedFollowup({
       client: {
@@ -164,7 +164,7 @@ describe("session durable queue save", () => {
           calls.push(input)
         },
         queueDrainResume: async (input) => {
-          calls.push({ ...input, resume: true })
+          calls.push(input)
         },
       },
       draft: draft("msg_queue"),
@@ -172,7 +172,7 @@ describe("session durable queue save", () => {
 
     expect(calls).toEqual([
       expect.objectContaining({ sessionID: "ses_test", messageID: "msg_queue" }),
-      { sessionID: "ses_test", resume: true },
+      { sessionID: "ses_test", wake: false },
     ])
   })
 

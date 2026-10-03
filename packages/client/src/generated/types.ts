@@ -2252,7 +2252,10 @@ export type SessionsQueueDrainPauseInput = { readonly sessionID: { readonly sess
 
 export type SessionsQueueDrainPauseOutput = void
 
-export type SessionsQueueDrainResumeInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+export type SessionsQueueDrainResumeInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly wake?: { readonly wake?: boolean | undefined }["wake"]
+}
 
 export type SessionsQueueDrainResumeOutput = void
 

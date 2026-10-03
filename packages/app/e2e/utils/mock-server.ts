@@ -303,6 +303,9 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
       })
       return json(route, true)
     }
+    if (/^\/api\/session\/[^/]+\/queue\/drain-(pause|resume)$/.test(path) && route.request().method() === "POST") {
+      return route.fulfill({ status: 204, headers: { "access-control-allow-origin": "*" } })
+    }
     const queueItemMatch = path.match(/^\/api\/session\/([^/]+)\/queue\/([^/]+)$/)
     if (queueItemMatch && route.request().method() === "GET") {
       const item = config.queue?.[queueItemMatch[1]!]?.find((entry) => entry.id === queueItemMatch[2])
@@ -320,7 +323,7 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
         raw,
         body: raw ? JSON.parse(raw) : undefined,
       })
-      return json(route, true)
+      return route.fulfill({ status: 204, headers: { "access-control-allow-origin": "*" } })
     }
     if (/^\/api\/session\/[^/]+\/shell$/.test(path) && route.request().method() === "POST") {
       return route.fulfill({ status: 204, headers: { "access-control-allow-origin": "*" } })
