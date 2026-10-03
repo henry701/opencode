@@ -261,3 +261,20 @@ const modelSwitchedEvent = {
     model: { id: "claude", providerID: "anthropic" },
   },
 }
+
+for (const wake of [undefined, false, true]) {
+  test(`queue drain release serializes wake=${wake} without a request body`, async () => {
+    const client = OpenCode.make({
+      baseUrl: "http://localhost:3000",
+      fetch: async (input, init) => {
+        const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url)
+        expect(url.pathname).toBe("/api/session/ses_test/queue/drain-resume")
+        expect(url.searchParams.get("wake")).toBe(wake === undefined ? null : String(wake))
+        expect(init?.method).toBe("POST")
+        expect(init?.body).toBeUndefined()
+        return new Response(null, { status: 204 })
+      },
+    })
+    await client.sessions.queueDrainResume({ sessionID: "ses_test", wake })
+  })
+}

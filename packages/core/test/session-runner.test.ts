@@ -32,7 +32,9 @@ import { SessionMessage } from "@opencode-ai/core/session/message"
 import { Prompt } from "@opencode-ai/core/session/prompt"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
-import { SessionRunCoordinator } from "@opencode-ai/core/session/run-coordinator"
+import { SessionExecutionLocal } from "@opencode-ai/core/session/execution/local"
+import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
+import type { LocationError, LocationServices } from "@opencode-ai/core/location-services"
 import { SessionRunner } from "@opencode-ai/core/session/runner"
 import * as SessionRunnerLLM from "@opencode-ai/core/session/runner/llm"
 import { SessionRunnerModel } from "@opencode-ai/core/session/runner/model"
@@ -58,7 +60,7 @@ import { ReferenceGuidance } from "@opencode-ai/core/reference/guidance"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { Location } from "@opencode-ai/core/location"
 import { ProviderV2 } from "@opencode-ai/core/provider"
-import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
+import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, LayerMap, Schema, Stream } from "effect"
 import { asc, eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
@@ -268,39 +270,12 @@ const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [PermissionV2.node, permission],
   [Config.node, config],
 ])
-const queueDrainsPaused = new Set<SessionV2.ID>()
-const execution = Layer.effect(
-  SessionExecution.Service,
-  Effect.gen(function* () {
-    const sessionRunner = yield* SessionRunner.Service
-    let resume: SessionExecution.Interface["resume"]
-    let interrupt: SessionExecution.Interface["interrupt"]
-    const coordinator = yield* SessionRunCoordinator.make<SessionV2.ID, SessionRunner.RunError>({
-      drain: (sessionID, force) =>
-        sessionRunner.run({
-          sessionID,
-          force,
-          execution: {
-            resume,
-            interrupt,
-            queueDrainPaused: (targetID) => Effect.sync(() => queueDrainsPaused.has(targetID)),
-          },
-        }),
-    })
-    resume = coordinator.run
-    interrupt = coordinator.interrupt
-    return SessionExecution.Service.of({
-      active: coordinator.active,
-      resume,
-      wake: coordinator.wake,
-      interrupt,
-      pauseQueueDrain: (sessionID) => Effect.sync(() => queueDrainsPaused.add(sessionID)),
-      resumeQueueDrain: (sessionID) =>
-        Effect.sync(() => queueDrainsPaused.delete(sessionID)).pipe(Effect.andThen(coordinator.wake(sessionID))),
-      queueDrainPaused: (sessionID) => Effect.sync(() => queueDrainsPaused.has(sessionID)),
-    })
-  }),
-).pipe(Layer.provide(runnerLayer))
+const locations = Layer.effect(
+  LocationServiceMap.Service,
+  LayerMap.make(() => runnerLayer) as unknown as Effect.Effect<
+    LayerMap.LayerMap<Location.Ref, LocationServices, LocationError>
+  >,
+)
 const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
@@ -334,7 +309,8 @@ const it = testEffect(
       [SkillGuidance.node, skillGuidance],
       [ReferenceGuidance.node, referenceGuidance],
       [Snapshot.node, Snapshot.noopLayer],
-      [SessionExecution.node, execution],
+      [SessionExecution.node, SessionExecutionLocal.node],
+      [LocationServiceMap.node, locations],
       [Config.node, config],
     ],
   ),
@@ -380,7 +356,6 @@ const setup = Effect.gen(function* () {
   toolExecutionsReady = 5
   activeToolExecutions = 0
   maxActiveToolExecutions = 0
-  queueDrainsPaused.clear()
   yield* db
     .insert(ProjectTable)
     .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
@@ -677,6 +652,7 @@ describe("SessionRunnerLLM", () => {
       response = []
 
       const message = yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Run automatically" }) })
+      while (requests.length === 0) yield* Effect.yieldNow
 
       expect(requests).toHaveLength(1)
       expect(yield* session.messages({ sessionID })).toMatchObject([
@@ -736,6 +712,7 @@ describe("SessionRunnerLLM", () => {
 
       systemUnavailable = false
       yield* session.prompt({ id: messageID, sessionID, prompt: Prompt.make({ text: "First" }) })
+      while (requests.length === 0) yield* Effect.yieldNow
 
       expect(requests).toHaveLength(1)
       expect(requests[0]?.messages.map((message) => message.role)).toEqual(["user"])
@@ -2789,7 +2766,7 @@ describe("SessionRunnerLLM", () => {
       streamFailure = undefined
       streamGate = undefined
       streamStarted = undefined
-      yield* Effect.yieldNow
+      while (requests.length < 2) yield* Effect.yieldNow
 
       expect(requests).toHaveLength(2)
       expect(userTexts(requests[1]!)).toEqual(["Start working", "Recover with this"])
@@ -2968,7 +2945,7 @@ describe("SessionRunnerLLM", () => {
 
       requests.length = 0
       yield* (yield* SessionExecution.Service).wake(sessionID)
-      yield* Effect.yieldNow
+      while (requests.length === 0) yield* Effect.yieldNow
 
       expect(requests).toHaveLength(1)
       expect(userTexts(requests[0]!)).toEqual(["Wait in queue"])
@@ -3005,6 +2982,55 @@ describe("SessionRunnerLLM", () => {
       expect(requests).toHaveLength(1)
       expect(userTexts(requests[0]!)).toEqual(["Wait for drain resume"])
       expect(yield* SessionInput.hasPending((yield* Database.Service).db, sessionID, "queue")).toBe(false)
+    }),
+  )
+
+  it.effect("releases an idle queue edit hold without starting queued or admitted steering input", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const execution = yield* SessionExecution.Service
+      const database = yield* Database.Service
+      response = [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
+      ]
+      requests.length = 0
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Admitted steer" }), resume: false })
+      const queued = yield* session.queue.enqueue({
+        sessionID,
+        payload: SessionInputPayload.Payload.make({
+          version: 1,
+          agent: "build",
+          model: {
+            providerID: SessionInputPayload.ProviderID.make("fake"),
+            modelID: SessionInputPayload.ModelID.make("fake-model"),
+          },
+          parts: [{ type: "text", text: "Queued draft" }],
+        }),
+      })
+      yield* session.queue.pauseDrain(sessionID)
+      yield* session.queue.update({
+        sessionID,
+        messageID: queued.id,
+        payload: SessionInputPayload.Payload.make({
+          ...queued.payload,
+          parts: [{ type: "text", text: "Edited queued draft" }],
+        }),
+      })
+      yield* session.queue.resumeDrain(sessionID, false)
+
+      expect(yield* execution.queueDrainPaused(sessionID)).toBe(false)
+      expect((yield* execution.active).has(sessionID)).toBe(false)
+      expect(requests).toHaveLength(0)
+      expect(yield* SessionInput.hasPending(database.db, sessionID, "steer")).toBe(true)
+      expect(yield* SessionInput.hasPending(database.db, sessionID, "queue")).toBe(true)
+
+      yield* session.resume(sessionID)
+      expect(requests).toHaveLength(2)
+      expect(userTexts(requests[0]!)).toEqual(["Admitted steer"])
+      expect(userTexts(requests[1]!)).toEqual(["Admitted steer", "Edited queued draft"])
     }),
   )
 

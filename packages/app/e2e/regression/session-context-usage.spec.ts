@@ -43,6 +43,7 @@ for (const newLayoutDesigns of [false, true]) {
       if (!newLayoutDesigns) await page.clock.setFixedTime(new Date(2026, 8, 1))
       await page.addInitScript((newLayoutDesigns) => {
         localStorage.setItem("settings.v3", JSON.stringify({ general: { newLayoutDesigns } }))
+        localStorage.setItem("app-version.v1", JSON.stringify({ version: "1.17.20" }))
       }, newLayoutDesigns)
       const reverted = mode === "rollback"
       let settled = mode !== "live"
@@ -91,8 +92,10 @@ for (const newLayoutDesigns of [false, true]) {
         }),
       })
       await page.goto(`/server/${base64Encode(server)}/session/${sessionID}`)
-      await expectSessionTitle(page, "Context usage regression")
-      const usage = page.getByRole("button", { name: "View context usage", exact: true }).first()
+      if (newLayoutDesigns) await expectSessionTitle(page, "Context usage regression")
+      else await expect(page.getByRole("heading", { name: "Context usage regression", exact: true })).toBeVisible()
+      const usage = page.getByRole("button", { name: "View context usage", exact: true })
+      await expect(usage).toHaveAttribute("data-component", newLayoutDesigns ? "icon-button-v2" : "button")
       const percentage = reverted ? 25 : 50
       const expectPercentage = (value: number) =>
         expect

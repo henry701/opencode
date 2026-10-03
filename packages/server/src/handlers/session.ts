@@ -402,7 +402,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.queueDrainResume",
         Effect.fn(function* (ctx) {
-          yield* session.queue.resumeDrain(ctx.params.sessionID).pipe(
+          yield* session.queue.resumeDrain(ctx.params.sessionID, ctx.query.wake).pipe(
             Effect.catchTag(
               "Session.NotFoundError",
               (error) =>

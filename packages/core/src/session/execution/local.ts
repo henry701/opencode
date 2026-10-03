@@ -63,8 +63,10 @@ const layer = Layer.effect(
           )
           timer.unref()
         }),
-      resumeQueueDrain: (sessionID) =>
-        Effect.sync(() => queueHolds.delete(sessionID)).pipe(Effect.andThen(coordinator.wake(sessionID))),
+      resumeQueueDrain: (sessionID, wake = true) =>
+        Effect.sync(() => queueHolds.delete(sessionID)).pipe(
+          Effect.andThen(wake ? coordinator.wake(sessionID) : Effect.void),
+        ),
     })
   }),
 )

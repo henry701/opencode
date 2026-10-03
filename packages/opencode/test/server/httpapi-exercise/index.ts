@@ -1240,12 +1240,27 @@ const scenarios: Scenario[] = [
   http.protected
     .post("/api/session/{sessionID}/queue/drain-resume", "v2.session.queue.drain.resume")
     .mutating()
-    .seeded((ctx) => ctx.session({ title: "Current queue resume" }))
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Current queue edit release" })
+        const queued = yield* ctx.queue(session.id, currentPayload("save without starting inference"))
+        return { session, queued }
+      }),
+    )
     .at((ctx) => ({
-      path: route("/api/session/{sessionID}/queue/drain-resume", { sessionID: ctx.state.id }),
+      path: route("/api/session/{sessionID}/queue/drain-resume", { sessionID: ctx.state.session.id }) + "?wake=false",
       headers: ctx.headers(),
     }))
-    .status(204, undefined, "none"),
+    .status(
+      204,
+      (ctx) =>
+        ctx.queueList(ctx.state.session.id).pipe(
+          Effect.tap((queued) =>
+            Effect.sync(() => check(queued[0]?.id === ctx.state.queued.id, "releasing an edit should keep input queued")),
+          ),
+        ),
+      "none",
+    ),
   http.protected
     .get("/api/session/{sessionID}/queue/{messageID}", "v2.session.queue.get")
     .seeded((ctx) =>

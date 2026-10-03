@@ -1202,7 +1202,7 @@ export function Prompt(props: PromptProps) {
 
   async function resumeQueueDrain(sessionID = props.sessionID) {
     if (!sessionID) return
-    await sdk.next.sessions.queueDrainResume({ sessionID }).catch(() => {})
+    await sdk.next.sessions.queueDrainResume({ sessionID, wake: false }).catch(() => {})
   }
 
   function resumeQueueDrainForCurrentEdit() {

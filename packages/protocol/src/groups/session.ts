@@ -331,6 +331,11 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
     .add(
       HttpApiEndpoint.post("session.queueDrainResume", "/api/session/:sessionID/queue/drain-resume", {
         params: { sessionID: Session.ID },
+        query: {
+          wake: Schema.optional(Schema.Boolean).annotate({
+            description: "Wake eligible input after releasing the hold. Defaults to true; queue edits use false.",
+          }),
+        },
         success: HttpApiSchema.NoContent,
         error: SessionNotFoundError,
       })

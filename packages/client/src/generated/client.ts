@@ -539,6 +539,7 @@ export function make(options: ClientOptions) {
           {
             method: "POST",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/queue/drain-resume`,
+            query: { wake: input["wake"] },
             successStatus: 204,
             declaredStatuses: [404, 400, 401],
             empty: true,

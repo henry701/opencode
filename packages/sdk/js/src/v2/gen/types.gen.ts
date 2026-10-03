@@ -12666,7 +12666,9 @@ export type V2SessionQueueDrainResumeData = {
   path: {
     sessionID: string
   }
-  query?: never
+  query?: {
+    wake?: "true" | "false"
+  }
   url: "/api/session/{sessionID}/queue/drain-resume"
 }
 

@@ -1,6 +1,7 @@
 import type {
   SessionsCommandInput,
   SessionsCommandOutput,
+  SessionsQueueDrainResumeInput,
   SessionsQueueEnqueueInput,
   SessionsQueueEnqueueOutput,
   SessionsQueueListOutput,
@@ -20,7 +21,7 @@ type QueueWriter = {
   command?: (input: SessionsCommandInput) => Promise<SessionsCommandOutput>
   queueEnqueue: (input: SessionsQueueEnqueueInput) => Promise<SessionsQueueEnqueueOutput>
   queueUpdate: (input: SessionsQueueUpdateInput) => Promise<void>
-  queueDrainResume: (input: { sessionID: string }) => Promise<void>
+  queueDrainResume: (input: SessionsQueueDrainResumeInput) => Promise<void>
 }
 type QueueItem = Pick<SessionsQueueListOutput[number], "id" | "sessionID" | "payload">
 
@@ -70,7 +71,7 @@ export async function saveQueuedFollowup(input: { client: QueueWriter; draft: Fo
     messageID: input.draft.queueID,
     payload,
   })
-  await input.client.queueDrainResume({ sessionID: input.draft.sessionID })
+  await input.client.queueDrainResume({ sessionID: input.draft.sessionID, wake: false })
 }
 
 function contextItems(parts: QueueItem["payload"]["parts"], directory: string) {
