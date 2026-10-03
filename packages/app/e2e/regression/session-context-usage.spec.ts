@@ -9,6 +9,7 @@ import { event, type TimelineEvent } from "../performance/timeline-stability/fix
 
 const directory = "C:/OpenCode/ContextUsageRegression"
 const sessionID = "ses_context_usage"
+const server = `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`
 const model = { providerID: "opencode", modelID: "test" }
 const messages = [0, 1].flatMap<typeof SessionMessage.Message.Encoded>((index) => [
   {
@@ -46,7 +47,7 @@ for (const newLayoutDesigns of [false, true]) {
       const reverted = mode === "rollback"
       let settled = mode !== "live"
       const transport = await installSseTransport<TimelineEvent>(page, {
-        server: `http://127.0.0.1:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`,
+        server,
         path: `/api/session/${sessionID}/event`,
       })
       await mockOpenCodeServer(page, {
@@ -89,7 +90,7 @@ for (const newLayoutDesigns of [false, true]) {
           throughSeq: 0,
         }),
       })
-      await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
+      await page.goto(`/server/${base64Encode(server)}/session/${sessionID}`)
       await expectSessionTitle(page, "Context usage regression")
       const usage = page.getByRole("button", { name: "View context usage", exact: true }).first()
       const percentage = reverted ? 25 : 50
