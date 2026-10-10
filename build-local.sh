@@ -45,7 +45,12 @@ if [[ "${OPENCODE_LOCAL_NO_RESTART:-}" == "1" || "${OPENCODE_LOCAL_SKIP_RESTART:
   RESTART_SERVICE=0
 fi
 
+source "$REPO_ROOT/script/local-bun.sh"
+use_repo_bun "$REPO_ROOT"
 export PATH="$PATH:$REPO_ROOT/node_modules/.bin"
+cd "$REPO_ROOT"
+
+echo "==> Using Bun $(bun --version) from $(command -v bun)..."
 
 echo "==> Installing dependencies..."
 bun install --minimum-release-age 0 --frozen-lockfile
@@ -68,8 +73,12 @@ echo "==> Smoke test..."
 
 echo "==> Installing to $INSTALL_DIR/$BINARY_NAME..."
 mkdir -p "$INSTALL_DIR"
-cp -f "$BUILT_BIN" "$INSTALL_DIR/$BINARY_NAME"
-chmod +x "$INSTALL_DIR/$BINARY_NAME"
+INSTALL_TMP="$(mktemp "$INSTALL_DIR/.$BINARY_NAME.XXXXXX")"
+trap 'rm -f -- "$INSTALL_TMP"' EXIT
+cp "$BUILT_BIN" "$INSTALL_TMP"
+chmod +x "$INSTALL_TMP"
+mv -f "$INSTALL_TMP" "$INSTALL_DIR/$BINARY_NAME"
+trap - EXIT
 echo "    installed: $("$INSTALL_DIR/$BINARY_NAME" --version)"
 
 SERVICE_FILE="$HOME/.config/systemd/user/$SERVICE_NAME.service"
