@@ -1,55 +1,74 @@
-export * as SessionV2 from "./session"
-export * from "./session/schema"
+export * as Session from "./session.js"
+export * from "./session/schema.js"
 
-import { DateTime, Effect, Layer, Schema, Context, Stream } from "effect"
-import { ListAnchor } from "@opencode-ai/schema/session"
-import { and, asc, desc, eq, gt, like, lt, or, type SQL } from "drizzle-orm"
-import { ProjectV2 } from "./project"
-import { WorkspaceV2 } from "./workspace"
-import { ModelV2 } from "./model"
-import { Location } from "./location"
-import { SessionMessage } from "./session/message"
-import { Prompt } from "./session/prompt"
-import { PromptInput } from "@opencode-ai/schema/prompt-input"
-import { EventV2 } from "./event"
-import { Database } from "./database/database"
-import { SessionProjector } from "./session/projector"
-import { SessionMessageTable, SessionTable } from "./session/sql"
-import { SessionSchema } from "./session/schema"
-import { AbsolutePath, PositiveInt, RelativePath } from "./schema"
-import { AgentV2 } from "./agent"
-import { SessionV1 } from "./v1/session"
-import { InstallationVersion } from "./installation/version"
-import { Slug } from "./util/slug"
-import { ProjectTable } from "./project/sql"
+import { DateTime, Effect, Layer, Context, Option, Stream } from "effect"
+import { LLMClient } from "@opencode/ai/effect"
+import { ListAnchor, ListCursor, ListFilter } from "@opencode/schema/session"
+import { and, desc, eq } from "drizzle-orm"
+import { Project } from "./project.js"
+import { Model } from "@opencode/schema/model"
+import { Location } from "./location.js"
+import type { FileSystem } from "./filesystem.js"
+import { SessionMessage } from "./session/message.js"
+import { PromptInput } from "@opencode/schema/prompt-input"
+import { Bus } from "./bus.js"
+import { Instance } from "./instance/service.js"
+import { Plugin } from "./plugin/service.js"
+import { PluginHooks } from "./plugin/hooks.js"
+import { Database } from "./database/database.js"
+import { SessionProjector } from "./session/projector.js"
+import { SessionMessageTable } from "./session/sql.js"
+import { SessionBlob } from "./session/blob.js"
+import { SessionSchema } from "./session/schema.js"
+import { RelativePath } from "./schema.js"
+import { Agent } from "@opencode/schema/agent"
+import type { Permission } from "@opencode/schema/permission"
+import { App } from "./app.js"
+import { Slug } from "./util/slug.js"
 import path from "path"
-import { fromRow } from "./session/info"
-import { SessionRunner } from "./session/runner/index"
-import { SessionStore } from "./session/store"
-import { SessionExecution } from "./session/execution"
-import { makeGlobalNode } from "./effect/app-node"
-import { LocationServiceMap } from "./location-service-map"
-import { MessageDecodeError } from "./session/error"
-import { SessionEvent } from "./session/event"
-import { SessionInput } from "./session/input"
-import { Snapshot } from "./snapshot"
-import { SessionRevert } from "./session/revert"
-import { Revert } from "@opencode-ai/schema/revert"
-import { FSUtil } from "./fs-util"
-import { SessionDurable } from "@opencode-ai/schema/durable-event-manifest"
-import { SessionInputPayload } from "@opencode-ai/schema/session-input-payload"
-import { Config } from "./config"
-import { Shell } from "./shell"
-import { spawn, type ChildProcess } from "node:child_process"
-import { env, platform } from "node:process"
-import { CommandV2 } from "./command"
-import { homedir } from "node:os"
-import { stat } from "node:fs/promises"
-import { pathToFileURL } from "node:url"
-import { PermissionV1 } from "./v1/permission"
-
-export const RevertState = Revert.State
-export type RevertState = Revert.State
+import { SessionRunner } from "./session/runner/index.js"
+import { SessionStore } from "./session/store.js"
+import { SessionExecution } from "./session/execution.js"
+import {
+  AttachmentError,
+  BusyError,
+  CompactionConflictError,
+  ForkEmptyError,
+  InboxConflictError,
+  InvalidListCursorError,
+  MessageDecodeError,
+  MessageNotFoundError,
+  NotFoundError,
+  PromptConflictError,
+  SkillNotFoundError,
+  SyntheticConflictError,
+} from "./session/error.js"
+import { Node } from "@opencode/util/effect/app-node"
+import { LayerNode } from "@opencode/util/effect/layer-node"
+import { SessionEvent } from "./session/event.js"
+import { SessionInbox } from "./session/inbox.js"
+import { InstructionState } from "./session/instruction-state.js"
+import { SessionGenerate } from "./session/generate.js"
+import { SessionCommand } from "./session/command.js"
+import {
+  SessionMove,
+  DestinationNotFoundError,
+  DestinationNotDirectoryError,
+  DestinationUnavailableError,
+} from "./session/move.js"
+import { SessionModelTransport } from "./session/model-transport.js"
+import { llmClient } from "./effect/app-node-platform.js"
+import { Snapshot } from "./snapshot.js"
+import { Session } from "./session/session.js"
+import { SessionDiff, TurnRangeError } from "./session/diff.js"
+import { LocationServiceMap } from "./location-service-map.js"
+import { FSUtil } from "@opencode/util/fs-util"
+import type { EventLog } from "@opencode/schema/event-log"
+import type { FileDiff } from "@opencode/schema/file-diff"
+import { Job } from "./job.js"
+import type { Command } from "./command.js"
+import { SessionEnvironment } from "./session/environment.js"
+import { InstructionEntry } from "./session/instruction-entry.js"
 
 // get project -> project.locations
 //
@@ -60,310 +79,247 @@ export type RevertState = Revert.State
 //   - by subpath
 // - by workspace (home is special)
 
-export { ListAnchor }
+export { ListAnchor, ListCursor }
 
-const ListInputBase = {
-  workspaceID: WorkspaceV2.ID.pipe(Schema.optional),
-  search: Schema.String.pipe(Schema.optional),
-  limit: PositiveInt.pipe(Schema.optional),
-  order: Schema.Literals(["asc", "desc"]).pipe(Schema.optional),
-  anchor: ListAnchor.pipe(Schema.optional),
-}
+export const ListInput = SessionStore.ListInput
+export type ListInput = SessionStore.ListInput
 
-const ListDirectoryInput = Schema.Struct({
-  ...ListInputBase,
-  directory: AbsolutePath,
-})
+const DefaultListLimit = 50
 
-const ListProjectInput = Schema.Struct({
-  ...ListInputBase,
-  project: ProjectV2.ID,
-  subpath: RelativePath.pipe(Schema.optional),
-})
-
-const ListAllInput = Schema.Struct(ListInputBase)
-
-export const ListInput = Schema.Union([ListDirectoryInput, ListProjectInput, ListAllInput])
-export type ListInput = typeof ListInput.Type
-
-type CreateInput = {
+type CreateBaseInput = {
   id?: SessionSchema.ID
-  parentID?: SessionSchema.ID
   title?: string
-  metadata?: SessionV1.SessionInfo["metadata"]
-  permission?: PermissionV1.Ruleset
-  agent?: AgentV2.ID
-  model?: ModelV2.Ref
-  location: Location.Ref
+  agent?: Agent.ID
+  model?: Model.Ref
+  metadata?: SessionSchema.Metadata
+  permissions?: Permission.Ruleset
 }
+type CreateInput = CreateBaseInput &
+  ({ location: Location.Ref; parentID?: never } | { parentID: SessionSchema.ID; location?: never })
 
-type CompactInput = {
+type CompactInput = Parameters<Session.Handle["compact"]>[0] & { sessionID: SessionSchema.ID }
+
+type ForkInput = {
   sessionID: SessionSchema.ID
-  prompt?: Prompt
+  before?: SessionMessage.ID
 }
 
-export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Session.NotFoundError", {
-  sessionID: SessionSchema.ID,
-}) {}
+export {
+  AttachmentError,
+  BusyError,
+  CompactionConflictError,
+  ForkEmptyError,
+  InboxConflictError,
+  InvalidListCursorError,
+  MessageDecodeError,
+  MessageNotFoundError,
+  NotFoundError,
+  PromptConflictError,
+  SkillNotFoundError,
+  SyntheticConflictError,
+}
+type InboxItemRef = { readonly sessionID: SessionSchema.ID; readonly inboxID: SessionMessage.ID }
 
-export class OperationUnavailableError extends Schema.TaggedErrorClass<OperationUnavailableError>()(
-  "Session.OperationUnavailableError",
-  {
-    operation: Schema.Literals(["move", "shell", "skill", "command", "switchAgent", "compact", "wait"]),
-  },
-) {}
-
-export { ContextSnapshotDecodeError, MessageDecodeError } from "./session/error"
-
-export class PromptConflictError extends Schema.TaggedErrorClass<PromptConflictError>()("Session.PromptConflictError", {
-  sessionID: SessionSchema.ID,
-  messageID: SessionMessage.ID,
-}) {}
-export class QueueItemNotFoundError extends Schema.TaggedErrorClass<QueueItemNotFoundError>()(
-  "Session.QueueItemNotFoundError",
-  {
-    sessionID: SessionSchema.ID,
-    messageID: SessionMessage.ID,
-  },
-) {}
-export const MessageNotFoundError = SessionRevert.MessageNotFoundError
-export type MessageNotFoundError = SessionRevert.MessageNotFoundError
-
-export type Error =
-  | NotFoundError
-  | MessageDecodeError
-  | OperationUnavailableError
-  | PromptConflictError
-  | QueueItemNotFoundError
+export { DestinationNotFoundError, DestinationNotDirectoryError, DestinationUnavailableError }
+export { TurnRangeError }
 
 export interface Interface {
-  readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
-  readonly create: (input: CreateInput) => Effect.Effect<SessionSchema.Info>
-  readonly update: (input: {
-    sessionID: SessionSchema.ID
-    title?: string
-  }) => Effect.Effect<SessionSchema.Info, NotFoundError>
-  readonly fork: (input: {
-    sessionID: SessionSchema.ID
-    messageID?: SessionMessage.ID
-  }) => Effect.Effect<SessionSchema.Info, NotFoundError | MessageDecodeError>
+  /** A cursor carries the filters of the request that produced it, so filters passed with a cursor are ignored. */
+  readonly list: (input?: ListFilter & { readonly limit?: number; readonly cursor?: ListCursor }) => Effect.Effect<
+    {
+      readonly data: SessionSchema.Info[]
+      readonly cursor: { readonly previous?: ListCursor; readonly next?: ListCursor }
+    },
+    InvalidListCursorError
+  >
+  readonly create: (input: CreateInput) => Effect.Effect<SessionSchema.Info, NotFoundError>
+  readonly fork: (
+    input: ForkInput,
+  ) => Effect.Effect<SessionSchema.Info, NotFoundError | MessageNotFoundError | ForkEmptyError>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
-  readonly messages: (input: {
-    sessionID: SessionSchema.ID
-    limit?: number
-    order?: "asc" | "desc"
-    cursor?: {
-      id: SessionMessage.ID
-      direction: "previous" | "next"
-    }
-  }) => Effect.Effect<SessionMessage.Message[], NotFoundError | MessageDecodeError>
+  readonly environment: (input: {
+    readonly sessionID: SessionSchema.ID
+    readonly variables?: SessionEnvironment.Variables
+  }) => Effect.Effect<SessionEnvironment.Variables | undefined, NotFoundError>
+  readonly view: (input: { sessionID: SessionSchema.ID; idle: number }) => Effect.Effect<void, NotFoundError>
+  readonly remove: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
+  readonly messages: (
+    input: SessionStore.MessagesInput,
+  ) => Effect.Effect<SessionMessage.Info[], NotFoundError | MessageDecodeError>
   readonly message: (input: {
     sessionID: SessionSchema.ID
     messageID: SessionMessage.ID
-  }) => Effect.Effect<SessionMessage.Message | undefined>
-  readonly latestSequence: (sessionID: SessionSchema.ID) => Effect.Effect<number, NotFoundError>
+  }) => Effect.Effect<SessionMessage.Info | undefined>
+  /** Experimental: {@link Interface.messages} with files stored in `blob` left as `media:` refs when the session's location enables `experimental.media_blob`. */
+  readonly messagesWithRefs: (
+    input: SessionStore.MessagesInput,
+  ) => Effect.Effect<SessionMessage.MediaInfo[], NotFoundError | MessageDecodeError>
+  /** Experimental: {@link Interface.message} with files stored in `blob` left as `media:` refs when the session's location enables `experimental.media_blob`. */
+  readonly messageWithRefs: (input: {
+    sessionID: SessionSchema.ID
+    messageID: SessionMessage.ID
+  }) => Effect.Effect<SessionMessage.MediaInfo | undefined>
   readonly context: (
     sessionID: SessionSchema.ID,
-  ) => Effect.Effect<SessionMessage.Message[], NotFoundError | MessageDecodeError>
-  readonly events: (input: {
+  ) => Effect.Effect<SessionMessage.Info[], NotFoundError | MessageDecodeError>
+  /** Structured diffs of the files changed by a turn or range of turns; see `SessionDiff.turn`. */
+  readonly diff: (input: {
+    readonly sessionID: SessionSchema.ID
+    readonly from?: SessionMessage.ID
+    readonly to?: SessionMessage.ID
+    readonly context?: number
+  }) => Effect.Effect<
+    readonly FileDiff.Info[],
+    NotFoundError | MessageNotFoundError | TurnRangeError | Snapshot.Error | FileSystem.DirectoryNotFoundError
+  >
+  /**
+   * Durable admitted session work not yet visible in projected history,
+   * ordered by admission. Includes unpromoted user and synthetic inputs and
+   * unhandled compaction barriers.
+   */
+  readonly inbox: (sessionID: SessionSchema.ID) => Effect.Effect<SessionInbox.Info[], NotFoundError>
+  /** Experimental: {@link Interface.inbox} with files stored in `blob` left as `media:` refs when the session's location enables `experimental.media_blob`. */
+  readonly inboxWithRefs: (sessionID: SessionSchema.ID) => Effect.Effect<SessionInbox.MediaInfo[], NotFoundError>
+  readonly cancelInbox: (input: InboxItemRef) => Effect.Effect<void, NotFoundError | InboxConflictError>
+  readonly steerInbox: (input: InboxItemRef) => Effect.Effect<void, NotFoundError | InboxConflictError>
+  readonly queueInbox: (input: InboxItemRef) => Effect.Effect<void, NotFoundError | InboxConflictError>
+  /**
+   * Durable, ordered session log read. Replays durable session bus after
+   * the exclusive `after` cursor, emits a `Synced` marker at the captured
+   * replay watermark, then continues live when `follow` is set.
+   * The marker's seq may exceed the last emitted event because other durable
+   * bus share the aggregate's sequence space.
+   */
+  readonly log: (input: {
     sessionID: SessionSchema.ID
     after?: number
-  }) => Stream.Stream<SessionEvent.DurableEvent, NotFoundError>
-  readonly history: (input: {
+    follow?: boolean
+  }) => Stream.Stream<SessionEvent.DurableEvent | EventLog.Synced, NotFoundError>
+  readonly switchAgent: (input: { sessionID: SessionSchema.ID; agent: Agent.ID }) => Effect.Effect<void, NotFoundError>
+  readonly switchModel: (input: { sessionID: SessionSchema.ID; model: Model.Ref }) => Effect.Effect<void, NotFoundError>
+  readonly rename: (input: { sessionID: SessionSchema.ID; title: string }) => Effect.Effect<void, NotFoundError>
+  readonly archive: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
+  readonly unarchive: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
+  readonly setMetadata: (input: {
     sessionID: SessionSchema.ID
-    after?: number
-    limit: number
-  }) => Effect.Effect<{ events: ReadonlyArray<SessionEvent.DurableEvent>; hasMore: boolean }, NotFoundError>
-  readonly switchAgent: (input: { sessionID: SessionSchema.ID; agent: string }) => Effect.Effect<void, NotFoundError>
-  readonly switchModel: (input: {
-    sessionID: SessionSchema.ID
-    model: ModelV2.Ref
+    metadata: SessionSchema.Metadata
   }) => Effect.Effect<void, NotFoundError>
+  readonly setPermissions: (input: {
+    sessionID: SessionSchema.ID
+    permissions: Permission.Ruleset
+  }) => Effect.Effect<void, NotFoundError>
+  readonly move: SessionMove.Interface["move"]
   readonly prompt: (
-    input: {
-      id?: SessionMessage.ID
-      sessionID: SessionSchema.ID
-      delivery?: SessionInput.Delivery
-      resume?: boolean
-    } & ({ prompt: PromptInput.Prompt; payload?: never } | { payload: SessionInputPayload.Payload; prompt?: never }),
-  ) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError>
-  readonly queue: {
-    readonly list: (sessionID: SessionSchema.ID) => Effect.Effect<SessionInput.Queued[], NotFoundError>
-    readonly get: (input: {
-      sessionID: SessionSchema.ID
-      messageID: SessionMessage.ID
-    }) => Effect.Effect<SessionInput.Queued, NotFoundError | QueueItemNotFoundError>
-    readonly enqueue: (input: {
-      id?: SessionMessage.ID
-      sessionID: SessionSchema.ID
-      payload: SessionInputPayload.Payload
-      resume?: boolean
-    }) => Effect.Effect<SessionInput.Queued, NotFoundError | PromptConflictError>
-    readonly update: (input: {
-      sessionID: SessionSchema.ID
-      messageID: SessionMessage.ID
-      payload: SessionInputPayload.Payload
-    }) => Effect.Effect<void, NotFoundError | QueueItemNotFoundError>
-    readonly remove: (input: {
-      sessionID: SessionSchema.ID
-      messageID: SessionMessage.ID
-    }) => Effect.Effect<void, NotFoundError | QueueItemNotFoundError>
-    readonly send: (input: {
-      sessionID: SessionSchema.ID
-      messageID: SessionMessage.ID
-      payload?: SessionInputPayload.Payload
-    }) => Effect.Effect<SessionInput.Admitted, NotFoundError | QueueItemNotFoundError>
-    readonly pauseDrain: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
-    readonly resumeDrain: (sessionID: SessionSchema.ID, wake?: boolean) => Effect.Effect<void, NotFoundError>
-  }
-  readonly shell: (input: {
-    id?: EventV2.ID
+    input: Parameters<Session.Handle["prompt"]>[0] & { sessionID: SessionSchema.ID },
+    /** A bounded durability step after successful admission and wake, in the same interruption mask. */
+    onAccepted?: Effect.Effect<void>,
+  ) => ReturnType<Session.Handle["prompt"]>
+  /** Generates text from current Session context without admitting input or mutating history. Its usage counts toward the Session's totals. */
+  readonly generate: (input: {
+    sessionID: SessionSchema.ID
+    prompt: string
+  }) => Effect.Effect<SessionGenerate.Result, NotFoundError | SessionGenerate.Error>
+  readonly command: (input: {
     sessionID: SessionSchema.ID
     command: string
-    resume?: boolean
-  }) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
-  readonly command: (input: {
-    id?: SessionMessage.ID
-    sessionID: SessionSchema.ID
-    name: string
-    arguments: string
-    payload: SessionInputPayload.Payload
-    delivery?: SessionInput.Delivery
-    resume?: boolean
+    text: string
+    files?: PromptInput.Prompt["files"]
+    agents?: PromptInput.Prompt["agents"]
+    skills?: PromptInput.Prompt["skills"]
+    delivery?: SessionInbox.Delivery
   }) => Effect.Effect<
-    SessionInput.Admitted,
-    NotFoundError | PromptConflictError | CommandV2.NotFoundError | CommandV2.EvaluationError | AgentV2.NotFoundError
+    void,
+    NotFoundError | Command.NotFoundError | Command.ExecutionError | FileSystem.DirectoryNotFoundError
   >
-  readonly skill: (input: {
-    id?: EventV2.ID
-    sessionID: SessionSchema.ID
-    skill: string
-    resume?: boolean
-  }) => Effect.Effect<void, OperationUnavailableError>
-  readonly compact: (input: CompactInput) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
-  readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
+  readonly shell: (
+    input: Parameters<Session.Handle["shell"]>[0] & { sessionID: SessionSchema.ID },
+  ) => ReturnType<Session.Handle["shell"]>
+  readonly skill: (
+    input: Parameters<Session.Handle["skill"]>[0] & { sessionID: SessionSchema.ID },
+  ) => ReturnType<Session.Handle["skill"]>
+  readonly compact: (
+    input: CompactInput,
+  ) => Effect.Effect<SessionInbox.Compaction, NotFoundError | CompactionConflictError>
+  readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly active: Effect.Effect<ReadonlySet<SessionSchema.ID>>
+  readonly background: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
-  readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  readonly interrupt: (sessionID: SessionSchema.ID, options?: { readonly resume?: boolean }) => Effect.Effect<boolean>
+  readonly synthetic: (
+    input: Parameters<Session.Handle["synthetic"]>[0] & { sessionID: SessionSchema.ID },
+  ) => ReturnType<Session.Handle["synthetic"]>
   readonly revert: {
     readonly stage: (input: {
       sessionID: SessionSchema.ID
       messageID: SessionMessage.ID
       files?: boolean
-      inclusive?: boolean
-    }) => Effect.Effect<Revert.State, NotFoundError | MessageNotFoundError | Snapshot.Error>
-    readonly clear: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | Snapshot.Error>
-    readonly commit: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
+    }) => Effect.Effect<
+      SessionSchema.Revert,
+      NotFoundError | MessageNotFoundError | BusyError | Snapshot.Error | FileSystem.DirectoryNotFoundError
+    >
+    readonly clear: (
+      sessionID: SessionSchema.ID,
+    ) => Effect.Effect<void, NotFoundError | BusyError | Snapshot.Error | FileSystem.DirectoryNotFoundError>
+    readonly commit: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | BusyError>
   }
 }
 
-export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Session") {}
+export class Service extends Context.Service<Service, Interface>()("@opencode/Session") {}
 
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
+    const app = yield* App.Service
     const database = yield* Database.Service
     const db = database.db
-    const events = yield* EventV2.Service
-    const projects = yield* ProjectV2.Service
+    const bus = yield* Bus.Service
+    const projects = yield* Project.Service
     const execution = yield* SessionExecution.Service
+    const llm = yield* LLMClient.Service
+    const transport = yield* SessionModelTransport.Service
     const store = yield* SessionStore.Service
+    const instances = yield* Instance.Service
+    const moves = yield* SessionMove.Service
+    const jobs = yield* Job.Service
+    const environments = yield* SessionEnvironment.Service
     const locations = yield* LocationServiceMap.Service
-    const shells = new Map<SessionSchema.ID, Set<ChildProcess>>()
-    const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
-    const isDurableSessionEvent = Schema.is(SessionEvent.Durable)
-    const decode = (row: typeof SessionMessageTable.$inferSelect) =>
-      decodeMessage({ ...row.data, id: row.id, type: row.type }).pipe(
-        Effect.mapError(
-          () =>
-            new MessageDecodeError({
-              sessionID: SessionSchema.ID.make(row.session_id),
-              messageID: SessionMessage.ID.make(row.id),
-            }),
-        ),
-      )
-    const runShell = Effect.fn("V2Session.runShell")(function* (input: {
-      sessionID: SessionSchema.ID
-      command: string
-      directory: string
-    }) {
-      const config = yield* Config.Service
-      const executable = Shell.preferred(Config.latest(yield* config.entries(), "shell"))
-      if (!executable) return yield* new OperationUnavailableError({ operation: "shell" })
-      const child = spawn(executable, Shell.args(executable, input.command, input.directory), {
-        cwd: input.directory,
-        detached: platform !== "win32",
-        env: { ...env, TERM: "dumb" },
-        stdio: ["ignore", "pipe", "pipe"],
-        windowsHide: true,
-      })
-      const active = shells.get(input.sessionID) ?? new Set()
-      active.add(child)
-      shells.set(input.sessionID, active)
-      return yield* Effect.tryPromise({
-        try: (signal) =>
-          new Promise<string>((resolve) => {
-            const chunks: Buffer[] = []
-            child.stdout?.on("data", (chunk: Buffer) => chunks.push(chunk))
-            child.stderr?.on("data", (chunk: Buffer) => chunks.push(chunk))
-            child.once("error", (error) => {
-              chunks.push(Buffer.from(error.message))
-              resolve(Buffer.concat(chunks).toString())
-            })
-            child.once("close", () => resolve(Buffer.concat(chunks).toString()))
-            signal.addEventListener("abort", () => void Shell.killTree(child), { once: true })
-          }),
-        catch: (error) => error,
-      }).pipe(
-        Effect.ensuring(
-          Effect.sync(() => {
-            active.delete(child)
-            if (active.size === 0) shells.delete(input.sessionID)
-          }),
-        ),
-        Effect.orDie,
-      )
-    })
+    const sessions = yield* Session.make()
+    const mediaBlob = (session: SessionSchema.Info) => SessionBlob.enabledFor(instances, session)
+    const isDurableSessionEvent = (item: Bus.LogItem): item is SessionEvent.DurableEvent =>
+      Object.hasOwn(SessionEvent.Durable.cases, item.type)
 
     const result = Service.of({
-      create: Effect.fn("V2Session.create")(function* (input) {
+      create: Effect.fn("Session.create")(function* (input) {
         const sessionID = input.id ?? SessionSchema.ID.create()
         const recorded = yield* store.get(sessionID)
         if (recorded) return recorded
-        const project = yield* projects.resolve(input.location.directory)
-        yield* db
-          .insert(ProjectTable)
-          .values({ id: project.id, worktree: project.directory, vcs: project.vcs?.type, sandboxes: [] })
-          .onConflictDoNothing()
-          .run()
-          .pipe(Effect.orDie)
-        const now = Date.now()
-        const info = SessionV1.SessionInfo.make({
-          id: sessionID,
-          parentID: input.parentID,
-          slug: Slug.create(),
-          version: InstallationVersion,
-          projectID: project.id,
-          directory: input.location.directory,
-          path: path.relative(project.directory, input.location.directory).replaceAll("\\", "/"),
-          workspaceID: input.location.workspaceID ? WorkspaceV2.ID.make(input.location.workspaceID) : undefined,
-          title: input.title ?? `New session - ${new Date(now).toISOString()}`,
-          metadata: input.metadata,
-          permission: input.permission,
-          agent: input.agent,
-          model: input.model
-            ? {
-                id: ModelV2.ID.make(input.model.id),
-                providerID: input.model.providerID,
-                variant: input.model.variant,
-              }
-            : undefined,
-          cost: 0,
-          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-          time: { created: now, updated: now },
-        })
-        const projected = yield* events
-          .publish(SessionV1.Event.Created, { sessionID, info }, { location: input.location })
+        const parent = input.parentID ? yield* store.get(input.parentID) : undefined
+        if (input.parentID && parent === undefined) return yield* new NotFoundError({ sessionID: input.parentID })
+        const location = parent?.location ?? (input.location && LocationServiceMap.canonical(input.location))
+        if (location === undefined)
+          return yield* Effect.die(new Error("Session.create requires either location or an existing parentID"))
+        const project = yield* projects.resolve(location.directory)
+        const projected = yield* bus
+          .publish(
+            SessionEvent.Created,
+            {
+              sessionID,
+              slug: Slug.create(),
+              version: app.version,
+              projectID: project.id,
+              parentID: input.parentID,
+              location,
+              subpath: RelativePath.make(path.relative(project.directory, location.directory).replaceAll("\\", "/")),
+              title: input.title,
+              agent: input.agent,
+              // Children inherit metadata and permissions the way they inherit
+              // location, so host policies that read them treat the family uniformly.
+              metadata: input.metadata ?? parent?.metadata,
+              permissions: input.permissions ?? parent?.permissions,
+              model: input.model,
+            },
+            { location },
+          )
           .pipe(
             Effect.as({ type: "created" } as const),
             Effect.catchDefect((defect) => {
@@ -384,587 +340,214 @@ const layer = Layer.effect(
         // TODO: Restore recorded sessions onto replacement synchronized workspaces in a future API slice.
         return yield* result.get(sessionID).pipe(Effect.orDie)
       }),
-      update: Effect.fn("V2Session.update")(function* (input) {
-        const current = yield* result.get(input.sessionID)
-        if (input.title === undefined || input.title === current.title) return current
-        yield* events.publish(SessionEvent.InfoUpdated, {
-          sessionID: input.sessionID,
-          timestamp: yield* DateTime.now,
-          title: input.title,
-        })
-        return yield* result.get(input.sessionID).pipe(Effect.orDie)
-      }),
-      fork: Effect.fn("V2Session.fork")(function* (input) {
-        const original = yield* result.get(input.sessionID)
-        const source = yield* db
-          .select({ metadata: SessionTable.metadata, permission: SessionTable.permission })
-          .from(SessionTable)
-          .where(eq(SessionTable.id, original.id))
+      fork: Effect.fn("Session.fork")(function* (input) {
+        const parent = yield* result.get(input.sessionID)
+        const boundary = yield* db
+          .select({ id: SessionMessageTable.id })
+          .from(SessionMessageTable)
+          .where(
+            and(
+              eq(SessionMessageTable.session_id, input.sessionID),
+              input.before ? eq(SessionMessageTable.id, input.before) : undefined,
+            ),
+          )
+          .orderBy(desc(SessionMessageTable.seq))
+          .limit(1)
           .get()
           .pipe(Effect.orDie)
-        const match = original.title.match(/^(.+) \(fork #(\d+)\)$/)
-        const forked = yield* result.create({
-          parentID: original.id,
-          title: match ? `${match[1]} (fork #${Number(match[2]) + 1})` : `${original.title} (fork #1)`,
-          location: original.location,
-          agent: original.agent,
-          model: original.model,
-          metadata: source?.metadata == null ? undefined : structuredClone(source.metadata),
-          permission: source?.permission == null ? undefined : structuredClone(source.permission),
-        })
-        for (const message of yield* result.messages({ sessionID: original.id, order: "asc" })) {
-          if (message.id === input.messageID) break
-          const cloned =
-            message.type === "synthetic"
-              ? { ...message, id: SessionMessage.ID.create(), sessionID: forked.id }
-              : { ...message, id: SessionMessage.ID.create() }
-          yield* events.publish(SessionEvent.MessageImported, {
-            sessionID: forked.id,
-            sourceSessionID: original.id,
-            timestamp: yield* DateTime.now,
-            message: cloned,
+        if (!boundary && input.before)
+          return yield* new MessageNotFoundError({
+            sessionID: input.sessionID,
+            messageID: input.before,
           })
-        }
-        return yield* result.get(forked.id).pipe(Effect.orDie)
-      }),
-      get: Effect.fn("V2Session.get")(function* (sessionID) {
-        const session = yield* store.get(sessionID)
-        if (!session) return yield* new NotFoundError({ sessionID })
-        return session
-      }),
-      list: Effect.fn("V2Session.list")(function* (input = {}) {
-        const direction = input.anchor?.direction ?? "next"
-        const requestedOrder = input.order ?? "desc"
-        const order = direction === "previous" ? (requestedOrder === "asc" ? "desc" : "asc") : requestedOrder
-        const sortColumn = SessionTable.time_created
-        const conditions: SQL[] = []
-        if ("directory" in input) conditions.push(eq(SessionTable.directory, input.directory))
-        if (input.workspaceID) conditions.push(eq(SessionTable.workspace_id, input.workspaceID))
-        if ("project" in input) conditions.push(eq(SessionTable.project_id, input.project))
-        if (input.search) conditions.push(like(SessionTable.title, `%${input.search}%`))
-        if (input.anchor) {
-          conditions.push(
-            order === "asc"
-              ? or(
-                  gt(sortColumn, input.anchor.time),
-                  and(eq(sortColumn, input.anchor.time), gt(SessionTable.id, input.anchor.id)),
-                )!
-              : or(
-                  lt(sortColumn, input.anchor.time),
-                  and(eq(sortColumn, input.anchor.time), lt(SessionTable.id, input.anchor.id)),
-                )!,
+        if (!boundary) return yield* new ForkEmptyError({ sessionID: input.sessionID })
+        const sessionID = SessionSchema.ID.create()
+        const inherited = yield* db
+          .transaction(() =>
+            Effect.all({
+              instructions: InstructionState.current(db, parent.id),
+              instructionEntries: InstructionEntry.snapshot(db, parent.id),
+            }),
           )
-        }
-        const query = db
-          .select()
-          .from(SessionTable)
-          .where(conditions.length > 0 ? and(...conditions) : undefined)
-          .orderBy(
-            order === "asc" ? asc(sortColumn) : desc(sortColumn),
-            order === "asc" ? asc(SessionTable.id) : desc(SessionTable.id),
-          )
-        const rows = yield* (input.limit === undefined ? query.all() : query.limit(input.limit).all()).pipe(
-          Effect.orDie,
+          .pipe(Effect.orDie)
+        // The fork adopts the parent's newest instruction values rather than the
+        // values in effect at the boundary; copied history may contain frozen
+        // instruction-update text the initial baseline already reflects.
+        // The parent's location, not the caller's, decides whether the copy's media is stored as blobs.
+        const media = yield* mediaBlob(parent)
+        yield* bus
+          .publish(SessionEvent.Forked, {
+            sessionID,
+            parentID: parent.id,
+            boundary: { type: input.before ? "before" : "through", messageID: boundary.id },
+            ...inherited,
+          })
+          .pipe(Effect.provideService(SessionBlob.ForkMedia, media))
+        const forked = yield* result.get(sessionID).pipe(Effect.orDie)
+        yield* Effect.gen(function* () {
+          yield* Plugin.awaitActivation
+          const hooks = yield* PluginHooks.Service
+          yield* hooks.trigger("session", "fork", { sessionID })
+        }).pipe(
+          instances.provide(forked),
+          Effect.catchCause((cause) => Effect.logWarning("fork hook failed", { sessionID, cause })),
         )
-        return (direction === "previous" ? rows.toReversed() : rows).map((row) => fromRow(row))
+        return forked
       }),
-      messages: Effect.fn("V2Session.messages")(function* (input) {
+      get: (sessionID) => sessions.forSession(sessionID).get(),
+      environment: Effect.fn("Session.environment")(function* (input) {
         yield* result.get(input.sessionID)
-        const direction = input.cursor?.direction ?? "next"
-        const requestedOrder = input.order ?? "desc"
-        const order = direction === "previous" ? (requestedOrder === "asc" ? "desc" : "asc") : requestedOrder
-        const anchor = input.cursor
-          ? yield* db
-              .select({ seq: SessionMessageTable.seq })
-              .from(SessionMessageTable)
-              .where(
-                and(eq(SessionMessageTable.session_id, input.sessionID), eq(SessionMessageTable.id, input.cursor.id)),
-              )
-              .get()
-              .pipe(Effect.orDie)
-          : undefined
-        if (input.cursor && !anchor) return []
-        const boundary = anchor
-          ? order === "asc"
-            ? gt(SessionMessageTable.seq, anchor.seq)
-            : lt(SessionMessageTable.seq, anchor.seq)
-          : undefined
-        const where = boundary
-          ? and(eq(SessionMessageTable.session_id, input.sessionID), boundary)
-          : eq(SessionMessageTable.session_id, input.sessionID)
-        const query = db
-          .select()
-          .from(SessionMessageTable)
-          .where(where)
-          .orderBy(order === "asc" ? asc(SessionMessageTable.seq) : desc(SessionMessageTable.seq))
-        const rows = yield* (input.limit === undefined ? query.all() : query.limit(input.limit).all()).pipe(
-          Effect.orDie,
-        )
-        return yield* Effect.forEach(direction === "previous" ? rows.toReversed() : rows, decode)
+        if (input.variables !== undefined) yield* environments.set(input.sessionID, input.variables)
+        return yield* environments.get(input.sessionID)
       }),
-      message: Effect.fn("V2Session.message")(function* (input) {
-        const stored = yield* store.message(input.messageID)
+      view: (input) => sessions.forSession(input.sessionID).view(input),
+      remove: Effect.fn("Session.remove")(function* (sessionID) {
+        yield* result.get(sessionID)
+        yield* execution.interrupt(sessionID)
+        yield* execution.awaitIdle(sessionID)
+        yield* jobs.cancelSession(sessionID)
+        yield* transport.close(sessionID)
+        const children = yield* store.list({ parentID: sessionID })
+        // Delete the parent before its children: an interrupted child settles through the report
+        // path, and a report admitted just before the parent's deletion wakes an execution whose
+        // lifecycle write then fails on the deleted row.
+        yield* environments.clear(sessionID)
+        yield* bus.publish(SessionEvent.Deleted, { sessionID })
+        yield* bus.remove(sessionID)
+        yield* Effect.forEach(children, (child) => result.remove(child.id), { concurrency: 1, discard: true })
+      }),
+      list: Effect.fn("Session.list")(function* (input = {}) {
+        const filter =
+          input.cursor === undefined
+            ? input
+            : yield* ListCursor.parse(input.cursor).pipe(Effect.mapError(() => new InvalidListCursorError()))
+        const data = yield* store.list({ ...filter, limit: input.limit ?? DefaultListLimit })
+        const first = data[0]
+        const last = data.at(-1)
+        return {
+          data,
+          cursor: {
+            previous: first
+              ? ListCursor.make({
+                  ...filter,
+                  anchor: { id: first.id, time: DateTime.toEpochMillis(first.time.updated), direction: "previous" },
+                })
+              : undefined,
+            next: last
+              ? ListCursor.make({
+                  ...filter,
+                  anchor: { id: last.id, time: DateTime.toEpochMillis(last.time.updated), direction: "next" },
+                })
+              : undefined,
+          },
+        }
+      }),
+      messages: Effect.fn("Session.messages")(function* (input) {
+        yield* result.get(input.sessionID)
+        return yield* store.messages(input)
+      }),
+      message: (input) => sessions.forSession(input.sessionID).message(input.messageID),
+      messagesWithRefs: Effect.fn("Session.messagesWithRefs")(function* (input) {
+        const session = yield* result.get(input.sessionID)
+        if (!(yield* mediaBlob(session))) return yield* store.messages(input)
+        return yield* store.messagesWithRefs(input)
+      }),
+      messageWithRefs: Effect.fn("Session.messageWithRefs")(function* (input) {
+        const session = yield* result.get(input.sessionID).pipe(Effect.option)
+        if (Option.isNone(session)) return undefined
+        if (!(yield* mediaBlob(session.value))) return yield* result.message(input)
+        const stored = yield* store.messageWithRefs(input.messageID)
         return stored?.sessionID === input.sessionID ? stored.message : undefined
       }),
-      latestSequence: Effect.fn("V2Session.latestSequence")(function* (sessionID) {
-        yield* result.get(sessionID)
-        return yield* EventV2.latestSequence(db, sessionID)
-      }),
-      context: Effect.fn("V2Session.context")(function* (sessionID) {
+      context: Effect.fn("Session.context")(function* (sessionID) {
         yield* result.get(sessionID)
         return yield* store.context(sessionID)
       }),
-      events: (input) =>
+      diff: Effect.fn("Session.diff")(function* (input) {
+        const session = yield* result.get(input.sessionID)
+        const active = yield* execution.isActive(input.sessionID)
+        return yield* SessionDiff.turn(db, locations, {
+          session,
+          active,
+          from: input.from,
+          to: input.to,
+          context: input.context,
+        })
+      }),
+      inbox: (sessionID) => sessions.forSession(sessionID).inbox(),
+      inboxWithRefs: Effect.fn("Session.inboxWithRefs")(function* (sessionID) {
+        const session = yield* result.get(sessionID)
+        if (!(yield* mediaBlob(session))) return yield* result.inbox(sessionID)
+        return yield* SessionInbox.listWithRefs(db, sessionID)
+      }),
+      cancelInbox: (input) => sessions.forSession(input.sessionID).cancelInbox(input.inboxID),
+      steerInbox: (input) => sessions.forSession(input.sessionID).steerInbox(input.inboxID),
+      queueInbox: (input) => sessions.forSession(input.sessionID).queueInbox(input.inboxID),
+      log: (input) =>
         Stream.unwrap(
           result
             .get(input.sessionID)
-            .pipe(Effect.as(events.durable({ aggregateID: input.sessionID, after: input.after }))),
-        ).pipe(Stream.filter((event): event is SessionEvent.DurableEvent => isDurableSessionEvent(event))),
-      history: Effect.fn("V2Session.history")(function* (input) {
-        yield* result.get(input.sessionID)
-        return yield* EventV2.readAggregate(db, {
-          ...input,
-          aggregateID: input.sessionID,
-          manifest: SessionDurable,
-        })
-      }),
-      prompt: Effect.fn("V2Session.prompt")((input) =>
-        Effect.uninterruptible(
-          Effect.gen(function* () {
-            yield* result.get(input.sessionID)
-            const payload = input.payload
-            const prompt = payload ? SessionInputPayload.toPrompt(payload) : resolvePrompt(input.prompt)
-            const messageID = input.id ?? SessionMessage.ID.create()
-            const delivery = input.delivery ?? "steer"
-            const expected = { sessionID: input.sessionID, messageID, prompt, payload, delivery }
-            const admitted = yield* SessionInput.admit(db, events, {
-              id: messageID,
-              sessionID: input.sessionID,
-              prompt,
-              payload,
-              delivery,
-            }).pipe(
-              Effect.catchDefect((defect) =>
-                defect instanceof SessionInput.LifecycleConflict
-                  ? new PromptConflictError({ sessionID: input.sessionID, messageID })
-                  : Effect.die(defect),
-              ),
-            )
-            if (!SessionInput.equivalent(admitted, expected))
-              return yield* new PromptConflictError({ sessionID: input.sessionID, messageID })
-            if (input.resume !== false) yield* execution.wake(admitted.sessionID)
-            return admitted
-          }),
-        ),
-      ),
-      queue: {
-        list: Effect.fn("V2Session.queue.list")(function* (sessionID) {
-          yield* result.get(sessionID)
-          return yield* SessionInput.listQueued(db, sessionID)
-        }),
-        get: Effect.fn("V2Session.queue.get")(function* (input) {
-          yield* result.get(input.sessionID)
-          const queued = yield* SessionInput.getQueued(db, input.sessionID, input.messageID)
-          if (!queued)
-            return yield* new QueueItemNotFoundError({
-              sessionID: input.sessionID,
-              messageID: input.messageID,
-            })
-          return queued
-        }),
-        enqueue: Effect.fn("V2Session.queue.enqueue")((input) =>
-          Effect.uninterruptible(
-            Effect.gen(function* () {
-              yield* result.get(input.sessionID)
-              const messageID = input.id ?? SessionMessage.ID.create()
-              const prompt = SessionInputPayload.toPrompt(input.payload)
-              const admitted = yield* SessionInput.admit(db, events, {
-                id: messageID,
-                sessionID: input.sessionID,
-                prompt,
-                payload: input.payload,
-                delivery: "queue",
-              }).pipe(
-                Effect.catchDefect((defect) =>
-                  defect instanceof SessionInput.LifecycleConflict
-                    ? new PromptConflictError({ sessionID: input.sessionID, messageID })
-                    : Effect.die(defect),
-                ),
-              )
-              if (
-                !SessionInput.equivalent(admitted, {
-                  sessionID: input.sessionID,
-                  prompt,
-                  payload: input.payload,
-                  delivery: "queue",
-                })
-              )
-                return yield* new PromptConflictError({ sessionID: input.sessionID, messageID })
-              if (input.resume === true) yield* execution.wake(input.sessionID)
-              const queued = yield* SessionInput.getQueued(db, input.sessionID, messageID)
-              if (!queued) return yield* Effect.die("Newly admitted queue item is not pending")
-              return queued
-            }),
+            .pipe(Effect.as(bus.log({ aggregateID: input.sessionID, after: input.after, follow: input.follow }))),
+        ).pipe(
+          Stream.filter(
+            (item): item is SessionEvent.DurableEvent | EventLog.Synced =>
+              Bus.isSynced(item) || isDurableSessionEvent(item),
           ),
         ),
-        update: Effect.fn("V2Session.queue.update")((input) =>
-          Effect.uninterruptible(
-            Effect.gen(function* () {
-              yield* result.get(input.sessionID)
-              yield* SessionInput.revise(db, events, {
-                id: input.messageID,
-                sessionID: input.sessionID,
-                payload: input.payload,
-              }).pipe(
-                Effect.catchDefect((defect) =>
-                  defect instanceof SessionInput.LifecycleConflict
-                    ? new QueueItemNotFoundError({
-                        sessionID: input.sessionID,
-                        messageID: input.messageID,
-                      })
-                    : Effect.die(defect),
-                ),
-              )
-            }),
-          ),
-        ),
-        remove: Effect.fn("V2Session.queue.remove")((input) =>
-          Effect.uninterruptible(
-            Effect.gen(function* () {
-              yield* result.get(input.sessionID)
-              yield* SessionInput.discard(db, events, {
-                id: input.messageID,
-                sessionID: input.sessionID,
-              }).pipe(
-                Effect.catchDefect((defect) =>
-                  defect instanceof SessionInput.LifecycleConflict
-                    ? new QueueItemNotFoundError({
-                        sessionID: input.sessionID,
-                        messageID: input.messageID,
-                      })
-                    : Effect.die(defect),
-                ),
-              )
-            }),
-          ),
-        ),
-        send: Effect.fn("V2Session.queue.send")((input) =>
-          Effect.uninterruptible(
-            Effect.gen(function* () {
-              yield* result.get(input.sessionID)
-              const admitted = yield* SessionInput.expedite(db, events, {
-                id: input.messageID,
-                sessionID: input.sessionID,
-                payload: input.payload,
-              }).pipe(
-                Effect.catchDefect((defect) =>
-                  defect instanceof SessionInput.LifecycleConflict
-                    ? new QueueItemNotFoundError({
-                        sessionID: input.sessionID,
-                        messageID: input.messageID,
-                      })
-                    : Effect.die(defect),
-                ),
-              )
-              yield* execution.wake(input.sessionID)
-              return admitted
-            }),
-          ),
-        ),
-        pauseDrain: Effect.fn("V2Session.queue.pauseDrain")(function* (sessionID) {
-          yield* result.get(sessionID)
-          yield* execution.pauseQueueDrain(sessionID)
-        }),
-        resumeDrain: Effect.fn("V2Session.queue.resumeDrain")(function* (sessionID, wake) {
-          yield* result.get(sessionID)
-          yield* execution.resumeQueueDrain(sessionID, wake)
-        }),
-      },
-      command: Effect.fn("V2Session.command")(function* (input) {
+      prompt: (input, onAccepted) => sessions.forSession(input.sessionID).prompt(input, onAccepted),
+      generate: Effect.fn("Session.generate")(function* (input) {
         const session = yield* result.get(input.sessionID)
-        return yield* Effect.gen(function* () {
-          const commands = yield* CommandV2.Service
-          const agents = yield* AgentV2.Service
-          const messageID = input.id ?? SessionMessage.ID.create()
-          const delivery = input.delivery ?? "steer"
-          const signature = commandSignature(input, delivery)
-          const existing = yield* SessionInput.find(db, messageID)
-          if (existing) {
-            if (
-              existing.sessionID !== input.sessionID ||
-              existing.delivery !== delivery ||
-              commandMarker(existing.payload) !== signature
-            )
-              return yield* new PromptConflictError({ sessionID: input.sessionID, messageID })
-            if (input.resume !== false) yield* execution.wake(input.sessionID)
-            return existing
-          }
-          const historical = input.id ? yield* store.message(messageID) : undefined
-          if (historical) {
-            if (
-              historical.sessionID !== input.sessionID ||
-              historical.message.type !== "user" ||
-              historical.message.payload === undefined ||
-              commandMarker(historical.message.payload) !== signature
-            )
-              return yield* new PromptConflictError({ sessionID: input.sessionID, messageID })
-            const row = yield* db
-              .select({ seq: SessionMessageTable.seq })
-              .from(SessionMessageTable)
-              .where(eq(SessionMessageTable.id, messageID))
-              .get()
-              .pipe(Effect.orDie)
-            if (!row) return yield* new PromptConflictError({ sessionID: input.sessionID, messageID })
-            const admitted = yield* SessionInput.synthesizeProjected(db, {
-              id: messageID,
-              sessionID: input.sessionID,
-              prompt: Prompt.make({
-                text: historical.message.text,
-                files: historical.message.files,
-                agents: historical.message.agents,
-              }),
-              payload: historical.message.payload,
-              delivery,
-              timeCreated: historical.message.time.created,
-              promotedSeq: row.seq,
-            })
-            if (input.resume !== false) yield* execution.wake(input.sessionID)
-            return admitted
-          }
-
-          const command = yield* commands.get(input.name)
-          if (!command)
-            return yield* new CommandV2.NotFoundError({
-              command: input.name,
-              available: (yield* commands.list()).map((item) => item.name).toSorted(),
-            })
-          const expanded = (yield* commands.evaluate({ name: input.name, arguments: input.arguments })).text
-          const agentID = AgentV2.ID.make(command.agent ?? input.payload.agent)
-          const agent = yield* agents.get(agentID)
-          if (!agent)
-            return yield* new AgentV2.NotFoundError({
-              agent: agentID,
-              available: (yield* agents.all())
-                .filter((item) => !item.hidden)
-                .map((item) => item.id)
-                .toSorted(),
-            })
-          const model = command.model ?? (command.agent ? agent.model : undefined) ?? {
-            providerID: input.payload.model.providerID,
-            id: input.payload.model.modelID,
-            variant: input.payload.model.variant,
-          }
-          const subtask = command.subtask === true || (agent?.mode === "subagent" && command.subtask !== false)
-          const retained = input.payload.parts.filter(
-            (part) => part.type !== "text" || part.synthetic === true || part.ignored === true,
-          )
-          const references = [
-            ...new Set(
-              Array.from(expanded.matchAll(/(?<![\w`])@(\.?[^\s`,.]*(?:\.[^\s`,.]+)*)/g)).flatMap((match) =>
-                match[1] ? [match[1]] : [],
-              ),
-            ),
-          ]
-          const referenced = yield* Effect.forEach(
-            references,
-            Effect.fnUntraced(function* (name) {
-              const file = name.startsWith("~/")
-                ? path.join(homedir(), name.slice(2))
-                : path.resolve(session.location.directory, name)
-              const info = yield* Effect.promise(() => stat(file)).pipe(Effect.option)
-              if (info._tag === "Some")
-                return SessionInputPayload.FilePart.make({
-                  type: "file",
-                  url: pathToFileURL(file).href,
-                  filename: name,
-                  mime: info.value.isDirectory() ? "application/x-directory" : "text/plain",
-                })
-              const referencedAgent = yield* agents.get(AgentV2.ID.make(name))
-              if (referencedAgent) return SessionInputPayload.AgentPart.make({ type: "agent", name })
-            }),
-            { concurrency: "unbounded" },
-          )
-          const attachments = referenced.filter(
-            (part): part is NonNullable<(typeof referenced)[number]> => part !== undefined,
-          )
-          const urls = new Set(retained.flatMap((part) => (part.type === "file" ? [part.url] : [])))
-          const names = new Set(retained.flatMap((part) => (part.type === "agent" ? [part.name] : [])))
-          const parts: SessionInputPayload.Part[] = subtask
-            ? [
-                SessionInputPayload.SubtaskPart.make({
-                  type: "subtask",
-                  agent: agentID,
-                  description: command.description ?? "",
-                  command: command.name,
-                  prompt: expanded,
-                  model: {
-                    providerID: model.providerID,
-                    modelID: model.id,
-                    variant: model.variant,
-                  },
-                }),
-              ]
-            : [
-                SessionInputPayload.TextPart.make({ type: "text", text: expanded }),
-                ...attachments.filter((part) => {
-                  if (part.type === "file") {
-                    if (urls.has(part.url)) return false
-                    urls.add(part.url)
-                    return true
-                  }
-                  if (names.has(part.name)) return false
-                  names.add(part.name)
-                  return true
-                }),
-                ...retained,
-              ]
-          const output = yield* commands.execute.trigger(
-            { command: input.name, sessionID: input.sessionID, arguments: input.arguments },
-            { parts },
-          )
-          const payload = SessionInputPayload.Payload.make({
-            ...input.payload,
-            agent: subtask ? input.payload.agent : agentID,
-            model: subtask
-              ? input.payload.model
-              : { providerID: model.providerID, modelID: model.id, variant: model.variant },
-            parts: [
-              ...output.parts,
-              SessionInputPayload.TextPart.make({
-                type: "text",
-                text: "",
-                synthetic: true,
-                ignored: true,
-                metadata: { kind: "command_request", signature },
-              }),
-            ],
-          })
-          const admitted = yield* result.prompt({
-            id: messageID,
-            sessionID: input.sessionID,
-            delivery,
-            resume: input.resume,
-            payload,
-          })
-          yield* events.publish(SessionEvent.Command.Executed, {
-            sessionID: input.sessionID,
-            messageID,
-            timestamp: yield* DateTime.now,
-            name: input.name,
-            arguments: input.arguments,
-          })
-          return admitted
-        }).pipe(Effect.provide(locations.get(session.location)))
-      }),
-      shell: Effect.fn("V2Session.shell")(function* (input) {
-        const session = yield* result.get(input.sessionID)
-        const callID = `shell_${crypto.randomUUID()}`
-        const messageID = SessionMessage.ID.create()
-        const run = Effect.gen(function* () {
-          yield* events.publish(
-            SessionEvent.Shell.Started,
-            {
-              sessionID: input.sessionID,
-              messageID,
-              callID,
-              command: input.command,
-              timestamp: yield* DateTime.now,
-            },
-            { id: input.id, location: session.location },
-          )
-          const output = yield* runShell({
-            sessionID: input.sessionID,
-            command: input.command,
-            directory: session.location.directory,
-          })
-          yield* events.publish(
-            SessionEvent.Shell.Ended,
-            {
-              sessionID: input.sessionID,
-              callID,
-              output,
-              timestamp: yield* DateTime.now,
-            },
-            { location: session.location },
-          )
-        })
-        yield* run.pipe(Effect.provide(locations.get(session.location)))
-      }),
-      skill: Effect.fn("V2Session.skill")(function* () {
-        return yield* new OperationUnavailableError({ operation: "skill" })
-      }),
-      switchAgent: Effect.fn("V2Session.switchAgent")(function* (input) {
-        yield* result.get(input.sessionID)
-        yield* events.publish(SessionEvent.AgentSwitched, {
-          sessionID: input.sessionID,
-          messageID: SessionMessage.ID.create(),
-          timestamp: yield* DateTime.now,
-          agent: input.agent,
-        })
-      }),
-      switchModel: Effect.fn("V2Session.switchModel")(function* (input) {
-        const session = yield* result.get(input.sessionID)
-        if (
-          session.model?.providerID === input.model.providerID &&
-          session.model.id === input.model.id &&
-          (session.model.variant ?? "default") === (input.model.variant ?? "default")
+        return yield* SessionGenerate.generate({ session, prompt: input.prompt }).pipe(
+          Effect.provideService(Instance.Service, instances),
+          Effect.provideService(Database.Service, database),
+          Effect.provideService(LLMClient.Service, llm),
+          Effect.provideService(Bus.Service, bus),
         )
-          return
-        yield* events.publish(SessionEvent.ModelSwitched, {
-          sessionID: input.sessionID,
-          messageID: SessionMessage.ID.create(),
-          timestamp: yield* DateTime.now,
-          model: input.model,
-        })
       }),
-      compact: Effect.fn("V2Session.compact")(function* (input) {
-        yield* result.get(input.sessionID)
-        return yield* new OperationUnavailableError({ operation: "compact" })
+      command: Effect.fn("Session.command")(function* (input) {
+        const session = yield* result.get(input.sessionID)
+        return yield* SessionCommand.execute({ ...input, session }).pipe(
+          Effect.provideService(Instance.Service, instances),
+        )
       }),
-      wait: Effect.fn("V2Session.wait")(function* (sessionID) {
-        yield* result.get(sessionID)
-        return yield* new OperationUnavailableError({ operation: "wait" })
-      }),
+      shell: (input) => sessions.forSession(input.sessionID).shell(input),
+      skill: (input) => sessions.forSession(input.sessionID).skill(input),
+      switchAgent: (input) => sessions.forSession(input.sessionID).switchAgent(input),
+      switchModel: (input) => sessions.forSession(input.sessionID).switchModel(input),
+      rename: (input) => sessions.forSession(input.sessionID).rename(input),
+      archive: (sessionID) => sessions.forSession(sessionID).archive(),
+      unarchive: (sessionID) => sessions.forSession(sessionID).unarchive(),
+      setMetadata: (input) => sessions.forSession(input.sessionID).setMetadata(input),
+      setPermissions: (input) => sessions.forSession(input.sessionID).setPermissions(input),
+      move: moves.move,
+      compact: (input) => sessions.forSession(input.sessionID).compact(input),
+      wait: (sessionID) => sessions.forSession(sessionID).wait(),
       active: execution.active,
-      resume: Effect.fn("V2Session.resume")(function* (sessionID) {
+      background: Effect.fn("Session.background")(function* (sessionID) {
         yield* result.get(sessionID)
-        yield* execution.resume(sessionID)
+        const backgrounded = yield* jobs.backgroundAll({ sessionID })
+        if (backgrounded.length === 0) return
+        yield* result
+          .synthetic({
+            sessionID,
+            text: [
+              "User requested that active blocking work be moved to the background.",
+              "",
+              "Backgrounded work:",
+              ...backgrounded.map((job) => `- ${job.type}: ${job.title && job.title.length > 0 ? job.title : job.id}`),
+              "",
+              "The backgrounded work is still unfinished. Move on to other work if you can. If there is nothing else useful to do, finish your response. Do not wait, sleep, poll, or report the backgrounded work as complete until a later completion notification is added to the conversation.",
+            ].join("\n"),
+          })
+          .pipe(Effect.catchTag("Session.SyntheticConflictError", Effect.die))
       }),
-      interrupt: Effect.fn("V2Session.interrupt")((sessionID) =>
-        Effect.uninterruptible(
-          Effect.all([
-            execution.interrupt(sessionID),
-            Effect.promise(() =>
-              Promise.all(Array.from(shells.get(sessionID) ?? [], (process) => Shell.killTree(process))),
-            ),
-          ]).pipe(Effect.asVoid),
-        ),
-      ),
+      resume: (sessionID) => sessions.forSession(sessionID).resume(),
+      synthetic: (input) => sessions.forSession(input.sessionID).synthetic(input),
+      interrupt: (sessionID, options) => sessions.forSession(sessionID).interrupt(options),
       revert: {
-        stage: Effect.fn("V2Session.revert.stage")(function* (input) {
-          const session = yield* result.get(input.sessionID)
-          return yield* SessionRevert.stage({
-            session,
-            messageID: input.messageID,
-            files: input.files,
-            inclusive: input.inclusive,
-          }).pipe(
-            Effect.provideService(Database.Service, database),
-            Effect.provideService(EventV2.Service, events),
-            Effect.provide(locations.get(session.location)),
-          )
-        }),
-        clear: Effect.fn("V2Session.revert.clear")(function* (sessionID) {
-          const session = yield* result.get(sessionID)
-          yield* SessionRevert.clear(session).pipe(
-            Effect.provideService(EventV2.Service, events),
-            Effect.provide(locations.get(session.location)),
-          )
-        }),
-        commit: Effect.fn("V2Session.revert.commit")(function* (sessionID) {
-          const session = yield* result.get(sessionID)
-          yield* SessionRevert.commit(session).pipe(Effect.provideService(EventV2.Service, events))
-        }),
+        stage: (input) => sessions.forSession(input.sessionID).revert.stage(input),
+        clear: (sessionID) => sessions.forSession(sessionID).revert.clear(),
+        commit: (sessionID) => sessions.forSession(sessionID).revert.commit(),
       },
     })
 
@@ -972,51 +555,25 @@ const layer = Layer.effect(
   }),
 )
 
-const resolvePrompt = (input: PromptInput.Prompt) =>
-  Prompt.make({
-    text: input.text,
-    agents: input.agents,
-    files: input.files?.map((file) => {
-      const dataMime = file.uri.match(/^data:([^;,]+)[;,]/i)?.[1]
-      const target = URL.canParse(file.uri) ? new URL(file.uri).pathname : (file.name ?? file.uri)
-      return {
-        ...file,
-        mime: dataMime ?? (target.endsWith("/") ? "application/x-directory" : FSUtil.mimeType(target)),
-      }
-    }),
-  })
-
-function commandSignature(input: {
-  name: string
-  arguments: string
-  payload: SessionInputPayload.Payload
-}, delivery: SessionInput.Delivery) {
-  return JSON.stringify({ name: input.name, arguments: input.arguments, payload: input.payload, delivery })
-}
-
-function commandMarker(payload: SessionInputPayload.Payload | undefined) {
-  const marker = payload?.parts.find(
-    (part) =>
-      part.type === "text" &&
-      part.ignored === true &&
-      part.synthetic === true &&
-      part.metadata?.kind === "command_request",
-  )
-  return marker?.type === "text" && typeof marker.metadata?.signature === "string"
-    ? marker.metadata.signature
-    : undefined
-}
-
-export const node = makeGlobalNode({
+export const node: LayerNode.Provider<Service, never, typeof Node.tags.values.global> = Node.makeGlobalNode({
   service: Service,
-  layer: layer.pipe(Layer.orDie),
+  layer,
   deps: [
+    Job.node,
+    SessionEnvironment.node,
     Database.node,
-    EventV2.node,
-    ProjectV2.node,
+    Bus.node,
+    Project.node,
     SessionExecution.node,
+    SessionModelTransport.node,
+    llmClient,
     SessionStore.node,
-    LocationServiceMap.node,
+    Instance.node,
+    SessionInbox.node,
+    SessionMove.node,
     SessionProjector.node,
+    LocationServiceMap.node,
+    FSUtil.node,
+    App.node,
   ],
 })
