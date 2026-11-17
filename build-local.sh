@@ -3,7 +3,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PKG_DIR="$REPO_ROOT/packages/opencode"
+PKG_DIR="$REPO_ROOT/packages/cli"
 INSTALL_DIR="$HOME/.local/bin"
 BINARY_NAME="opencode-local"
 SERVICE_NAME="opencode-server"
@@ -45,19 +45,26 @@ if [[ "${OPENCODE_LOCAL_NO_RESTART:-}" == "1" || "${OPENCODE_LOCAL_SKIP_RESTART:
   RESTART_SERVICE=0
 fi
 
+if systemctl --user cat "$BACKEND_SERVICE_NAME.service" 2>/dev/null | grep -F /global/health >/dev/null; then
+  echo "ERROR: migrate $BACKEND_SERVICE_NAME.service readiness to authenticated /api/info before installing V2." >&2
+  exit 1
+fi
+
+source "$REPO_ROOT/script/local-bun.sh"
+use_repo_bun "$REPO_ROOT"
 export PATH="$PATH:$REPO_ROOT/node_modules/.bin"
+cd "$REPO_ROOT"
+
+echo "==> Using Bun $(bun --version) from $(command -v bun)..."
 
 echo "==> Installing dependencies..."
 bun install --minimum-release-age 0 --frozen-lockfile
-
-echo "==> Regenerating JavaScript SDK..."
-bun "$REPO_ROOT/packages/sdk/js/script/build.ts"
 
 echo "==> Building opencode (native linux-x64, --single)..."
 cd "$PKG_DIR"
 bun run script/build.ts --single --skip-install
 
-BUILT_BIN="$PKG_DIR/dist/opencode-linux-x64/bin/opencode"
+BUILT_BIN="$PKG_DIR/dist/cli-linux-x64/bin/opencode"
 if [[ ! -f "$BUILT_BIN" ]]; then
   echo "ERROR: expected binary not found at $BUILT_BIN" >&2
   exit 1
@@ -68,18 +75,13 @@ echo "==> Smoke test..."
 
 echo "==> Installing to $INSTALL_DIR/$BINARY_NAME..."
 mkdir -p "$INSTALL_DIR"
-cp -f "$BUILT_BIN" "$INSTALL_DIR/$BINARY_NAME"
-chmod +x "$INSTALL_DIR/$BINARY_NAME"
+INSTALL_TMP="$(mktemp "$INSTALL_DIR/.$BINARY_NAME.XXXXXX")"
+trap 'rm -f -- "$INSTALL_TMP"' EXIT
+cp "$BUILT_BIN" "$INSTALL_TMP"
+chmod +x "$INSTALL_TMP"
+mv -f "$INSTALL_TMP" "$INSTALL_DIR/$BINARY_NAME"
+trap - EXIT
 echo "    installed: $("$INSTALL_DIR/$BINARY_NAME" --version)"
-
-SERVICE_FILE="$HOME/.config/systemd/user/$SERVICE_NAME.service"
-if [[ -f "$SERVICE_FILE" ]]; then
-  echo "==> Updating $SERVICE_FILE..."
-  sed -i "s|ExecStart=.*opencode |ExecStart=$INSTALL_DIR/$BINARY_NAME |" "$SERVICE_FILE"
-  echo "    ExecStart line: $(grep ExecStart "$SERVICE_FILE")"
-else
-  echo "==> Service file not found at $SERVICE_FILE; skipping service file update."
-fi
 
 if [[ "$RESTART_SERVICE" == "0" ]]; then
   echo "==> Skipping service reload/restart because --no-restart-service was set."

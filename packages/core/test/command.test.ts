@@ -1,125 +1,71 @@
 import { describe, expect } from "bun:test"
-import { Effect, Layer } from "effect"
-import { CommandV2 } from "@opencode-ai/core/command"
-import { Config } from "@opencode-ai/core/config"
-import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
-import { Location } from "@opencode-ai/core/location"
-import { ModelV2 } from "@opencode-ai/core/model"
-import { ProviderV2 } from "@opencode-ai/core/provider"
-import { AbsolutePath } from "@opencode-ai/core/schema"
-import { Shell } from "@opencode-ai/core/shell"
-import { location } from "./fixture/location"
+import { Command } from "@opencode/core/command"
+import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
+import { Session } from "@opencode/schema/session"
+import { Effect } from "effect"
 import { testEffect } from "./lib/effect"
 
-const directory = AbsolutePath.make(process.cwd())
-const it = testEffect(
-  AppNodeBuilder.build(CommandV2.node, [
-    [Config.node, Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) }))],
-    [Location.node, Layer.succeed(Location.Service, Location.Service.of(location(Location.Ref.make({ directory }))))],
-  ]),
-)
+const it = testEffect(AppNodeBuilder.build(Command.node))
 
-describe("CommandV2", () => {
-  it.effect("applies command transforms and preserves later overrides", () =>
+describe("Command", () => {
+  it.effect("registers and executes callback commands", () =>
     Effect.gen(function* () {
-      const command = yield* CommandV2.Service
+      const command = yield* Command.Service
+      const calls: Command.Invocation[] = []
       yield* command.transform((editor) => {
-        editor.update("review", (command) => {
-          command.template = "First"
-          command.description = "Review code"
-          command.source = "command"
-        })
-        editor.update("review", (command) => {
-          command.template = "Second"
-          command.model = {
-            id: ModelV2.ID.make("claude"),
-            providerID: ProviderV2.ID.make("anthropic"),
-            variant: ModelV2.VariantID.make("high"),
-          }
+        editor.add({
+          name: "goal",
+          description: "Manage the session goal",
+          execute: (input) => Effect.sync(() => calls.push(input)),
         })
       })
 
-      expect(yield* command.get("review")).toEqual(
-        CommandV2.Info.make({
-          name: "review",
-          template: "Second",
-          description: "Review code",
-          source: "command",
-          hints: [],
-          model: {
-            id: ModelV2.ID.make("claude"),
-            providerID: ProviderV2.ID.make("anthropic"),
-            variant: ModelV2.VariantID.make("high"),
-          },
-        }),
+      expect(yield* command.get("goal")).toEqual(
+        Command.Info.make({ name: "goal", description: "Manage the session goal" }),
       )
-      expect(yield* command.list()).toEqual([
-        CommandV2.Info.make({
-          name: "review",
-          template: "Second",
-          description: "Review code",
-          source: "command",
-          hints: [],
-          model: {
-            id: ModelV2.ID.make("claude"),
-            providerID: ProviderV2.ID.make("anthropic"),
-            variant: ModelV2.VariantID.make("high"),
+      const invocation = {
+        sessionID: Session.ID.make("ses_test"),
+        prompt: { text: "ship it", files: [{ uri: "file:///tmp/plan.md" }] },
+        delivery: "steer" as const,
+      }
+      yield* command.execute({ name: "goal", invocation })
+      expect(calls).toEqual([invocation])
+    }),
+  )
+
+  it.effect("replaces commands with later definitions", () =>
+    Effect.gen(function* () {
+      const command = yield* Command.Service
+      yield* command.transform((editor) => {
+        editor.add({ name: "goal", description: "First", execute: () => Effect.void })
+        editor.add({ name: "goal", description: "Second", execute: () => Effect.void })
+      })
+
+      expect(yield* command.list()).toEqual([Command.Info.make({ name: "goal", description: "Second" })])
+    }),
+  )
+
+  it.effect("returns callback error messages without stack traces", () =>
+    Effect.gen(function* () {
+      const command = yield* Command.Service
+      yield* command.transform((editor) => {
+        editor.add({
+          name: "fail",
+          execute: () => Effect.fail(new Error("command failed")),
+        })
+      })
+
+      const error = yield* command
+        .execute({
+          name: "fail",
+          invocation: {
+            sessionID: Session.ID.make("ses_test"),
+            prompt: { text: "" },
+            delivery: "steer",
           },
-        }),
-      ])
-    }),
-  )
-
-  it.effect("evaluates arguments, stdout-only shell blocks, and trims substitutions", () =>
-    Effect.gen(function* () {
-      const command = yield* CommandV2.Service
-      yield* command.transform((editor) => {
-        editor.update("review", (item) => {
-          item.template =
-            "First=$1 Rest=$2 Shell=!`" +
-            (Shell.ps(Shell.preferred() ?? "")
-              ? "[Console]::Out.Write(' value '); [Console]::Error.Write('ignored')"
-              : "printf ' value '; printf 'ignored' >&2") +
-            "`"
-          item.source = "command"
         })
-      })
-
-      expect(yield* command.evaluate({ name: "review", arguments: '"one item" two three' })).toEqual({
-        text: "First=one item Rest=two three Shell=value",
-      })
-    }),
-  )
-
-  it.effect("supports lazy command resolution without exposing an eager placeholder", () =>
-    Effect.gen(function* () {
-      const command = yield* CommandV2.Service
-      let resolutions = 0
-      yield* command.transform((editor) => {
-        editor.update("server:prompt", (item) => {
-          item.template = ""
-          item.description = "MCP prompt"
-          item.source = "mcp"
-          item.hints = ["$1"]
-        })
-        editor.resolve("server:prompt", (arguments_) =>
-          Effect.sync(() => {
-            resolutions++
-            return `Resolved ${arguments_[0] ?? ""}`
-          }),
-        )
-      })
-
-      expect(yield* command.get("server:prompt")).toMatchObject({
-        name: "server:prompt",
-        source: "mcp",
-        hints: ["$1"],
-      })
-      expect(resolutions).toBe(0)
-      expect(yield* command.evaluate({ name: "server:prompt", arguments: "value" })).toEqual({
-        text: "Resolved value",
-      })
-      expect(resolutions).toBe(1)
+        .pipe(Effect.flip)
+      expect(error).toMatchObject({ _tag: "Command.ExecutionError", message: "command failed" })
     }),
   )
 })

@@ -1,45 +1,50 @@
 import { createMemo } from "solid-js"
+import { useRenderer } from "@opentui/solid"
 import { useData } from "../../context/data"
 import { DialogSelect } from "../../ui/dialog-select"
-import { useSDK } from "../../context/sdk"
-import { useRoute } from "../../context/route"
 import { useClipboard } from "../../context/clipboard"
-import type { PromptInfo } from "../../component/prompt/history"
-import { currentPrompt } from "./current-prompt"
+import { useToast } from "../../ui/toast"
+import { useClient } from "../../context/client"
+import { errorMessage } from "../../util/error"
+import { DialogFork } from "./dialog-fork"
+import { usePromptRestore } from "../../prompt/restore"
+import { useNewDesigns } from "../../config"
+import { appendToSessionPrompt } from "../../component/prompt/draft-stash"
 
-export function DialogMessage(props: {
-  messageID: string
-  sessionID: string
-  setPrompt?: (prompt: PromptInfo) => void
-}) {
+export function DialogMessage(props: { messageID: string; sessionID: string }) {
   const data = useData()
-  const sdk = useSDK()
-  const message = createMemo(() =>
-    data.session.message.list(props.sessionID)?.find((message) => message.id === props.messageID),
-  )
-  const route = useRoute()
   const clipboard = useClipboard()
+  const toast = useToast()
+  const client = useClient()
+  const renderer = useRenderer()
+  const restorePrompt = usePromptRestore()
+  const newDesigns = useNewDesigns()
+  const message = createMemo(() => data.session.message.get(props.sessionID, props.messageID))
 
   return (
     <DialogSelect
       title="Message Actions"
+      renderFilter={!newDesigns()}
       options={[
+        {
+          title: "Jump to",
+          value: "message.jump",
+          description: "view message in session",
+          onSelect: (dialog) => dialog.clear(),
+        },
         {
           title: "Revert",
           value: "session.revert",
           description: "undo messages and file changes",
           onSelect: (dialog) => {
-            const msg = message()
-            if (!msg) return
-
-            void sdk.next.sessions.stage({
-              sessionID: props.sessionID,
-              messageID: msg.id,
-              files: true,
-            })
-
-            if (props.setPrompt && msg.type === "user") props.setPrompt(currentPrompt(msg))
-
+            const value = message()
+            const { sessionID, messageID } = props
+            // The composer changes only once the revert is staged, so a failed revert leaves the draft alone.
+            void (async () => {
+              const restored = value?.type === "user" ? await restorePrompt(value) : undefined
+              await client.api.session.revert.stage({ sessionID, messageID })
+              if (restored) appendToSessionPrompt(sessionID, restored, renderer.widthMethod)
+            })().catch((error) => toast.show({ message: errorMessage(error), variant: "error", duration: 5000 }))
             dialog.clear()
           },
         },
@@ -48,37 +53,35 @@ export function DialogMessage(props: {
           value: "message.copy",
           description: "message text to clipboard",
           onSelect: async (dialog) => {
-            const msg = message()
-            if (!msg) return
-
+            const value = message()
+            if (!value) return
             const text =
-              msg.type === "user"
-                ? currentPrompt(msg).input
-                : msg.type === "assistant"
-                  ? msg.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n")
-                  : ""
-
-            await clipboard.write?.(text)
-            dialog.clear()
+              value.type === "user"
+                ? value.text
+                : value.type === "assistant"
+                  ? value.content
+                      .filter((content) => content.type === "text")
+                      .map((content) => content.text)
+                      .join("\n")
+                  : "text" in value
+                    ? value.text
+                    : ""
+            try {
+              await clipboard.write(text)
+              dialog.clear()
+            } catch (error) {
+              toast.error(error)
+            }
           },
         },
         {
           title: "Fork",
           value: "session.fork",
           description: "create a new session",
-          onSelect: async (dialog) => {
-            const result = await sdk.next.sessions.fork({
-              sessionID: props.sessionID,
-              messageID: props.messageID,
-            })
-            const msg = message()
-            const prompt = msg?.type === "user" ? currentPrompt(msg) : undefined
-            route.navigate({
-              sessionID: result.id,
-              type: "session",
-              prompt,
-            })
-            dialog.clear()
+          onSelect: (dialog) => {
+            const value = message()
+            if (!value || value.type !== "user") return
+            dialog.replace(() => <DialogFork sessionID={props.sessionID} messageID={props.messageID} />)
           },
         },
       ]}
