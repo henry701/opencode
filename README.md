@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> This fork is archived. Use [upstream OpenCode](https://github.com/anomalyco/opencode) for future updates. OpenCode V2 includes native prompt queueing and steering. On Arch Linux, install the `opencode` package from `extra`.
+
 <p align="center">
   <a href="https://opencode.ai">
     <picture>
