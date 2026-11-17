@@ -34,6 +34,11 @@ jobs:
       - name: Typecheck (TypeScript 7.1)
         run: bun run typecheck:tsc
 
+      - name: Typecheck browser fixtures
+        if: github.repository != 'anomalyco/opencode'
+        working-directory: packages/app
+        run: bun run typecheck:e2e
+
       # Every GUI package file (app, desktop, gui-plugins, the plugin package's GUI SDK, ui, session-ui) a pull request adds or edits must be free of
       # oxlint problems, warn-level rules (anti-slop) included. Other packages are not affected.
       - name: Lint changed files
